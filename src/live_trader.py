@@ -639,11 +639,11 @@ class LiveTrader:
         self.risk_manager = RiskManager(
             initial_equity=self.config.trading.initial_capital,
             limits=RiskLimits(
-                max_risk_per_trade=self.config.risk.risk_per_trade,
-                max_positions=self.config.risk.max_open_positions,
-                max_portfolio_heat=self.config.risk.max_portfolio_heat,
-                max_position_pct=self.config.risk.max_position_size_pct,
-                drawdown_halt=self.config.risk.max_drawdown,
+                max_risk_per_trade=self.config.trading.risk_per_trade,
+                max_positions=self.config.trading.max_positions,
+                max_portfolio_heat=self.config.trading.max_portfolio_heat,
+                max_position_pct=self.config.trading.max_position_pct,
+                drawdown_halt=self.config.trading.max_drawdown,
             ),
         )
         self.logger.info("Risk Manager initialized with capital: Rs %s", self.config.trading.initial_capital)
