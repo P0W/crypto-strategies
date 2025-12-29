@@ -49,26 +49,30 @@ Cryptocurrency markets exhibit strong volatility clustering (GARCH effects) wher
 
 ## Entry Logic
 
+**Winning Config:** `configs/btc_eth_sol_bnb_xrp_1d.json`
+
 1. **Regime Filter**: Only trade in COMPRESSION or NORMAL regimes
-   - Compression: ATR ratio < 0.6 (volatility squeeze, looking for breakout)
-   - Normal: ATR ratio 0.6-1.5 (standard trend-following setups)
-   - Expansion/Extreme: ATR ratio > 1.5 (no new entries)
+   - Compression: ATR ratio < 0.6 (volatility squeeze, breakout setup)
+   - Normal: ATR ratio 0.6–1.5 (standard trend-following)
+   - Expansion: ATR ratio > 1.5 (no new entries)
+   - Extreme: ATR ratio > 2.5 (no entries, close if open)
 
 2. **Trend Confirmation**:
-   - EMA(8) > EMA(21) for bullish trend
+   - EMA(8) > EMA(21) for bullish trend alignment
    - ADX > 30 confirms trend strength
-   - Price closes above recent consolidation high
+   - Price must close above recent consolidation high
 
 3. **Breakout Confirmation**:
-   - Price moves > 1.5 ATR from consolidation
+   - Price moves > 1.5× ATR above recent high
+   - Current close above level AND previous close at/below level
 
 ## Exit Logic
 
-1. **Stop Loss**: 2.5 ATR below entry (volatility-adjusted)
-2. **Take Profit**: 5.0 ATR above entry (2:1 reward-risk)
-3. **Trailing Stop**: Activates at 50% of target, trails at 1.5 ATR
-4. **Regime Exit**: Close if regime shifts to EXTREME
-5. **Trend Reversal**: Close if EMA(8) < EMA(21)
+1. **Stop Loss**: 2.5× ATR below entry (volatility-adjusted)
+2. **Take Profit**: 5.0× ATR above entry (2:1 reward-risk target)
+3. **Trailing Stop**: Activates at 50% of target (2.5 ATR profit), trails at 1.5× ATR
+4. **Regime Exit**: Close immediately if regime shifts to EXTREME
+5. **Trend Exit**: Close if price closes below EMA(21) (only if in profit/break-even)
 
 ---
 

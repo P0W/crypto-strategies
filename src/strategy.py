@@ -141,30 +141,30 @@ class CoinDCXStrategy(bt.Strategy):
     Volatility Regime Adaptive Strategy for CoinDCX
 
     =======================================================================
-    ENTRY LOGIC:
+    ENTRY LOGIC (from winning config: btc_eth_sol_bnb_xrp_1d.json):
     =======================================================================
     1. Regime Filter: Only trade in COMPRESSION or NORMAL regimes
-       - Compression: Volatility squeeze, looking for breakout
-       - Normal: Standard trend-following setups
-       - Expansion/Extreme: No new entries, manage existing positions
+       - Compression: ATR ratio < 0.6 (volatility squeeze, breakout setup)
+       - Normal: ATR ratio 0.6-1.5 (standard trend-following)
+       - Expansion/Extreme: No new entries (ATR ratio > 1.5)
 
     2. Trend Confirmation:
-       - EMA(12) > EMA(26) for bullish trend
-       - ADX > 20 confirms trend strength
+       - EMA(8) > EMA(21) for bullish trend
+       - ADX > 30 confirms trend strength
        - Price must close above recent consolidation high
 
     3. Breakout Confirmation:
-       - Price moves > 1.5 ATR from consolidation
-       - Volume confirmation (if available)
+       - Price moves > 1.5x ATR above recent high
+       - Current close above level AND previous close at/below level
 
     =======================================================================
-    EXIT LOGIC:
+    EXIT LOGIC (from winning config: btc_eth_sol_bnb_xrp_1d.json):
     =======================================================================
-    1. Stop Loss: 2.0 ATR below entry (volatility-adjusted)
-    2. Take Profit: 4.0 ATR above entry (2:1 reward-risk)
-    3. Trailing Stop: Activates at 2.0 ATR profit, trails at 1.5 ATR
+    1. Stop Loss: 2.5x ATR below entry (volatility-adjusted)
+    2. Take Profit: 5.0x ATR above entry (2:1 reward-risk target)
+    3. Trailing Stop: Activates at 50% of target (2.5 ATR), trails at 1.5x ATR
     4. Regime Exit: Close if regime shifts to EXTREME
-    5. Time Exit: Close if position > 10 days without target hit
+    5. Trend Exit: Close if price closes below EMA(21) (only when in profit)
 
     =======================================================================
     RISK MANAGEMENT:
