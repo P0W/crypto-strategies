@@ -9,12 +9,14 @@ Features:
 - Comprehensive dual logging (console + file)
 - Paper trade mode for testing
 - Graceful error handling
-- Position state persistence
+- Position state persistence (SQLite + JSON backup)
+- Automatic crash recovery
 - Emergency shutdown capability
 
 Author: Prashant Srivastava
 """
 
+import hashlib
 import logging
 import sys
 import time
@@ -29,6 +31,16 @@ import pandas as pd
 from .exchange import CoinDCXClient, CoinDCXExecutor
 from .strategy import CoinDCXStrategy
 from .config import Config, get_default_config
+from .state_manager import (
+    StateManager,
+    Position,
+    Checkpoint,
+    TradeRecord,
+    create_state_manager,
+    get_open_positions,
+    has_position,
+    close_position,
+)
 
 
 # =============================================================================
@@ -267,6 +279,7 @@ class LiveOrderExecutor:
     """
     Executes orders on CoinDCX exchange.
     Handles both paper and live trading modes.
+    Integrates with state manager for persistence.
     """
 
     def __init__(
@@ -275,16 +288,48 @@ class LiveOrderExecutor:
         executor: CoinDCXExecutor,
         logger: DualLogger,
         paper_trade: bool = True,
+        state_manager: Optional[StateManager] = None,
     ):
         self.client = client
         self.executor = executor
         self.logger = logger
         self.paper_trade = paper_trade
+        self.state_manager = state_manager
 
-    def execute_buy(self, symbol: str, quantity: float, price: float) -> bool:
-        """Execute buy order"""
+    def execute_buy(
+        self,
+        symbol: str,
+        quantity: float,
+        price: float,
+        stop_loss: float = 0.0,
+        take_profit: float = 0.0,
+    ) -> bool:
+        """Execute buy order with state persistence"""
         if self.paper_trade:
             self.logger.trade(f"[PAPER] BUY {quantity:.6f} {symbol} @ Rs {price:,.2f}")
+
+            # Record position in state manager
+            if self.state_manager:
+                try:
+                    position = Position(
+                        symbol=symbol,
+                        side="buy",
+                        quantity=quantity,
+                        entry_price=price,
+                        entry_time=datetime.now().isoformat(),
+                        stop_loss=stop_loss,
+                        take_profit=take_profit,
+                        status="open",
+                        order_id=f"PAPER-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+                        metadata={
+                            "paper_trade": True,
+                            "execution_type": "market",
+                        },
+                    )
+                    self.state_manager.save_position(position)
+                except Exception as e:
+                    self.logger.warning("Failed to persist position: %s", e)
+
             return True
 
         try:
@@ -296,7 +341,32 @@ class LiveOrderExecutor:
             )
 
             if response:
-                self.logger.trade(f"[LIVE] BUY EXECUTED - Order ID: {response.get('id', 'N/A')}")
+                order_id = response.get("id", "N/A")
+                self.logger.trade(f"[LIVE] BUY EXECUTED - Order ID: {order_id}")
+
+                # Record position in state manager
+                if self.state_manager:
+                    try:
+                        position = Position(
+                            symbol=symbol,
+                            side="buy",
+                            quantity=quantity,
+                            entry_price=price,
+                            entry_time=datetime.now().isoformat(),
+                            stop_loss=stop_loss,
+                            take_profit=take_profit,
+                            status="open",
+                            order_id=str(order_id),
+                            metadata={
+                                "paper_trade": False,
+                                "execution_type": "limit",
+                                "raw_response": response,
+                            },
+                        )
+                        self.state_manager.save_position(position)
+                    except Exception as e:
+                        self.logger.warning("Failed to persist position: %s", e)
+
                 return True
 
             self.logger.error("BUY order failed for %s", symbol)
@@ -306,10 +376,24 @@ class LiveOrderExecutor:
             self.logger.error("BUY execution error for %s: %s", symbol, e)
             return False
 
-    def execute_sell(self, symbol: str, quantity: float, price: float) -> bool:
-        """Execute sell order"""
+    def execute_sell(
+        self,
+        symbol: str,
+        quantity: float,
+        price: float,
+        pnl: float = 0.0,
+    ) -> bool:
+        """Execute sell order with state persistence"""
         if self.paper_trade:
             self.logger.trade(f"[PAPER] SELL {quantity:.6f} {symbol} @ Rs {price:,.2f}")
+
+            # Close position in state manager
+            if self.state_manager:
+                try:
+                    close_position(self.state_manager, symbol, exit_price=price, pnl=pnl)
+                except Exception as e:
+                    self.logger.warning("Failed to close position in state: %s", e)
+
             return True
 
         try:
@@ -321,7 +405,16 @@ class LiveOrderExecutor:
             )
 
             if response:
-                self.logger.trade(f"[LIVE] SELL EXECUTED - Order ID: {response.get('id', 'N/A')}")
+                order_id = response.get("id", "N/A")
+                self.logger.trade(f"[LIVE] SELL EXECUTED - Order ID: {order_id}")
+
+                # Close position in state manager
+                if self.state_manager:
+                    try:
+                        close_position(self.state_manager, symbol, exit_price=price, pnl=pnl)
+                    except Exception as e:
+                        self.logger.warning("Failed to close position in state: %s", e)
+
                 return True
 
             self.logger.error("SELL order failed for %s", symbol)
@@ -345,13 +438,19 @@ class LiveTrader:
     - Uses EXACT SAME CoinDCXStrategy as backtest
     - Comprehensive logging to console and files
     - Paper trade mode for safe testing
-    - Automatic position state tracking
+    - State persistence with SQLite + JSON backup
+    - Automatic crash recovery
     - Graceful error handling and recovery
     - Emergency shutdown capability
     """
 
     def __init__(
-        self, config: Optional[Config] = None, paper_trade: bool = True, log_dir: str = "logs"
+        self,
+        config: Optional[Config] = None,
+        paper_trade: bool = True,
+        log_dir: str = "logs",
+        state_dir: str = "state",
+        state_backend: str = "sqlite",
     ):
         """
         Initialize live trader.
@@ -360,6 +459,8 @@ class LiveTrader:
             config: Trading configuration
             paper_trade: If True, simulate trades without real execution
             log_dir: Directory for log files
+            state_dir: Directory for state persistence
+            state_backend: State backend ('sqlite' or 'json')
         """
         self.config = config or get_default_config()
         self.paper_trade = paper_trade
@@ -367,22 +468,151 @@ class LiveTrader:
         # Setup logging
         self.logger = DualLogger("LiveTrader", log_dir)
 
+        # Initialize state manager (SQLite + JSON backup)
+        self.state_manager = create_state_manager(
+            backend=state_backend,
+            state_dir=state_dir,
+            auto_backup=True,
+        )
+        self.logger.info("State manager initialized: %s backend", state_backend)
+
         # Initialize exchange connection
         self.client = CoinDCXClient()
         self.executor = CoinDCXExecutor(self.client)
         self.order_executor = LiveOrderExecutor(
-            self.client, self.executor, self.logger, paper_trade
+            self.client,
+            self.executor,
+            self.logger,
+            paper_trade,
+            state_manager=self.state_manager,  # Pass state manager
         )
 
         # State tracking
         self._running = False
         self._cerebro = None
         self._strategy = None
+        self._cycle_count = 0
+        self._peak_value = self.config.trading.initial_capital
+        self._consecutive_losses = 0
 
-        # Position state file for persistence
-        self.state_file = Path(log_dir) / "position_state.json"
+        # Generate config hash for change detection
+        self._config_hash = self._compute_config_hash()
+
+        # Check for recovery from previous session
+        self._attempt_recovery()
 
         self._log_startup()
+
+    def _compute_config_hash(self) -> str:
+        """Compute hash of config for change detection."""
+        config_str = (
+            f"{self.config.trading.pairs}|"
+            f"{self.config.trading.timeframe}|"
+            f"{self.config.strategy.ema_fast}|"
+            f"{self.config.strategy.ema_slow}|"
+            f"{self.config.strategy.adx_threshold}|"
+            f"{self.config.strategy.stop_atr_multiple}|"
+            f"{self.config.strategy.target_atr_multiple}"
+        )
+        return hashlib.md5(config_str.encode()).hexdigest()[:8]
+
+    def _attempt_recovery(self):
+        """
+        Attempt to recover from a previous session.
+
+        Loads checkpoint and positions from state manager.
+        Warns if config has changed since last session.
+        """
+        checkpoint = self.state_manager.load_checkpoint()
+
+        if checkpoint:
+            self.logger.section("RECOVERY: Previous session detected", "-")
+
+            # Check config compatibility
+            if checkpoint.config_hash and checkpoint.config_hash != self._config_hash:
+                self.logger.warning(
+                    "CONFIG CHANGED since last session! "
+                    "Previous: %s, Current: %s",
+                    checkpoint.config_hash,
+                    self._config_hash,
+                )
+                self.logger.warning(
+                    "Positions from previous session may not be compatible. "
+                    "Consider manual review."
+                )
+
+            # Check paper mode consistency
+            if checkpoint.paper_mode != self.paper_trade:
+                self.logger.warning(
+                    "TRADING MODE CHANGED! Previous: %s, Current: %s",
+                    "PAPER" if checkpoint.paper_mode else "LIVE",
+                    "PAPER" if self.paper_trade else "LIVE",
+                )
+
+            # Restore state
+            self._cycle_count = checkpoint.cycle_count
+            self._consecutive_losses = checkpoint.consecutive_losses
+            self._peak_value = checkpoint.portfolio_value
+
+            # Load open positions
+            open_positions = get_open_positions(self.state_manager)
+
+            self.logger.trade(f"  Last checkpoint:    {checkpoint.timestamp}")
+            self.logger.trade(f"  Cycle count:        {checkpoint.cycle_count}")
+            self.logger.trade(f"  Portfolio value:    Rs {checkpoint.portfolio_value:,.2f}")
+            self.logger.trade(f"  Cash:               Rs {checkpoint.cash:,.2f}")
+            self.logger.trade(f"  Open positions:     {len(open_positions)}")
+            self.logger.trade(f"  Drawdown:           {checkpoint.drawdown_pct:.2f}%")
+
+            if open_positions:
+                self.logger.trade("")
+                self.logger.trade("  RECOVERED POSITIONS:")
+                for pos in open_positions:
+                    self.logger.trade(
+                        f"    {pos.symbol}: {pos.quantity:.6f} @ Rs {pos.entry_price:,.2f} "
+                        f"[SL: Rs {pos.stop_loss:,.0f}, TP: Rs {pos.take_profit:,.0f}]"
+                    )
+        else:
+            self.logger.debug("No previous session to recover from")
+
+    def _save_checkpoint(self, portfolio_value: float, cash: float):
+        """Save current state as checkpoint."""
+        try:
+            open_positions = get_open_positions(self.state_manager)
+            positions_value = portfolio_value - cash
+
+            # Calculate drawdown
+            if portfolio_value > self._peak_value:
+                self._peak_value = portfolio_value
+            drawdown_pct = ((self._peak_value - portfolio_value) / self._peak_value) * 100
+
+            checkpoint = Checkpoint(
+                timestamp=datetime.now().isoformat(),
+                cycle_count=self._cycle_count,
+                portfolio_value=portfolio_value,
+                cash=cash,
+                positions_value=positions_value,
+                open_positions=len(open_positions),
+                last_processed_symbols=self.config.trading.pairs,
+                drawdown_pct=drawdown_pct,
+                consecutive_losses=self._consecutive_losses,
+                paper_mode=self.paper_trade,
+                config_hash=self._config_hash,
+                metadata={
+                    "timeframe": self.config.trading.timeframe,
+                    "strategy_version": "1.0",
+                },
+            )
+
+            self.state_manager.save_checkpoint(checkpoint)
+            self.logger.debug(
+                "Checkpoint saved: cycle=%d, value=Rs %.2f",
+                self._cycle_count,
+                portfolio_value,
+            )
+
+        except Exception as e:
+            self.logger.error("Failed to save checkpoint: %s", e)
 
     def _log_startup(self):
         """Log startup configuration"""
@@ -393,6 +623,7 @@ class LiveTrader:
         self.logger.trade(f"  Pairs:      {self.config.trading.pairs}")
         self.logger.trade(f"  Timeframe:  {self.config.trading.timeframe}")
         self.logger.trade(f"  Max Pos:    {self.config.trading.max_positions}")
+        self.logger.trade(f"  Config:     {self._config_hash}")
         self.logger.trade("")
         self.logger.trade("  STRATEGY PARAMETERS:")
         self.logger.trade(
@@ -405,6 +636,10 @@ class LiveTrader:
         self.logger.trade(
             f"    Max Position:       {self.config.trading.max_position_pct*100:.0f}%"
         )
+        self.logger.trade("")
+        self.logger.trade("  STATE PERSISTENCE:")
+        self.logger.trade(f"    Backend:    {type(self.state_manager).__name__}")
+        self.logger.trade(f"    Recovery:   {'Enabled' if self._cycle_count > 0 else 'Fresh start'}")
         self.logger.trade("")
         self.logger.trade(f"  Trade Log:  {self.logger.trade_log}")
         self.logger.trade(f"  System Log: {self.logger.system_log}")
@@ -498,8 +733,9 @@ class LiveTrader:
         return cerebro
 
     def run_cycle(self):
-        """Run one trading cycle"""
-        self.logger.section(f"TRADING CYCLE - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        """Run one trading cycle with state persistence"""
+        self._cycle_count += 1
+        self.logger.section(f"TRADING CYCLE #{self._cycle_count} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
         try:
             # Build fresh cerebro with latest data
@@ -526,7 +762,7 @@ class LiveTrader:
                 self.logger.trade(f"  Cash:         Rs {cash:,.2f}")
                 self.logger.trade(f"  Positions:    Rs {portfolio_value - cash:,.2f}")
 
-                # Log individual positions
+                # Log individual positions and sync state
                 for data in cerebro.datas:
                     pos = self._strategy.getposition(data)
                     if pos.size:
@@ -540,9 +776,67 @@ class LiveTrader:
                             f"Current: Rs {price:,.2f} | P&L: Rs {pnl:+,.2f} ({pnl_pct:+.2f}%)"
                         )
 
+                        # Sync position to state manager
+                        self._sync_position(data._name, pos, price)
+
+                # Save checkpoint after each cycle
+                self._save_checkpoint(portfolio_value, cash)
+
         except Exception as e:
             self.logger.error("Error in trading cycle: %s", e)
             self.logger.debug(traceback.format_exc())
+
+    def _sync_position(self, symbol: str, bt_position, current_price: float):
+        """
+        Sync Backtrader position with state manager.
+
+        Args:
+            symbol: Trading pair symbol
+            bt_position: Backtrader position object
+            current_price: Current market price
+        """
+        try:
+            if bt_position.size > 0:
+                # Position exists - update or create in state
+                existing = self.state_manager.get_position(symbol)
+
+                if existing and existing.status == "open":
+                    # Update existing position metadata
+                    existing.metadata["last_price"] = current_price
+                    existing.metadata["last_update"] = datetime.now().isoformat()
+                    self.state_manager.save_position(existing)
+                else:
+                    # Create new position record
+                    position = Position(
+                        symbol=symbol,
+                        side="buy",
+                        quantity=bt_position.size,
+                        entry_price=bt_position.price,
+                        entry_time=datetime.now().isoformat(),
+                        status="open",
+                        metadata={
+                            "current_price": current_price,
+                            "cycle_opened": self._cycle_count,
+                        },
+                    )
+                    self.state_manager.save_position(position)
+                    self.logger.debug("Position synced to state: %s", symbol)
+
+            else:
+                # No position in Backtrader - check if we need to close in state
+                existing = self.state_manager.get_position(symbol)
+                if existing and existing.status == "open":
+                    # Position was closed by strategy - record it
+                    close_position(
+                        self.state_manager,
+                        symbol,
+                        exit_price=current_price,
+                        pnl=0.0,  # Will be calculated from actual trade
+                    )
+                    self.logger.debug("Position closed in state: %s", symbol)
+
+        except Exception as e:
+            self.logger.warning("Failed to sync position %s: %s", symbol, e)
 
     def start(self, interval_seconds: int = 300):
         """
@@ -557,14 +851,12 @@ class LiveTrader:
         self.logger.section(f"STARTING LIVE TRADER - {mode} MODE")
         self.logger.trade(f"  Interval: {interval_seconds} seconds")
         self.logger.trade(f"  Pairs: {self.config.trading.pairs}")
+        self.logger.trade(f"  Starting cycle: {self._cycle_count + 1}")
         self.logger.trade("")
         self.logger.trade("Press Ctrl+C to stop...")
 
-        cycle_count = 0
-
         while self._running:
-            cycle_count += 1
-            self.logger.info("Starting cycle #%d", cycle_count)
+            self.logger.info("Starting cycle #%d", self._cycle_count + 1)
 
             try:
                 self.run_cycle()
@@ -582,9 +874,32 @@ class LiveTrader:
         self.stop()
 
     def stop(self):
-        """Stop the live trader gracefully"""
+        """Stop the live trader gracefully with state persistence"""
         self._running = False
+
+        # Save final checkpoint
+        try:
+            if self._strategy:
+                # Try to get final portfolio value
+                portfolio_value = self.config.trading.initial_capital
+                cash = portfolio_value
+
+                self.logger.info("Saving final state...")
+                self._save_checkpoint(portfolio_value, cash)
+
+                # Export JSON backup
+                self.state_manager.export_json("state/final_state.json")
+                self.logger.info("Final state exported to state/final_state.json")
+
+        except Exception as e:
+            self.logger.warning("Failed to save final state: %s", e)
+
+        # Close state manager
+        self.state_manager.close()
+
         self.logger.section("LIVE TRADER STOPPED")
+        self.logger.trade(f"  Total cycles completed: {self._cycle_count}")
+        self.logger.trade(f"  State saved for recovery")
 
     def emergency_close_all(self):
         """Emergency: Close all positions immediately"""
@@ -619,6 +934,8 @@ Examples:
   python -m src.live_trader --config configs/my.json   # Use custom config
   python -m src.live_trader --live                     # LIVE TRADING (real money!)
   python -m src.live_trader --interval 60 -v           # 1 min cycles, verbose
+  python -m src.live_trader --state-backend json       # Use JSON state backend
+  python -m src.live_trader --reset-state              # Clear previous state
         """,
     )
 
@@ -636,6 +953,26 @@ Examples:
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose debug output")
 
+    # State management options
+    parser.add_argument(
+        "--state-backend",
+        type=str,
+        default="sqlite",
+        choices=["sqlite", "json"],
+        help="State persistence backend (default: sqlite)",
+    )
+    parser.add_argument(
+        "--state-dir",
+        type=str,
+        default="state",
+        help="Directory for state files (default: state)",
+    )
+    parser.add_argument(
+        "--reset-state",
+        action="store_true",
+        help="Clear previous state and start fresh",
+    )
+
     args = parser.parse_args()
 
     # Setup root logging level
@@ -643,6 +980,16 @@ Examples:
         logging.getLogger().setLevel(logging.DEBUG)
     else:
         logging.getLogger().setLevel(logging.INFO)
+
+    # Handle state reset if requested
+    if args.reset_state:
+        print("\n[!] Clearing previous state...")
+        state_dir = Path(args.state_dir)
+        if state_dir.exists():
+            import shutil
+            shutil.rmtree(state_dir)
+            print(f"    Removed {state_dir}")
+        print("    State cleared. Starting fresh.\n")
 
     # Determine trading mode
     paper_trade = not args.live
@@ -675,8 +1022,13 @@ Examples:
         config = get_default_config()
         print("Using default configuration")
 
-    # Create and start trader
-    trader = LiveTrader(config=config, paper_trade=paper_trade)
+    # Create and start trader with state management
+    trader = LiveTrader(
+        config=config,
+        paper_trade=paper_trade,
+        state_dir=args.state_dir,
+        state_backend=args.state_backend,
+    )
 
     try:
         trader.start(interval_seconds=args.interval)

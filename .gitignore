@@ -52,6 +52,10 @@ results/
 *.log
 logs/
 
+# State persistence (SQLite + JSON)
+state/
+*.db
+
 # OS
 .DS_Store
 Thumbs.db

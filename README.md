@@ -305,14 +305,58 @@ Use `uv run fetch-data` to download historical data from CoinDCX API.
 ### Live Trading
 
 ```bash
-# Paper trading mode (safe)
+# Paper trading mode (safe, default)
 uv run live --paper
 
-# Live trading mode (CAUTION!)
-uv run live --live
+# Paper trading with custom config
+uv run live --paper --config configs/btc_eth_sol_bnb_xrp_1d.json
 
-# Custom interval (seconds)
+# Custom cycle interval (seconds)
 uv run live --paper --interval 300
+
+# Verbose mode with debug output
+uv run live --paper -v
+
+# Live trading mode (CAUTION - REAL MONEY!)
+uv run live --live
+```
+
+### State Persistence & Recovery
+
+The system automatically persists trading state to SQLite (with JSON backup), enabling crash recovery:
+
+```bash
+# Default: SQLite backend with auto JSON backup
+uv run live --paper
+
+# Use JSON-only backend (simpler, less durable)
+uv run live --paper --state-backend json
+
+# Custom state directory
+uv run live --paper --state-dir my_state
+
+# Clear previous state and start fresh
+uv run live --paper --reset-state
+```
+
+**What's Persisted:**
+- Open positions (symbol, entry price, quantity, stop/target levels)
+- Trading checkpoints (portfolio value, cycle count, drawdown)
+- Trade history (full audit trail)
+- Config hash (detects configuration changes)
+
+**Recovery Features:**
+- Automatic detection of previous session on startup
+- Warns if config changed since last session
+- Restores cycle count and portfolio state
+- Loads all open positions with entry details
+
+**State Files:**
+```
+state/
+├── trading_state.db      # SQLite database (primary)
+├── trading_state.json    # Auto JSON backup
+└── final_state.json      # Export on graceful shutdown
 ```
 
 ---
@@ -327,6 +371,8 @@ crypto-strategies/
 ├── configs/                # Strategy configuration files
 ├── data/                   # Historical data files
 ├── results/                # Backtest results and charts
+├── logs/                   # Trading logs (console + file)
+├── state/                  # State persistence (SQLite + JSON)
 └── src/
     ├── __init__.py
     ├── strategy.py         # Backtrader strategy implementation
@@ -335,6 +381,7 @@ crypto-strategies/
     ├── config.py           # Configuration management
     ├── backtest.py         # Backtest runner
     ├── live_trader.py      # Live trading implementation
+    ├── state_manager.py    # State persistence (SQLite + JSON)
     ├── data_fetcher.py     # Historical data fetcher from CoinDCX
     ├── optimizer.py        # Strategy parameter optimizer
     ├── charts.py           # Charting and visualization
