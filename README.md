@@ -153,7 +153,7 @@ Target: 2:1 reward-risk with 50%+ win rate
 
 ### Trade Visualization
 
-![Trade Summary](results/trade_summary.png)
+![Trade Summary](results/charts/trade_summary.png)
 
 *Trade summary showing equity curve, drawdown, and trade distribution across all assets (BTC, ETH, SOL, BNB, XRP) from Oct 2022 to Dec 2025.*
 
@@ -162,35 +162,35 @@ Target: 2:1 reward-risk with 50%+ win rate
 <details>
 <summary>📈 BTC/INR Trades</summary>
 
-![BTCINR Trades](results/BTCINR_1d_trades.png)
+![BTCINR Trades](results/charts/BTCINR_1d_trades.png)
 
 </details>
 
 <details>
 <summary>📈 ETH/INR Trades</summary>
 
-![ETHINR Trades](results/ETHINR_1d_trades.png)
+![ETHINR Trades](results/charts/ETHINR_1d_trades.png)
 
 </details>
 
 <details>
 <summary>📈 SOL/INR Trades</summary>
 
-![SOLINR Trades](results/SOLINR_1d_trades.png)
+![SOLINR Trades](results/charts/SOLINR_1d_trades.png)
 
 </details>
 
 <details>
 <summary>📈 BNB/INR Trades</summary>
 
-![BNBINR Trades](results/BNBINR_1d_trades.png)
+![BNBINR Trades](results/charts/BNBINR_1d_trades.png)
 
 </details>
 
 <details>
 <summary>📈 XRP/INR Trades</summary>
 
-![XRPINR Trades](results/XRPINR_1d_trades.png)
+![XRPINR Trades](results/charts/XRPINR_1d_trades.png)
 
 </details>
 

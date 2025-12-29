@@ -454,14 +454,17 @@ def main():
             from .trade_visualizer import generate_all_charts
 
             logger.info("Generating trade visualization charts...")
+            charts_dir = Path(args.output_dir) / "charts"
+            charts_dir.mkdir(parents=True, exist_ok=True)
+            
             generate_all_charts(
                 log_file=str(log_file),
                 config_file=args.config,
                 backtest_metrics=report,
                 data_dir=args.data_dir,
-                output_dir=args.output_dir,
+                output_dir=str(charts_dir),
             )
-            logger.info("Charts saved to %s/", args.output_dir)
+            logger.info("Charts saved to %s", charts_dir)
         except Exception as e:
             logger.error("Error generating charts: %s", e)
 
