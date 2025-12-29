@@ -2,6 +2,29 @@
 
 A production-grade automated trading system for CoinDCX (Indian crypto exchange), exploiting volatility clustering and regime persistence inefficiencies.
 
+> **🦀 Rust Implementation Available!**  
+> This project now includes a high-performance **Rust implementation** with 10-100x faster backtesting and optimization. See [RUST_README.md](RUST_README.md) for details.
+>
+> **Key Benefits:**
+> - ⚡ Blazing fast performance
+> - 🔒 Type safety and memory safety
+> - 🚀 Single executable with no runtime dependencies  
+> - ⚙️ Parallel optimization with Rayon
+> - 📦 Well-maintained crates (serde, polars, tokio, rayon)
+
+---
+
+## Implementations
+
+- **Python** (Original): Full-featured with Backtrader, charting, and state persistence
+- **Rust** (New): High-performance with parallel optimization and type safety
+
+Choose based on your needs:
+- Use **Python** for: Rapid prototyping, charting, familiar ecosystem
+- Use **Rust** for: Production deployment, speed, safety, resource efficiency
+
+---
+
 ## Edge Hypothesis
 
 ### Core Inefficiency: Volatility Clustering & Regime Persistence
@@ -191,6 +214,44 @@ To be profitable post-tax/fees in this environment:
 ![XRPINR Trades](results/charts/XRPINR_1d_trades.png)
 
 </details>
+
+---
+
+## Quick Start
+
+### Rust (Recommended for Performance)
+
+```bash
+# Build optimized binaries
+cargo build --release
+
+# Run backtest
+./target/release/backtest
+
+# Run optimization (parallel grid search)
+./target/release/optimize --mode quick
+
+# See all options
+./target/release/backtest --help
+./target/release/optimize --help
+```
+
+📖 **Full Rust documentation**: [RUST_README.md](RUST_README.md)
+
+### Python
+
+```bash
+# Install dependencies
+pip install uv
+uv venv && source .venv/bin/activate  # Linux/Mac
+uv pip install -e .
+
+# Run backtest
+uv run backtest
+
+# Run optimization
+uv run optimize --strategy volatility_regime --mode quick
+```
 
 ---
 
