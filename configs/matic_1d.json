@@ -1,0 +1,11 @@
+{
+    "pairs": ["MATICINR"],
+    "timeframe": "1d",
+    "initial_capital": 100000,
+    "position_size_pct": 0.15,
+    "max_positions": 1,
+    "adx_threshold": 30.0,
+    "stop_atr_multiple": 2.5,
+    "target_atr_multiple": 5.0,
+    "compression_threshold": 0.6
+}

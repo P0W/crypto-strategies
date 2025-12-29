@@ -69,16 +69,24 @@ class DualLogger:
         )
         self.logger.addHandler(file_handler)
 
-    def info(self, msg: str):
+    def info(self, msg: str, *args):
+        if args:
+            msg = msg % args
         self.logger.info(msg)
 
-    def debug(self, msg: str):
+    def debug(self, msg: str, *args):
+        if args:
+            msg = msg % args
         self.logger.debug(msg)
 
-    def warning(self, msg: str):
+    def warning(self, msg: str, *args):
+        if args:
+            msg = msg % args
         self.logger.warning(msg)
 
-    def error(self, msg: str):
+    def error(self, msg: str, *args):
+        if args:
+            msg = msg % args
         self.logger.error(msg)
 
     def trade(self, msg: str):

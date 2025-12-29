@@ -629,6 +629,62 @@ class CoinDCXClient:
                 return float(m.get("min_quantity", 0))
         return 0.0
 
+    def get_candles(
+        self,
+        symbol: str,
+        timeframe: str = "1d",
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical OHLCV candle data from CoinDCX public API.
+
+        Args:
+            symbol: Trading symbol (e.g., 'BTCINR')
+            timeframe: Candle interval (1m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 1d, 3d, 1w, 1M)
+            limit: Number of candles to fetch (max 1000)
+
+        Returns:
+            List of candle dictionaries with keys: time, open, high, low, close, volume
+        """
+        # Convert symbol format: BTCINR -> I-BTC_INR
+        if symbol.endswith("INR") and not symbol.startswith("I-"):
+            base = symbol[:-3]  # Remove INR suffix
+            pair = f"I-{base}_INR"
+        else:
+            pair = symbol
+
+        # Map common timeframe formats
+        tf_map = {
+            "1D": "1d", "1d": "1d",
+            "4H": "4h", "4h": "4h",
+            "1H": "1h", "1h": "1h",
+            "15M": "15m", "15m": "15m",
+        }
+        interval = tf_map.get(timeframe, timeframe)
+
+        url = "https://public.coindcx.com/market_data/candles"
+        params = {
+            "pair": pair,
+            "interval": interval,
+            "limit": min(limit, 1000),
+        }
+
+        try:
+            self._rate_limit()
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+
+            if not data:
+                logger.warning("No candle data returned for %s", symbol)
+                return []
+
+            return data
+
+        except Exception as e:
+            logger.error("Failed to fetch candles for %s: %s", symbol, e)
+            raise CoinDCXExecutionError(f"Failed to fetch candles: {e}")
+
 
 class CoinDCXExecutor:
     """
