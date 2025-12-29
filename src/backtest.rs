@@ -278,6 +278,8 @@ impl Backtester {
         }
 
         // Calculate Sharpe ratio (simplified)
+        // Note: Annualization factor assumes daily data (252 trading days)
+        // For other timeframes, this should be adjusted accordingly
         let returns: Vec<f64> = equity_curve
             .windows(2)
             .map(|w| (w[1].1 - w[0].1) / w[0].1)
@@ -288,7 +290,7 @@ impl Backtester {
         let std_dev = variance.sqrt();
 
         let sharpe_ratio = if std_dev > 0.0 {
-            mean_return / std_dev * (252.0_f64).sqrt() // Annualized
+            mean_return / std_dev * (252.0_f64).sqrt() // Annualized for daily data
         } else {
             0.0
         };

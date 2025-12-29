@@ -53,8 +53,8 @@ impl VolatilityRegimeStrategy {
 
         let atr_values = atr(&high, &low, &close, self.config.atr_period);
         
-        // Get current ATR
-        let current_atr = atr_values.last()?.unwrap_or(0.0);
+        // Get current ATR - properly handle nested Option
+        let current_atr = atr_values.last().and_then(|&x| x)?;
         
         // Calculate ATR percentile over lookback period
         let lookback_start = candles.len().saturating_sub(self.config.volatility_lookback);
@@ -68,7 +68,8 @@ impl VolatilityRegimeStrategy {
         }
 
         let mut sorted_atrs = lookback_atrs.clone();
-        sorted_atrs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        // Use unwrap_or for safety with NaN handling
+        sorted_atrs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         
         let median_atr = sorted_atrs[sorted_atrs.len() / 2];
         
