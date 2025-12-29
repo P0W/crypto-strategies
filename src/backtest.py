@@ -306,6 +306,30 @@ def run_backtest(
         "post_tax_profit": custom_analysis.get("post_tax_profit", 0),
     }
 
+    # Calculate Calmar Ratio
+    try:
+        # Get start and end dates from the first data feed
+        n_bars = len(strat.datas[0])
+        if n_bars > 0:
+            end_date = strat.datas[0].datetime.datetime(0)
+            start_date = strat.datas[0].datetime.datetime(-n_bars + 1)
+            duration_days = (end_date - start_date).days
+
+            if duration_days > 0:
+                duration_years = duration_days / 365.0
+                annualized_return = (1 + report["total_return"]) ** (1 / duration_years) - 1
+            else:
+                annualized_return = 0
+        else:
+            annualized_return = 0
+
+        if report["max_drawdown"] > 0:
+            report["calmar_ratio"] = annualized_return / report["max_drawdown"]
+        else:
+            report["calmar_ratio"] = 0 if annualized_return <= 0 else float("inf")
+    except Exception:
+        report["calmar_ratio"] = 0
+
     # Include full data for charting if requested
     if return_full_data:
         report["equity_curve"] = strat.analyzers.custom.equity_curve
@@ -330,6 +354,8 @@ def print_report(report: dict):
     sharpe = report.get("sharpe_ratio")
     sharpe_str = f"{sharpe:.2f}" if sharpe is not None else "N/A"
     print(f"  Sharpe Ratio:       {sharpe_str:>15}")
+    calmar = report.get("calmar_ratio", 0)
+    print(f"  Calmar Ratio:       {calmar:>15.2f}")
     print(f"  Max Drawdown:       {report['max_drawdown']:>15.2%}")
 
     print("\nTRADE STATISTICS")

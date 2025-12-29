@@ -32,7 +32,7 @@ Cryptocurrency markets exhibit strong volatility clustering (GARCH effects) wher
 ### CoinDCX Liquidity Validation
 
 - BTC/INR and ETH/INR have sufficient depth for ₹50k-₹1L positions
-- 4H timeframe avoids microstructure noise and slippage issues
+- 1D timeframe avoids microstructure noise and slippage issues
 - Strategy avoids market orders during low-liquidity hours (2 AM - 6 AM IST)
 
 ---
@@ -63,7 +63,8 @@ Cryptocurrency markets exhibit strong volatility clustering (GARCH effects) wher
    - Price must close above recent consolidation high
 
 3. **Breakout Confirmation**:
-   - Price moves > 1.5× ATR above recent high
+   - Price closes above (Recent High - 1.5 × ATR)
+   - Anticipatory entry (buy the dip / early breakout)
    - Current close above level AND previous close at/below level
 
 ## Exit Logic
@@ -80,7 +81,7 @@ Cryptocurrency markets exhibit strong volatility clustering (GARCH effects) wher
 
 | Parameter | Value | Justification |
 |-----------|-------|---------------|
-| Risk Per Trade | 15% | Higher risk tolerance for multi-asset portfolio |
+| Risk Per Trade | 15% | Aggressive risk per trade |
 | Max Positions | 5 | Full portfolio diversification (BTC, ETH, SOL, BNB, XRP) |
 | Max Portfolio Heat | 30% | Total risk capped across all positions |
 | Max Position % | 20% | Single position cap per asset |
@@ -134,8 +135,8 @@ Target: 2:1 reward-risk with 50%+ win rate
 | Total Return | **94.67%** | ₹1,00,000 → ₹1,94,665 |
 | Post-Tax Return | **64.57%** | After 30% flat tax |
 | Sharpe Ratio | **1.60** | Annualized, risk-adjusted |
+| Calmar Ratio | **2.09** | Annualized Return / Max Drawdown |
 | Max Drawdown | **13.25%** | Well within 20% limit |
-| Calmar Ratio | **7.14** | Return / Max Drawdown |
 | Win Rate | **79.31%** | 23 wins / 29 trades |
 | Profit Factor | **4.10** | Gross profits / Gross losses |
 | Total Trades | 29 | Low frequency, high quality |

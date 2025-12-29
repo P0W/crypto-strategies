@@ -655,10 +655,14 @@ class CoinDCXClient:
 
         # Map common timeframe formats
         tf_map = {
-            "1D": "1d", "1d": "1d",
-            "4H": "4h", "4h": "4h",
-            "1H": "1h", "1h": "1h",
-            "15M": "15m", "15m": "15m",
+            "1D": "1d",
+            "1d": "1d",
+            "4H": "4h",
+            "4h": "4h",
+            "1H": "1h",
+            "1h": "1h",
+            "15M": "15m",
+            "15m": "15m",
         }
         interval = tf_map.get(timeframe, timeframe)
 

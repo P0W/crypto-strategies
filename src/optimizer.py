@@ -380,7 +380,9 @@ def print_results(results: List[OptimizationResult], top_n: int = 10, sort_by: s
     }
 
     print(f"\n{'='*80}")
-    print(f"🏆 TOP {min(top_n, len(results))} PARAMETER COMBINATIONS (by {metric_labels.get(sort_by, sort_by)})")
+    print(
+        f"🏆 TOP {min(top_n, len(results))} PARAMETER COMBINATIONS (by {metric_labels.get(sort_by, sort_by)})"
+    )
     print(f"{'='*80}\n")
 
     if not results:
@@ -740,26 +742,26 @@ def generate_coin_combinations(
 ) -> List[List[str]]:
     """
     Generate all combinations of coins from min_size to max_size.
-    
+
     Args:
         coins: List of coin symbols (e.g., ["BTC", "ETH", "SOL"])
         min_size: Minimum combination size (default: 1 = singles)
         max_size: Maximum combination size (default: len(coins) = all together)
-    
+
     Returns:
         List of symbol lists, e.g., [["BTCINR"], ["ETHINR"], ["BTCINR", "ETHINR"], ...]
     """
     if max_size is None:
         max_size = len(coins)
-    
+
     # Normalize coins to INR pairs
     symbols = [f"{c.upper().replace('INR', '')}INR" for c in coins]
-    
+
     combinations = []
     for size in range(min_size, max_size + 1):
         for combo in itertools.combinations(symbols, size):
             combinations.append(list(combo))
-    
+
     return combinations
 
 
@@ -887,13 +889,17 @@ Examples:
     if args.mode == "quick":
         print("🚀 Running QUICK optimization...")
         print(f"   Parallel: {parallel}")
-        results = quick_optimize(parallel=parallel, base_config_path=args.config, sort_by=args.sort_by)
+        results = quick_optimize(
+            parallel=parallel, base_config_path=args.config, sort_by=args.sort_by
+        )
 
     elif args.mode == "full":
         print("🚀 Running FULL optimization...")
         print(f"   Parallel: {parallel}")
         print("   ⚠️  This may take several minutes!")
-        results = full_optimize(parallel=parallel, base_config_path=args.config, sort_by=args.sort_by)
+        results = full_optimize(
+            parallel=parallel, base_config_path=args.config, sort_by=args.sort_by
+        )
 
     elif args.mode == "custom":
         # Validate required args for custom mode

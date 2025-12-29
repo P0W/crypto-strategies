@@ -309,7 +309,9 @@ class LiveOrderExecutor:
         """Execute buy order with state persistence and full context"""
         if self.paper_trade:
             self.logger.trade(f"[PAPER] BUY {quantity:.6f} {symbol} @ Rs {price:,.2f}")
-            self.logger.trade(f"  Stop: Rs {stop_loss:,.2f} | Target: Rs {take_profit:,.2f} | ATR: Rs {atr:,.2f} | Regime: {regime}")
+            self.logger.trade(
+                f"  Stop: Rs {stop_loss:,.2f} | Target: Rs {take_profit:,.2f} | ATR: Rs {atr:,.2f} | Regime: {regime}"
+            )
 
             # Record position in state manager
             if self.state_manager:
@@ -348,7 +350,9 @@ class LiveOrderExecutor:
             if response:
                 order_id = response.get("id", "N/A")
                 self.logger.trade(f"[LIVE] BUY EXECUTED - Order ID: {order_id}")
-                self.logger.trade(f"  Stop: Rs {stop_loss:,.2f} | Target: Rs {take_profit:,.2f} | ATR: Rs {atr:,.2f}")
+                self.logger.trade(
+                    f"  Stop: Rs {stop_loss:,.2f} | Target: Rs {take_profit:,.2f} | ATR: Rs {atr:,.2f}"
+                )
 
                 # Record position in state manager
                 if self.state_manager:
@@ -400,7 +404,9 @@ class LiveOrderExecutor:
             net_pnl = gross_pnl - fees - tax
             result = "WIN" if net_pnl > 0 else "LOSS"
             self.logger.trade(f"[PAPER] SELL {quantity:.6f} {symbol} @ Rs {price:,.2f}")
-            self.logger.trade(f"  Gross P&L: Rs {gross_pnl:+,.2f} | Fees: Rs {fees:.2f} | Tax: Rs {tax:.2f} | Net: Rs {net_pnl:+,.2f} [{result}]")
+            self.logger.trade(
+                f"  Gross P&L: Rs {gross_pnl:+,.2f} | Fees: Rs {fees:.2f} | Tax: Rs {tax:.2f} | Net: Rs {net_pnl:+,.2f} [{result}]"
+            )
             self.logger.trade(f"  Exit Reason: {exit_reason} | Regime: {regime}")
 
             # Close position in state manager with full details
@@ -433,7 +439,9 @@ class LiveOrderExecutor:
                 order_id = response.get("id", "N/A")
                 net_pnl = gross_pnl - fees - tax
                 self.logger.trade(f"[LIVE] SELL EXECUTED - Order ID: {order_id}")
-                self.logger.trade(f"  Gross P&L: Rs {gross_pnl:+,.2f} | Fees: Rs {fees:.2f} | Tax: Rs {tax:.2f} | Net: Rs {net_pnl:+,.2f}")
+                self.logger.trade(
+                    f"  Gross P&L: Rs {gross_pnl:+,.2f} | Fees: Rs {fees:.2f} | Tax: Rs {tax:.2f} | Net: Rs {net_pnl:+,.2f}"
+                )
 
                 # Close position in state manager with full details
                 if self.state_manager:
@@ -567,8 +575,7 @@ class LiveTrader:
             # Check config compatibility
             if checkpoint.config_hash and checkpoint.config_hash != self._config_hash:
                 self.logger.warning(
-                    "CONFIG CHANGED since last session! "
-                    "Previous: %s, Current: %s",
+                    "CONFIG CHANGED since last session! " "Previous: %s, Current: %s",
                     checkpoint.config_hash,
                     self._config_hash,
                 )
@@ -675,7 +682,9 @@ class LiveTrader:
         self.logger.trade("")
         self.logger.trade("  STATE PERSISTENCE:")
         self.logger.trade(f"    Backend:    {type(self.state_manager).__name__}")
-        self.logger.trade(f"    Recovery:   {'Enabled' if self._cycle_count > 0 else 'Fresh start'}")
+        self.logger.trade(
+            f"    Recovery:   {'Enabled' if self._cycle_count > 0 else 'Fresh start'}"
+        )
         self.logger.trade("")
         self.logger.trade(f"  Trade Log:  {self.logger.trade_log}")
         self.logger.trade(f"  System Log: {self.logger.system_log}")
@@ -771,7 +780,9 @@ class LiveTrader:
     def run_cycle(self):
         """Run one trading cycle with state persistence"""
         self._cycle_count += 1
-        self.logger.section(f"TRADING CYCLE #{self._cycle_count} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self.logger.section(
+            f"TRADING CYCLE #{self._cycle_count} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
 
         try:
             # Build fresh cerebro with latest data
@@ -1023,6 +1034,7 @@ Examples:
         state_dir = Path(args.state_dir)
         if state_dir.exists():
             import shutil
+
             shutil.rmtree(state_dir)
             print(f"    Removed {state_dir}")
         print("    State cleared. Starting fresh.\n")

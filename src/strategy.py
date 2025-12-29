@@ -141,7 +141,7 @@ class CoinDCXStrategy(bt.Strategy):
     Volatility Regime Adaptive Strategy for CoinDCX
 
     =======================================================================
-    ENTRY LOGIC (from winning config: btc_eth_sol_bnb_xrp_1d.json):
+    ENTRY LOGIC (from config.py):
     =======================================================================
     1. Regime Filter: Only trade in COMPRESSION or NORMAL regimes
        - Compression: ATR ratio < 0.6 (volatility squeeze, breakout setup)
@@ -154,11 +154,12 @@ class CoinDCXStrategy(bt.Strategy):
        - Price must close above recent consolidation high
 
     3. Breakout Confirmation:
-       - Price moves > 1.5x ATR above recent high
+       - Price closes above (Recent High - 1.5 * ATR)
+       - Anticipatory entry (buy the dip / early breakout)
        - Current close above level AND previous close at/below level
 
     =======================================================================
-    EXIT LOGIC (from winning config: btc_eth_sol_bnb_xrp_1d.json):
+    EXIT LOGIC (from config.py):
     =======================================================================
     1. Stop Loss: 2.5x ATR below entry (volatility-adjusted)
     2. Take Profit: 5.0x ATR above entry (2:1 reward-risk target)
@@ -170,11 +171,11 @@ class CoinDCXStrategy(bt.Strategy):
     RISK MANAGEMENT:
     =======================================================================
     1. Position Size: Volatility-adjusted Kelly fraction
-       - Base risk: 1.5% of equity
+       - Base risk: 15% of equity
        - Adjusted by regime score (0.5x to 1.5x)
-       - Capped at 40% of equity per position
+       - Capped at 20% of equity per position
 
-    2. Portfolio Heat: Max 8% total risk across all positions
+    2. Portfolio Heat: Max 30% total risk across all positions
 
     3. Drawdown Protection:
        - Reduce size by 50% if drawdown > 10%

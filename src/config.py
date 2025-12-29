@@ -36,17 +36,19 @@ class TradingConfig:
     """Trading parameters configuration"""
 
     # Universe - SOL is best performer from optimization
-    pairs: List[str] = field(default_factory=lambda: ["SOLINR", "ETHINR", "BTCINR"])
-    timeframe: str = "4h"  # Best timeframe from optimization
+    pairs: List[str] = field(
+        default_factory=lambda: ["BTCINR", "ETHINR", "SOLINR", "BNBINR", "XRPINR"]
+    )
+    timeframe: str = "1d"  # Best timeframe from optimization
 
     # Capital
     initial_capital: float = 100_000.0  # ₹1 Lakh
 
     # Risk per trade
-    risk_per_trade: float = 0.015  # 1.5%
-    max_positions: int = 2
-    max_portfolio_heat: float = 0.08  # 8%
-    max_position_pct: float = 0.40  # 40%
+    risk_per_trade: float = 0.15  # 15%
+    max_positions: int = 5
+    max_portfolio_heat: float = 0.30  # 30%
+    max_position_pct: float = 0.20  # 20%
 
     # Drawdown limits
     max_drawdown: float = 0.20  # 20%
@@ -70,21 +72,21 @@ class StrategyConfig:
     atr_period: int = 14
     volatility_lookback: int = 20
     compression_threshold: float = 0.6  # From optimization
-    expansion_threshold: float = 1.4  # Standard
-    extreme_threshold: float = 1.8  # Earlier extreme detection
+    expansion_threshold: float = 1.5  # Standard
+    extreme_threshold: float = 2.5  # Earlier extreme detection
 
     # Trend confirmation - OPTIMIZED
-    ema_fast: int = 9
+    ema_fast: int = 8
     ema_slow: int = 21
     adx_period: int = 14
     adx_threshold: float = 30.0  # ⬆️ BEST: Stricter trend filter
 
     # Entry/Exit - OPTIMIZED (SOL 4h best: +7.77%, 100% WR)
-    breakout_atr_multiple: float = 0.2  # Tighter breakout entry
+    breakout_atr_multiple: float = 1.5  # Tighter breakout entry
     stop_atr_multiple: float = 2.5  # ⬆️ BEST: Tighter stops
     target_atr_multiple: float = 5.0  # ⬆️ BEST: 2:1 R:R
-    trailing_activation: float = 2.5  # Later trailing activation
-    trailing_atr_multiple: float = 2.0  # Wider trailing
+    trailing_activation: float = 0.5  # Later trailing activation
+    trailing_atr_multiple: float = 1.5  # Wider trailing
 
 
 @dataclass

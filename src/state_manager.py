@@ -459,13 +459,9 @@ class SqliteStateManager(StateManager):
             )
 
             # Create indexes
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status)"
-            )
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)")
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time)"
-            )
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trades_entry_time ON trades(entry_time)")
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_checkpoints_timestamp ON checkpoints(timestamp)"
             )
@@ -556,9 +552,7 @@ class SqliteStateManager(StateManager):
             with self._lock:
                 cursor = self._conn.cursor()
                 if status:
-                    cursor.execute(
-                        "SELECT * FROM positions WHERE status = ?", (status,)
-                    )
+                    cursor.execute("SELECT * FROM positions WHERE status = ?", (status,))
                 else:
                     cursor.execute("SELECT * FROM positions")
 
@@ -584,9 +578,7 @@ class SqliteStateManager(StateManager):
                     )
                 )
 
-            self.logger.debug(
-                "Loaded %d positions (filter: %s)", len(positions), status or "all"
-            )
+            self.logger.debug("Loaded %d positions (filter: %s)", len(positions), status or "all")
             return positions
 
         except Exception as e:
@@ -698,9 +690,7 @@ class SqliteStateManager(StateManager):
         try:
             with self._lock:
                 cursor = self._conn.cursor()
-                cursor.execute(
-                    "SELECT * FROM checkpoints ORDER BY id DESC LIMIT 1"
-                )
+                cursor.execute("SELECT * FROM checkpoints ORDER BY id DESC LIMIT 1")
                 row = cursor.fetchone()
 
             if not row:
@@ -819,9 +809,7 @@ class SqliteStateManager(StateManager):
                         (symbol, limit),
                     )
                 else:
-                    cursor.execute(
-                        "SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,)
-                    )
+                    cursor.execute("SELECT * FROM trades ORDER BY id DESC LIMIT ?", (limit,))
                 rows = cursor.fetchall()
 
             trades = []
@@ -1062,6 +1050,7 @@ class JsonFileStateManager(StateManager):
         """Export to JSON (just copy)."""
         try:
             import shutil
+
             shutil.copy(self.filepath, filepath)
             return True
         except Exception as e:
@@ -1179,7 +1168,11 @@ def close_position(
 
     # Calculate P&L breakdown
     net_pnl = gross_pnl - fees - tax
-    pnl_pct = (gross_pnl / (pos.entry_price * pos.quantity)) * 100 if pos.quantity and pos.entry_price else 0.0
+    pnl_pct = (
+        (gross_pnl / (pos.entry_price * pos.quantity)) * 100
+        if pos.quantity and pos.entry_price
+        else 0.0
+    )
 
     # Calculate actual risk/reward
     risk_taken = abs(pos.entry_price - pos.stop_loss) * pos.quantity if pos.stop_loss else 0
