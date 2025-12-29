@@ -121,6 +121,10 @@ Target: 2:1 reward-risk with 50%+ win rate
 
 ## Backtest Results (BTC+ETH+SOL+BNB+XRP, 1D Timeframe)
 
+**Configuration:** `configs/btc_eth_sol_bnb_xrp_1d.json`  
+**Date Range:** October 2022 – December 2025 (~1000 daily bars per asset)  
+**Timeframe:** 1D (Daily candles)
+
 | Metric | Result | Notes |
 |--------|--------|-------|
 | Total Return | **94.67%** | ₹1,00,000 → ₹1,94,665 |
@@ -131,7 +135,12 @@ Target: 2:1 reward-risk with 50%+ win rate
 | Win Rate | **79.31%** | 23 wins / 29 trades |
 | Profit Factor | **4.10** | Gross profits / Gross losses |
 | Total Trades | 29 | Low frequency, high quality |
-| Timeframe | 1D | Daily candles, ~1000 bars per asset |
+
+### Trade Visualization
+
+![Trade Summary](results/trade_summary.png)
+
+*Trade summary showing equity curve, drawdown, and trade distribution across all assets (BTC, ETH, SOL, BNB, XRP) from Oct 2022 to Dec 2025.*
 
 ---
 
