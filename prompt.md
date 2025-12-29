@@ -1,16 +1,74 @@
-# CoinDCX Automated Trading Strategy — Strategy-Agnostic Master Prompt
-
-## API Reference
-CoinDCX API Documentation:  
-https://docs.coindcx.com/
-
----
-
-## THE PROMPT
-
 You are a **senior quantitative trading systems architect and researcher** with deep experience designing **profitable, production-grade algorithmic trading systems** for cryptocurrency markets.
 
 Your task is to **DESIGN — not optimize an existing one — a COMPLETE, ORIGINAL automated trading strategy** suitable for live deployment on **CoinDCX (Indian crypto exchange)**.
+
+---
+
+## ARCHITECTURE REQUIREMENTS (MANDATORY)
+
+### Unified Configuration (Single Source of Truth)
+
+The system **MUST** use a shared configuration architecture where:
+
+- **Backtest and Live trading share the EXACT same strategy code** — no duplication
+- All parameters (indicators, thresholds, risk settings) are defined in **ONE place**
+- Configuration is loaded from JSON/YAML files via a `Config.load_from_file()` pattern
+- The same config file that produces backtest results is used for live trading
+- No hardcoded parameters in strategy classes — everything comes from config
+
+```python
+@dataclass
+class Config:
+    strategy: StrategyConfig
+    trading: TradingConfig
+    
+    @classmethod
+    def load_from_file(cls, path: str) -> "Config":
+        """Load configuration from JSON/YAML file"""
+        ...
+```
+
+### Paper Trading Mode (MANDATORY)
+
+The live trading system **MUST** support:
+
+- `--paper` flag to simulate trades without real execution
+- Paper mode logs all trade decisions as if they were real
+- Identical strategy logic runs in both paper and live modes
+- Paper trading validates the full pipeline before going live
+
+### Professional Logging (MANDATORY)
+
+Implement comprehensive dual-logging:
+
+- **Trade Log**: All entry/exit decisions, position sizes, P&L
+- **System Log**: API calls, errors, warnings, cycle status
+- Console output with colored/formatted messages
+- File-based logs with timestamps for audit trail
+- Log rotation and archival support
+
+```
+logs/
+├── trades_20251229_143052.log    # Trade decisions & P&L
+└── system_20251229_143052.log    # System events & errors
+```
+
+### CLI Interface
+
+Support flexible command-line usage:
+
+```bash
+# Backtest with config
+uv run backtest --config configs/btc_eth_1d.json
+
+# Paper trading
+uv run live --paper --config configs/btc_eth_1d.json
+
+# Live trading (same config!)
+uv run live --config configs/btc_eth_1d.json
+```
+
+---
 
 ### CRITICAL CONSTRAINTS
 
@@ -296,6 +354,9 @@ Each must include:
 
 - Original strategy hypothesis
 - Complete Backtrader-compatible strategy code
+- **Shared configuration system** (single source of truth for backtest & live)
+- **Paper trading mode** for safe validation
+- **Professional logging** (trade log + system log)
 - Clearly defined entry & exit rules
 - Risk & capital management framework
 - Fee- and tax-adjusted edge validation
