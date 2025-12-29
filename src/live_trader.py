@@ -31,14 +31,13 @@ import pandas as pd
 from .exchange import CoinDCXClient, CoinDCXExecutor
 from .strategies import get_strategy_class
 from .config import Config, get_default_config
+from .risk import RiskManager, RiskLimits, RiskAction, Position as RiskPosition
 from .state_manager import (
     StateManager,
     Position,
     Checkpoint,
-    TradeRecord,
     create_state_manager,
     get_open_positions,
-    has_position,
     close_position,
 )
 
@@ -314,12 +313,14 @@ class LiveOrderExecutor:
         logger: DualLogger,
         paper_trade: bool = True,
         state_manager: Optional[StateManager] = None,
+        risk_manager: Optional[RiskManager] = None,
     ):
         self.client = client
         self.executor = executor
         self.logger = logger
         self.paper_trade = paper_trade
         self.state_manager = state_manager
+        self.risk_manager = risk_manager
 
     def execute_buy(
         self,
@@ -332,6 +333,35 @@ class LiveOrderExecutor:
         market_state: str = "",
     ) -> bool:
         """Execute buy order with state persistence and full context"""
+        
+        # --- RISK MANAGEMENT CHECKS ---
+        if self.risk_manager:
+            # 1. Check if trading is allowed
+            action = self.risk_manager.can_trade()
+            if action == RiskAction.BLOCK:
+                self.logger.warning(f"RiskManager BLOCKED buy order for {symbol}")
+                return False
+            
+            # 2. Calculate safe size
+            # If stop_loss is 0, assume 5% risk for calculation safety
+            stop_distance = price - stop_loss if stop_loss > 0 else price * 0.05
+            
+            safe_quantity_value = self.risk_manager.calculate_position_size(
+                price=price,
+                stop_distance=stop_distance,
+                volatility_adjustment=1.0 
+            )
+            safe_quantity = safe_quantity_value / price if price > 0 else 0
+            
+            # 3. Cap quantity if strategy requests more than risk manager allows
+            if safe_quantity < quantity:
+                self.logger.warning(f"RiskManager reduced quantity for {symbol}: {quantity:.6f} -> {safe_quantity:.6f}")
+                quantity = safe_quantity
+                
+            if quantity <= 0:
+                self.logger.warning(f"RiskManager calculated 0 quantity for {symbol}")
+                return False
+
         if self.paper_trade:
             self.logger.trade(f"[PAPER] BUY {quantity:.6f} {symbol} @ Rs {price:,.2f}")
             self.logger.trade(
@@ -361,6 +391,22 @@ class LiveOrderExecutor:
                     self.state_manager.save_position(position)
                 except Exception as e:
                     self.logger.warning("Failed to persist position: %s", e)
+            
+            # Register with Risk Manager
+            if self.risk_manager:
+                try:
+                    risk_pos = RiskPosition(
+                        symbol=symbol,
+                        entry_price=price,
+                        quantity=quantity,
+                        stop_price=stop_loss,
+                        target_price=take_profit,
+                        entry_time=datetime.now(),
+                        risk_amount=(price - stop_loss) * quantity if stop_loss > 0 else 0
+                    )
+                    self.risk_manager.add_position(risk_pos)
+                except Exception as e:
+                    self.logger.warning("Failed to register position with RiskManager: %s", e)
 
             return True
 
@@ -403,6 +449,22 @@ class LiveOrderExecutor:
                         self.state_manager.save_position(position)
                     except Exception as e:
                         self.logger.warning("Failed to persist position: %s", e)
+                
+                # Register with Risk Manager
+                if self.risk_manager:
+                    try:
+                        risk_pos = RiskPosition(
+                            symbol=symbol,
+                            entry_price=price,
+                            quantity=quantity,
+                            stop_price=stop_loss,
+                            target_price=take_profit,
+                            entry_time=datetime.now(),
+                            risk_amount=(price - stop_loss) * quantity if stop_loss > 0 else 0
+                        )
+                        self.risk_manager.add_position(risk_pos)
+                    except Exception as e:
+                        self.logger.warning("Failed to register position with RiskManager: %s", e)
 
                 return True
 
@@ -449,6 +511,20 @@ class LiveOrderExecutor:
                     )
                 except Exception as e:
                     self.logger.warning("Failed to close position in state: %s", e)
+            
+            # Update Risk Manager
+            if self.risk_manager:
+                try:
+                    is_win = net_pnl > 0
+                    self.risk_manager.record_trade_result(
+                        symbol=symbol,
+                        gross_pnl=gross_pnl,
+                        fees=fees + tax,
+                        is_win=is_win
+                    )
+                    self.risk_manager.remove_position(symbol)
+                except Exception as e:
+                    self.logger.warning("Failed to update RiskManager: %s", e)
 
             return True
 
@@ -483,6 +559,20 @@ class LiveOrderExecutor:
                         )
                     except Exception as e:
                         self.logger.warning("Failed to close position in state: %s", e)
+                
+                # Update Risk Manager
+                if self.risk_manager:
+                    try:
+                        is_win = net_pnl > 0
+                        self.risk_manager.record_trade_result(
+                            symbol=symbol,
+                            gross_pnl=gross_pnl,
+                            fees=fees + tax,
+                            is_win=is_win
+                        )
+                        self.risk_manager.remove_position(symbol)
+                    except Exception as e:
+                        self.logger.warning("Failed to update RiskManager: %s", e)
 
                 return True
 
@@ -545,6 +635,19 @@ class LiveTrader:
         )
         self.logger.info("State manager initialized: %s backend", state_backend)
 
+        # Initialize Risk Manager
+        self.risk_manager = RiskManager(
+            initial_equity=self.config.trading.initial_capital,
+            limits=RiskLimits(
+                max_risk_per_trade=self.config.risk.risk_per_trade,
+                max_positions=self.config.risk.max_open_positions,
+                max_portfolio_heat=self.config.risk.max_portfolio_heat,
+                max_position_pct=self.config.risk.max_position_size_pct,
+                drawdown_halt=self.config.risk.max_drawdown,
+            ),
+        )
+        self.logger.info("Risk Manager initialized with capital: Rs %s", self.config.trading.initial_capital)
+
         # Initialize exchange connection
         self.client = CoinDCXClient()
         self.executor = CoinDCXExecutor(self.client)
@@ -554,6 +657,7 @@ class LiveTrader:
             self.logger,
             paper_trade,
             state_manager=self.state_manager,  # Pass state manager
+            risk_manager=self.risk_manager,    # Pass risk manager
         )
 
         # State tracking
@@ -622,8 +726,32 @@ class LiveTrader:
             self._consecutive_losses = checkpoint.consecutive_losses
             self._peak_value = checkpoint.portfolio_value
 
+            # Sync RiskManager state
+            if self.risk_manager:
+                self.risk_manager.update_equity(checkpoint.portfolio_value)
+                self.risk_manager.state.consecutive_losses = checkpoint.consecutive_losses
+                # Ensure peak equity is at least what we had in checkpoint
+                self.risk_manager.state.peak_equity = max(self.risk_manager.state.peak_equity, checkpoint.portfolio_value)
+
             # Load open positions
             open_positions = get_open_positions(self.state_manager)
+
+            # Sync positions to RiskManager
+            if self.risk_manager and open_positions:
+                for pos in open_positions:
+                    try:
+                        risk_pos = RiskPosition(
+                            symbol=pos.symbol,
+                            entry_price=pos.entry_price,
+                            quantity=pos.quantity,
+                            stop_price=pos.stop_loss,
+                            target_price=pos.take_profit,
+                            entry_time=datetime.fromisoformat(pos.entry_time),
+                            risk_amount=(pos.entry_price - pos.stop_loss) * pos.quantity if pos.stop_loss > 0 else 0
+                        )
+                        self.risk_manager.add_position(risk_pos)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to sync position {pos.symbol} to RiskManager: {e}")
 
             self.logger.trade(f"  Last checkpoint:    {checkpoint.timestamp}")
             self.logger.trade(f"  Cycle count:        {checkpoint.cycle_count}")
@@ -791,6 +919,7 @@ class LiveTrader:
                 self.logger.warning("Skipping %s - no data available", symbol)
                 continue
 
+            # pylint: disable=unexpected-keyword-arg
             data = CoinDCXLiveData(
                 dataname=df,
                 name=symbol,
@@ -908,7 +1037,7 @@ class LiveTrader:
                         self.state_manager,
                         symbol,
                         exit_price=current_price,
-                        pnl=0.0,  # Will be calculated from actual trade
+                        gross_pnl=0.0,  # Will be calculated from actual trade
                     )
                     self.logger.debug("Position closed in state: %s", symbol)
 
@@ -976,7 +1105,7 @@ class LiveTrader:
 
         self.logger.section("LIVE TRADER STOPPED")
         self.logger.trade(f"  Total cycles completed: {self._cycle_count}")
-        self.logger.trade(f"  State saved for recovery")
+        self.logger.trade("  State saved for recovery")
 
     def emergency_close_all(self):
         """Emergency: Close all positions immediately"""

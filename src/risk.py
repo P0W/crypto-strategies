@@ -507,7 +507,6 @@ def calculate_minimum_edge(
     slippage: float = 0.001,
     tax_rate: float = 0.30,
     avg_trades_per_month: int = 6,
-    avg_holding_days: int = 3,
 ) -> Dict:
     """
     Calculate minimum edge required to be profitable post-tax.
@@ -517,7 +516,6 @@ def calculate_minimum_edge(
         slippage: Expected slippage per trade
         tax_rate: Tax rate on gains (30% = 0.30)
         avg_trades_per_month: Expected trades per month
-        avg_holding_days: Average holding period
 
     Returns:
         Dictionary with edge requirements
