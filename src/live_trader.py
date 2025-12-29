@@ -303,10 +303,13 @@ class LiveOrderExecutor:
         price: float,
         stop_loss: float = 0.0,
         take_profit: float = 0.0,
+        atr: float = 0.0,
+        regime: str = "",
     ) -> bool:
-        """Execute buy order with state persistence"""
+        """Execute buy order with state persistence and full context"""
         if self.paper_trade:
             self.logger.trade(f"[PAPER] BUY {quantity:.6f} {symbol} @ Rs {price:,.2f}")
+            self.logger.trade(f"  Stop: Rs {stop_loss:,.2f} | Target: Rs {take_profit:,.2f} | ATR: Rs {atr:,.2f} | Regime: {regime}")
 
             # Record position in state manager
             if self.state_manager:
@@ -324,6 +327,8 @@ class LiveOrderExecutor:
                         metadata={
                             "paper_trade": True,
                             "execution_type": "market",
+                            "atr_at_entry": atr,
+                            "regime_at_entry": regime,
                         },
                     )
                     self.state_manager.save_position(position)
@@ -343,6 +348,7 @@ class LiveOrderExecutor:
             if response:
                 order_id = response.get("id", "N/A")
                 self.logger.trade(f"[LIVE] BUY EXECUTED - Order ID: {order_id}")
+                self.logger.trade(f"  Stop: Rs {stop_loss:,.2f} | Target: Rs {take_profit:,.2f} | ATR: Rs {atr:,.2f}")
 
                 # Record position in state manager
                 if self.state_manager:
@@ -360,6 +366,8 @@ class LiveOrderExecutor:
                             metadata={
                                 "paper_trade": False,
                                 "execution_type": "limit",
+                                "atr_at_entry": atr,
+                                "regime_at_entry": regime,
                                 "raw_response": response,
                             },
                         )
@@ -381,16 +389,33 @@ class LiveOrderExecutor:
         symbol: str,
         quantity: float,
         price: float,
-        pnl: float = 0.0,
+        gross_pnl: float = 0.0,
+        fees: float = 0.0,
+        tax: float = 0.0,
+        exit_reason: str = "",
+        regime: str = "",
     ) -> bool:
-        """Execute sell order with state persistence"""
+        """Execute sell order with state persistence and full trade details"""
         if self.paper_trade:
+            net_pnl = gross_pnl - fees - tax
+            result = "WIN" if net_pnl > 0 else "LOSS"
             self.logger.trade(f"[PAPER] SELL {quantity:.6f} {symbol} @ Rs {price:,.2f}")
+            self.logger.trade(f"  Gross P&L: Rs {gross_pnl:+,.2f} | Fees: Rs {fees:.2f} | Tax: Rs {tax:.2f} | Net: Rs {net_pnl:+,.2f} [{result}]")
+            self.logger.trade(f"  Exit Reason: {exit_reason} | Regime: {regime}")
 
-            # Close position in state manager
+            # Close position in state manager with full details
             if self.state_manager:
                 try:
-                    close_position(self.state_manager, symbol, exit_price=price, pnl=pnl)
+                    close_position(
+                        self.state_manager,
+                        symbol,
+                        exit_price=price,
+                        gross_pnl=gross_pnl,
+                        fees=fees,
+                        tax=tax,
+                        exit_reason=exit_reason,
+                        regime_at_exit=regime,
+                    )
                 except Exception as e:
                     self.logger.warning("Failed to close position in state: %s", e)
 
@@ -406,12 +431,23 @@ class LiveOrderExecutor:
 
             if response:
                 order_id = response.get("id", "N/A")
+                net_pnl = gross_pnl - fees - tax
                 self.logger.trade(f"[LIVE] SELL EXECUTED - Order ID: {order_id}")
+                self.logger.trade(f"  Gross P&L: Rs {gross_pnl:+,.2f} | Fees: Rs {fees:.2f} | Tax: Rs {tax:.2f} | Net: Rs {net_pnl:+,.2f}")
 
-                # Close position in state manager
+                # Close position in state manager with full details
                 if self.state_manager:
                     try:
-                        close_position(self.state_manager, symbol, exit_price=price, pnl=pnl)
+                        close_position(
+                            self.state_manager,
+                            symbol,
+                            exit_price=price,
+                            gross_pnl=gross_pnl,
+                            fees=fees,
+                            tax=tax,
+                            exit_reason=exit_reason,
+                            regime_at_exit=regime,
+                        )
                     except Exception as e:
                         self.logger.warning("Failed to close position in state: %s", e)
 

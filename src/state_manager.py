@@ -175,6 +175,12 @@ class Checkpoint:
 class TradeRecord:
     """
     Immutable trade record for audit trail.
+
+    Captures ALL trade details for analysis:
+    - Entry/Exit prices and times
+    - P&L breakdown (gross, fees, tax, net)
+    - Strategy signals and exit reasons
+    - Risk management context (regime, ATR, stop/target)
     """
 
     id: Optional[int] = None
@@ -185,10 +191,24 @@ class TradeRecord:
     exit_price: float = 0.0
     entry_time: str = ""
     exit_time: str = ""
-    pnl: float = 0.0
+    # P&L breakdown
+    gross_pnl: float = 0.0
     fees: float = 0.0
+    tax: float = 0.0
+    net_pnl: float = 0.0
+    pnl_pct: float = 0.0
+    # Strategy context
     status: str = "closed"
+    exit_reason: str = ""  # stop_loss, take_profit, trailing_stop, regime_exit, trend_exit
     strategy_signal: str = ""
+    regime_at_entry: str = ""  # compression, normal, expansion, extreme
+    regime_at_exit: str = ""
+    # Risk management
+    atr_at_entry: float = 0.0
+    stop_loss: float = 0.0
+    take_profit: float = 0.0
+    risk_reward_actual: float = 0.0
+    # Metadata for extensibility
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -402,7 +422,7 @@ class SqliteStateManager(StateManager):
             """
             )
 
-            # Trade history table
+            # Trade history table - comprehensive audit trail
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS trades (
@@ -414,10 +434,24 @@ class SqliteStateManager(StateManager):
                     exit_price REAL,
                     entry_time TEXT NOT NULL,
                     exit_time TEXT,
-                    pnl REAL DEFAULT 0,
+                    -- P&L breakdown
+                    gross_pnl REAL DEFAULT 0,
                     fees REAL DEFAULT 0,
+                    tax REAL DEFAULT 0,
+                    net_pnl REAL DEFAULT 0,
+                    pnl_pct REAL DEFAULT 0,
+                    -- Strategy context
                     status TEXT DEFAULT 'open',
+                    exit_reason TEXT,
                     strategy_signal TEXT,
+                    regime_at_entry TEXT,
+                    regime_at_exit TEXT,
+                    -- Risk management
+                    atr_at_entry REAL DEFAULT 0,
+                    stop_loss REAL DEFAULT 0,
+                    take_profit REAL DEFAULT 0,
+                    risk_reward_actual REAL DEFAULT 0,
+                    -- Metadata
                     metadata TEXT DEFAULT '{}',
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 )
@@ -706,7 +740,7 @@ class SqliteStateManager(StateManager):
     # -------------------------------------------------------------------------
 
     def record_trade(self, trade: TradeRecord) -> bool:
-        """Record a completed trade."""
+        """Record a completed trade with full audit details."""
         try:
             with self._lock:
                 cursor = self._conn.cursor()
@@ -714,8 +748,10 @@ class SqliteStateManager(StateManager):
                     """
                     INSERT INTO trades 
                     (symbol, side, quantity, entry_price, exit_price, entry_time,
-                     exit_time, pnl, fees, status, strategy_signal, metadata)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     exit_time, gross_pnl, fees, tax, net_pnl, pnl_pct, status,
+                     exit_reason, strategy_signal, regime_at_entry, regime_at_exit,
+                     atr_at_entry, stop_loss, take_profit, risk_reward_actual, metadata)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         trade.symbol,
@@ -725,23 +761,43 @@ class SqliteStateManager(StateManager):
                         trade.exit_price,
                         trade.entry_time,
                         trade.exit_time,
-                        trade.pnl,
+                        trade.gross_pnl,
                         trade.fees,
+                        trade.tax,
+                        trade.net_pnl,
+                        trade.pnl_pct,
                         trade.status,
+                        trade.exit_reason,
                         trade.strategy_signal,
+                        trade.regime_at_entry,
+                        trade.regime_at_exit,
+                        trade.atr_at_entry,
+                        trade.stop_loss,
+                        trade.take_profit,
+                        trade.risk_reward_actual,
                         json.dumps(trade.metadata),
                     ),
                 )
                 self._conn.commit()
 
+            # Enhanced logging with all key details
+            result = "WIN" if trade.net_pnl > 0 else "LOSS"
             self.logger.info(
-                "Trade recorded: %s %s %.6f @ %.2f -> %.2f, P&L=%.2f",
+                "Trade recorded: %s %s %.6f @ Rs %.2f -> Rs %.2f | "
+                "Gross: Rs %+.2f | Fees: Rs %.2f | Tax: Rs %.2f | Net: Rs %+.2f (%+.2f%%) | "
+                "Exit: %s | %s",
                 trade.side.upper(),
                 trade.symbol,
                 trade.quantity,
                 trade.entry_price,
                 trade.exit_price,
-                trade.pnl,
+                trade.gross_pnl,
+                trade.fees,
+                trade.tax,
+                trade.net_pnl,
+                trade.pnl_pct,
+                trade.exit_reason or "N/A",
+                result,
             )
 
             return True
@@ -753,7 +809,7 @@ class SqliteStateManager(StateManager):
     def get_trade_history(
         self, symbol: Optional[str] = None, limit: int = 100
     ) -> List[TradeRecord]:
-        """Get trade history."""
+        """Get trade history with full audit details."""
         try:
             with self._lock:
                 cursor = self._conn.cursor()
@@ -780,10 +836,20 @@ class SqliteStateManager(StateManager):
                         exit_price=row["exit_price"] or 0.0,
                         entry_time=row["entry_time"],
                         exit_time=row["exit_time"] or "",
-                        pnl=row["pnl"] or 0.0,
+                        gross_pnl=row["gross_pnl"] or 0.0,
                         fees=row["fees"] or 0.0,
+                        tax=row["tax"] or 0.0,
+                        net_pnl=row["net_pnl"] or 0.0,
+                        pnl_pct=row["pnl_pct"] or 0.0,
                         status=row["status"],
+                        exit_reason=row["exit_reason"] or "",
                         strategy_signal=row["strategy_signal"] or "",
+                        regime_at_entry=row["regime_at_entry"] or "",
+                        regime_at_exit=row["regime_at_exit"] or "",
+                        atr_at_entry=row["atr_at_entry"] or 0.0,
+                        stop_loss=row["stop_loss"] or 0.0,
+                        take_profit=row["take_profit"] or 0.0,
+                        risk_reward_actual=row["risk_reward_actual"] or 0.0,
                         metadata=json.loads(row["metadata"] or "{}"),
                     )
                 )
@@ -1088,21 +1154,46 @@ def close_position(
     manager: StateManager,
     symbol: str,
     exit_price: float,
-    pnl: float,
+    gross_pnl: float = 0.0,
+    fees: float = 0.0,
+    tax: float = 0.0,
+    exit_reason: str = "",
+    regime_at_exit: str = "",
 ) -> bool:
-    """Close a position and record the trade."""
+    """
+    Close a position and record the trade with full details.
+
+    Args:
+        manager: State manager instance
+        symbol: Trading symbol
+        exit_price: Exit price
+        gross_pnl: Gross P&L before fees/tax
+        fees: Total fees (commission)
+        tax: Tax amount (30% on profits in India)
+        exit_reason: Why position was closed (stop_loss, take_profit, etc.)
+        regime_at_exit: Market regime when exiting
+    """
     pos = manager.get_position(symbol)
     if not pos:
         return False
+
+    # Calculate P&L breakdown
+    net_pnl = gross_pnl - fees - tax
+    pnl_pct = (gross_pnl / (pos.entry_price * pos.quantity)) * 100 if pos.quantity and pos.entry_price else 0.0
+
+    # Calculate actual risk/reward
+    risk_taken = abs(pos.entry_price - pos.stop_loss) * pos.quantity if pos.stop_loss else 0
+    reward_achieved = gross_pnl
+    risk_reward_actual = reward_achieved / risk_taken if risk_taken > 0 else 0.0
 
     # Update position
     pos.status = "closed"
     pos.exit_price = exit_price
     pos.exit_time = datetime.now().isoformat()
-    pos.pnl = pnl
+    pos.pnl = net_pnl
     manager.save_position(pos)
 
-    # Record trade
+    # Record trade with full audit details
     trade = TradeRecord(
         symbol=pos.symbol,
         side=pos.side,
@@ -1111,8 +1202,20 @@ def close_position(
         exit_price=exit_price,
         entry_time=pos.entry_time or "",
         exit_time=pos.exit_time or "",
-        pnl=pnl,
+        gross_pnl=gross_pnl,
+        fees=fees,
+        tax=tax,
+        net_pnl=net_pnl,
+        pnl_pct=pnl_pct,
         status="closed",
+        exit_reason=exit_reason,
+        regime_at_entry=pos.metadata.get("regime_at_entry", ""),
+        regime_at_exit=regime_at_exit,
+        atr_at_entry=pos.metadata.get("atr_at_entry", 0.0),
+        stop_loss=pos.stop_loss,
+        take_profit=pos.take_profit,
+        risk_reward_actual=risk_reward_actual,
+        metadata=pos.metadata,
     )
     manager.record_trade(trade)
 
