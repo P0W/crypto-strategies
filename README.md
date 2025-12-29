@@ -124,8 +124,12 @@ Target: 2:1 reward-risk with 50%+ win rate
 | Metric | Result | Notes |
 |--------|--------|-------|
 | Total Return | **94.67%** | ₹1,00,000 → ₹1,94,665 |
-| Max Drawdown | **5.30%** | Well within 20% limit |
+| Post-Tax Return | **64.57%** | After 30% flat tax |
+| Sharpe Ratio | **1.60** | Annualized, risk-adjusted |
+| Max Drawdown | **13.25%** | Well within 20% limit |
+| Calmar Ratio | **7.14** | Return / Max Drawdown |
 | Win Rate | **79.31%** | 23 wins / 29 trades |
+| Profit Factor | **4.10** | Gross profits / Gross losses |
 | Total Trades | 29 | Low frequency, high quality |
 | Timeframe | 1D | Daily candles, ~1000 bars per asset |
 
@@ -206,15 +210,34 @@ uv run optimize --mode quick
 # Full optimization (comprehensive, takes longer)
 uv run optimize --mode full
 
-# Use base config for shared settings (risk params, trading params)
+# Custom optimization with coin combinations
+uv run optimize --mode custom --coins "BTC,ETH,SOL,BNB,XRP" --timeframes "1d"
+
+# Test only pairs and larger portfolios (skip singles)
+uv run optimize --mode custom --coins "BTC,ETH,SOL,BNB,XRP" --min-combo 2
+
+# Test specific parameter ranges
+uv run optimize --mode custom --coins "BTC,ETH,SOL" --adx "25,30" --stop-atr "2.0,2.5,3.0"
+
+# Sort by different metrics (default: sharpe)
+uv run optimize --mode custom --coins "BTC,ETH,SOL" --sort-by calmar  # return/drawdown
+uv run optimize --mode custom --coins "BTC,ETH,SOL" --sort-by return  # raw return
+
+# Use base config for shared settings
 uv run optimize --mode quick --config configs/btc_eth_sol_bnb_xrp_1d.json
 
 # Run sequentially (instead of parallel)
 uv run optimize --mode quick --sequential
-
-# Custom output file
-uv run optimize --mode full --output results/my_optimization.csv
 ```
+
+**Sorting Options:**
+| Option | Description | Best For |
+|--------|-------------|----------|
+| `sharpe` | Risk-adjusted return (default) | Overall performance |
+| `calmar` | Return / Max Drawdown | Drawdown-sensitive strategies |
+| `return` | Raw total return | Maximum gains |
+| `profit_factor` | Gross profits / Gross losses | Trade consistency |
+| `win_rate` | Winning trades % | High-probability setups |
 
 ### Data Preparation
 
