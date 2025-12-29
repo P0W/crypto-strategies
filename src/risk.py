@@ -163,7 +163,7 @@ class RiskManager:
         size = risk_mgr.calculate_position_size(
             price=5000000,
             stop_distance=100000,
-            regime_score=1.2
+            volatility_adjustment=1.2
         )
 
         # Register position
@@ -285,14 +285,14 @@ class RiskManager:
         self,
         price: float,
         stop_distance: float,
-        regime_score: float = 1.0,
+        volatility_adjustment: float = 1.0,
         base_risk_pct: Optional[float] = None,
     ) -> float:
         """
         Calculate position size using volatility-adjusted fractional sizing.
 
         Formula:
-        1. risk_amount = equity * risk_per_trade * size_multiplier * regime_score
+        1. risk_amount = equity * risk_per_trade * size_multiplier * volatility_adjustment
         2. shares = risk_amount / stop_distance
         3. position_value = shares * price
         4. Apply caps
@@ -300,7 +300,7 @@ class RiskManager:
         Args:
             price: Current price
             stop_distance: Distance to stop loss in price units
-            regime_score: Volatility regime adjustment (0.5 to 1.5)
+            volatility_adjustment: Volatility based adjustment (0.5 to 1.5)
             base_risk_pct: Override base risk percentage
 
         Returns:
@@ -322,8 +322,8 @@ class RiskManager:
         # Calculate base risk amount
         risk_amount = self.state.equity * risk_pct
 
-        # Apply regime score
-        risk_amount *= min(max(regime_score, 0.5), 1.5)
+        # Apply volatility adjustment
+        risk_amount *= min(max(volatility_adjustment, 0.5), 1.5)
 
         # Apply size multiplier (drawdown/loss protection)
         risk_amount *= self.get_size_multiplier()

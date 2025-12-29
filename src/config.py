@@ -5,13 +5,14 @@ Centralized configuration management for the trading strategy.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pathlib import Path
 import os
 import json
 import logging
 
 from dotenv import load_dotenv
+from .strategies import get_strategy_defaults
 
 # Load environment variables
 load_dotenv()
@@ -66,27 +67,13 @@ class TradingConfig:
 
 @dataclass
 class StrategyConfig:
-    """Strategy-specific parameters - OPTIMIZED (SOL 4h BEST)"""
+    """Strategy-specific parameters"""
 
-    # Volatility regime
-    atr_period: int = 14
-    volatility_lookback: int = 20
-    compression_threshold: float = 0.6  # From optimization
-    expansion_threshold: float = 1.5  # Standard
-    extreme_threshold: float = 2.5  # Earlier extreme detection
+    # Strategy Selection
+    name: str = "default"
 
-    # Trend confirmation - OPTIMIZED
-    ema_fast: int = 8
-    ema_slow: int = 21
-    adx_period: int = 14
-    adx_threshold: float = 30.0  # ⬆️ BEST: Stricter trend filter
-
-    # Entry/Exit - OPTIMIZED (SOL 4h best: +7.77%, 100% WR)
-    breakout_atr_multiple: float = 1.5  # Tighter breakout entry
-    stop_atr_multiple: float = 2.5  # ⬆️ BEST: Tighter stops
-    target_atr_multiple: float = 5.0  # ⬆️ BEST: 2:1 R:R
-    trailing_activation: float = 0.5  # Later trailing activation
-    trailing_atr_multiple: float = 1.5  # Wider trailing
+    # Generic parameters dictionary
+    params: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -121,6 +108,11 @@ class Config:
     tax: TaxConfig = field(default_factory=TaxConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
 
+    def __post_init__(self):
+        """Initialize strategy params with defaults if empty"""
+        if not self.strategy.params:
+            self.strategy.params = get_strategy_defaults(self.strategy.name)
+
     @classmethod
     def load_from_file(cls, path: str) -> "Config":
         """Load configuration from JSON file (supports flat or nested format)"""
@@ -136,7 +128,22 @@ class Config:
             if "trading" in data:
                 config.trading = TradingConfig(**data["trading"])
             if "strategy" in data:
-                config.strategy = StrategyConfig(**data["strategy"])
+                # Handle strategy config
+                strat_data = data["strategy"]
+                config.strategy.name = strat_data.get("name", "default")
+
+                # Load defaults for this strategy
+                defaults = get_strategy_defaults(config.strategy.name)
+
+                # Merge defaults with provided params
+                # If 'params' key exists, use it, otherwise treat remaining keys as params
+                if "params" in strat_data:
+                    config.strategy.params = {**defaults, **strat_data["params"]}
+                else:
+                    # Filter out 'name' and treat rest as params
+                    provided_params = {k: v for k, v in strat_data.items() if k != "name"}
+                    config.strategy.params = {**defaults, **provided_params}
+
             if "tax" in data:
                 config.tax = TaxConfig(**data["tax"])
             if "backtest" in data:
@@ -180,35 +187,17 @@ class Config:
             if "consecutive_loss_multiplier" in data:
                 config.trading.consecutive_loss_multiplier = data["consecutive_loss_multiplier"]
 
-            # Strategy config
-            if "adx_threshold" in data:
-                config.strategy.adx_threshold = data["adx_threshold"]
-            if "stop_atr_multiple" in data:
-                config.strategy.stop_atr_multiple = data["stop_atr_multiple"]
-            if "target_atr_multiple" in data:
-                config.strategy.target_atr_multiple = data["target_atr_multiple"]
-            if "compression_threshold" in data:
-                config.strategy.compression_threshold = data["compression_threshold"]
-            if "expansion_threshold" in data:
-                config.strategy.expansion_threshold = data["expansion_threshold"]
-            if "extreme_threshold" in data:
-                config.strategy.extreme_threshold = data["extreme_threshold"]
-            if "ema_fast" in data:
-                config.strategy.ema_fast = data["ema_fast"]
-            if "ema_slow" in data:
-                config.strategy.ema_slow = data["ema_slow"]
-            if "atr_period" in data:
-                config.strategy.atr_period = data["atr_period"]
-            if "adx_period" in data:
-                config.strategy.adx_period = data["adx_period"]
-            if "volatility_lookback" in data:
-                config.strategy.volatility_lookback = data["volatility_lookback"]
-            if "breakout_atr_multiple" in data:
-                config.strategy.breakout_atr_multiple = data["breakout_atr_multiple"]
-            if "trailing_activation" in data:
-                config.strategy.trailing_activation = data["trailing_activation"]
-            if "trailing_atr_multiple" in data:
-                config.strategy.trailing_atr_multiple = data["trailing_atr_multiple"]
+            # Strategy config - Flat format assumes default strategy
+            config.strategy.name = "default"
+            defaults = get_strategy_defaults("default")
+
+            # Extract strategy params from flat dict
+            strategy_params = {}
+            for key in defaults.keys():
+                if key in data:
+                    strategy_params[key] = data[key]
+
+            config.strategy.params = {**defaults, **strategy_params}
 
             # Exchange config
             if "maker_fee" in data:
@@ -247,22 +236,7 @@ class Config:
                 "consecutive_loss_limit": self.trading.consecutive_loss_limit,
                 "consecutive_loss_multiplier": self.trading.consecutive_loss_multiplier,
             },
-            "strategy": {
-                "atr_period": self.strategy.atr_period,
-                "volatility_lookback": self.strategy.volatility_lookback,
-                "compression_threshold": self.strategy.compression_threshold,
-                "expansion_threshold": self.strategy.expansion_threshold,
-                "extreme_threshold": self.strategy.extreme_threshold,
-                "ema_fast": self.strategy.ema_fast,
-                "ema_slow": self.strategy.ema_slow,
-                "adx_period": self.strategy.adx_period,
-                "adx_threshold": self.strategy.adx_threshold,
-                "breakout_atr_multiple": self.strategy.breakout_atr_multiple,
-                "stop_atr_multiple": self.strategy.stop_atr_multiple,
-                "target_atr_multiple": self.strategy.target_atr_multiple,
-                "trailing_activation": self.strategy.trailing_activation,
-                "trailing_atr_multiple": self.strategy.trailing_atr_multiple,
-            },
+            "strategy": {"name": self.strategy.name, **self.strategy.params},
             "tax": {
                 "tax_rate": self.tax.tax_rate,
                 "tds_rate": self.tax.tds_rate,
@@ -311,28 +285,14 @@ class Config:
             # Consecutive loss protection (from trading config)
             "consecutive_loss_limit": self.trading.consecutive_loss_limit,
             "consecutive_loss_multiplier": self.trading.consecutive_loss_multiplier,
-            # Volatility regime parameters (from strategy config)
-            "atr_period": self.strategy.atr_period,
-            "volatility_lookback": self.strategy.volatility_lookback,
-            "compression_threshold": self.strategy.compression_threshold,
-            "expansion_threshold": self.strategy.expansion_threshold,
-            "extreme_threshold": self.strategy.extreme_threshold,
-            # Trend confirmation (from strategy config)
-            "ema_fast": self.strategy.ema_fast,
-            "ema_slow": self.strategy.ema_slow,
-            "adx_period": self.strategy.adx_period,
-            "adx_threshold": self.strategy.adx_threshold,
-            # Entry/Exit (from strategy config)
-            "breakout_atr_multiple": self.strategy.breakout_atr_multiple,
-            "stop_atr_multiple": self.strategy.stop_atr_multiple,
-            "target_atr_multiple": self.strategy.target_atr_multiple,
-            "trailing_activation": self.strategy.trailing_activation,
-            "trailing_atr_multiple": self.strategy.trailing_atr_multiple,
             # Fees (from exchange config)
             "maker_fee": self.exchange.maker_fee,
             "taker_fee": self.exchange.taker_fee,
             "slippage": self.exchange.assumed_slippage,
         }
+
+        # Merge strategy specific params
+        params.update(self.strategy.params)
 
         # Merge with any extra params (e.g., logger, executor for live trading)
         params.update(extra_params)

@@ -201,8 +201,8 @@ class TradeRecord:
     status: str = "closed"
     exit_reason: str = ""  # stop_loss, take_profit, trailing_stop, regime_exit, trend_exit
     strategy_signal: str = ""
-    regime_at_entry: str = ""  # compression, normal, expansion, extreme
-    regime_at_exit: str = ""
+    market_state_entry: str = ""  # e.g. compression, normal, expansion, extreme
+    market_state_exit: str = ""
     # Risk management
     atr_at_entry: float = 0.0
     stop_loss: float = 0.0
@@ -759,8 +759,8 @@ class SqliteStateManager(StateManager):
                         trade.status,
                         trade.exit_reason,
                         trade.strategy_signal,
-                        trade.regime_at_entry,
-                        trade.regime_at_exit,
+                        trade.market_state_entry,
+                        trade.market_state_exit,
                         trade.atr_at_entry,
                         trade.stop_loss,
                         trade.take_profit,
@@ -832,8 +832,8 @@ class SqliteStateManager(StateManager):
                         status=row["status"],
                         exit_reason=row["exit_reason"] or "",
                         strategy_signal=row["strategy_signal"] or "",
-                        regime_at_entry=row["regime_at_entry"] or "",
-                        regime_at_exit=row["regime_at_exit"] or "",
+                        market_state_entry=row["regime_at_entry"] or "",
+                        market_state_exit=row["regime_at_exit"] or "",
                         atr_at_entry=row["atr_at_entry"] or 0.0,
                         stop_loss=row["stop_loss"] or 0.0,
                         take_profit=row["take_profit"] or 0.0,
@@ -1147,7 +1147,7 @@ def close_position(
     fees: float = 0.0,
     tax: float = 0.0,
     exit_reason: str = "",
-    regime_at_exit: str = "",
+    market_state_exit: str = "",
 ) -> bool:
     """
     Close a position and record the trade with full details.
@@ -1160,7 +1160,7 @@ def close_position(
         fees: Total fees (commission)
         tax: Tax amount (30% on profits in India)
         exit_reason: Why position was closed (stop_loss, take_profit, etc.)
-        regime_at_exit: Market regime when exiting
+        market_state_exit: Market state when exiting
     """
     pos = manager.get_position(symbol)
     if not pos:
@@ -1202,8 +1202,10 @@ def close_position(
         pnl_pct=pnl_pct,
         status="closed",
         exit_reason=exit_reason,
-        regime_at_entry=pos.metadata.get("regime_at_entry", ""),
-        regime_at_exit=regime_at_exit,
+        market_state_entry=pos.metadata.get(
+            "market_state_entry", pos.metadata.get("regime_at_entry", "")
+        ),
+        market_state_exit=market_state_exit,
         atr_at_entry=pos.metadata.get("atr_at_entry", 0.0),
         stop_loss=pos.stop_loss,
         take_profit=pos.take_profit,

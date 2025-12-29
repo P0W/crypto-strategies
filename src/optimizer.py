@@ -9,17 +9,26 @@ Features:
 - Multiple coins (BTC, ETH, SOL, XRP, DOGE, etc.)
 - Timeframe permutation (1h, 4h, 1d)
 - Seaborn charts for analysis
+- Strategy-agnostic optimization
 """
 
+import argparse
 import itertools
 import logging
 import multiprocessing
+import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
+
+from src.strategies import (
+    get_strategy_optimization_grid,
+    get_strategy_defaults,
+    get_strategy_aliases,
+)
 
 # Configure logging with better format
 logging.basicConfig(
@@ -81,7 +90,15 @@ class OptimizationResult:
 # Worker function must be at module level for multiprocessing
 def _run_single_backtest(args: Tuple) -> Optional[Dict]:
     """Worker function for parallel execution"""
-    symbols, timeframe, strategy_params, data_dir, initial_capital, base_config_path = args
+    (
+        symbols,
+        timeframe,
+        strategy_params,
+        data_dir,
+        initial_capital,
+        base_config_path,
+        strategy_name,
+    ) = args
 
     try:
         # Suppress ALL logging during optimization for speed
@@ -104,11 +121,16 @@ def _run_single_backtest(args: Tuple) -> Optional[Dict]:
         config.trading.initial_capital = initial_capital
         config.backtest.data_dir = data_dir
         config.backtest.timeframe = timeframe
+        if strategy_name:
+            # If strategy changed or we are using default config (which defaults to volatility_regime),
+            # we must reset params to avoid pollution from the default strategy
+            if config.strategy.name != strategy_name or not base_config_path:
+                config.strategy.name = strategy_name
+                config.strategy.params = get_strategy_defaults(strategy_name)
 
         # Apply strategy params being tested
         for key, value in strategy_params.items():
-            if hasattr(config.strategy, key):
-                setattr(config.strategy, key, value)
+            config.strategy.params[key] = value
 
         # Run backtest
         result = run_backtest(config)
@@ -130,7 +152,7 @@ def _run_single_backtest(args: Tuple) -> Optional[Dict]:
         }
 
     except Exception as e:
-        return None
+        return {"error": str(e)}
     finally:
         # Re-enable logging
         import logging
@@ -145,11 +167,20 @@ def run_single_optimization(
     strategy_params: Dict[str, Any],
     initial_capital: float = 100_000,
     base_config_path: Optional[str] = None,
+    strategy_name: Optional[str] = None,
 ) -> Optional[OptimizationResult]:
     """Run a single backtest with given parameters (non-parallel version)"""
 
     result = _run_single_backtest(
-        (symbols, timeframe, strategy_params, data_dir, initial_capital, base_config_path)
+        (
+            symbols,
+            timeframe,
+            strategy_params,
+            data_dir,
+            initial_capital,
+            base_config_path,
+            strategy_name,
+        )
     )
 
     if result is None:
@@ -189,6 +220,7 @@ def grid_search_parallel(
     initial_capital: float = 100_000,
     max_workers: int = None,
     base_config_path: Optional[str] = None,
+    strategy_name: Optional[str] = None,
 ) -> List[OptimizationResult]:
     """
     Perform parallel grid search over parameter combinations.
@@ -219,7 +251,15 @@ def grid_search_parallel(
             for combo in all_param_combos:
                 params = dict(zip(param_names, combo))
                 tasks.append(
-                    (symbols, timeframe, params, data_dir, initial_capital, base_config_path)
+                    (
+                        symbols,
+                        timeframe,
+                        params,
+                        data_dir,
+                        initial_capital,
+                        base_config_path,
+                        strategy_name,
+                    )
                 )
 
     total_runs = len(tasks)
@@ -246,12 +286,12 @@ def grid_search_parallel(
         for future in as_completed(future_to_task):
             completed += 1
             task = future_to_task[future]
-            symbols, timeframe, params, _, _, _ = task
+            symbols, timeframe, params, _, _, _, _ = task
 
             try:
                 result = future.result()
 
-                if result and result.get("total_trades", 0) >= min_trades:
+                if result and "error" not in result and result.get("total_trades", 0) >= min_trades:
                     opt_result = OptimizationResult(
                         params={
                             k: v
@@ -280,10 +320,14 @@ def grid_search_parallel(
                         f"✓ PF:{result['profit_factor']:.2f} R:{result['total_return']*100:.1f}%"
                     )
                 else:
-                    status = "✗ skip"
+                    if result and "error" in result:
+                        status = f"✗ worker error: {result['error']}"
+                    else:
+                        trades = result.get("total_trades", 0) if result else 0
+                        status = f"✗ skip ({trades})"
 
             except Exception as e:
-                status = f"✗ error"
+                status = f"✗ error: {str(e)}"
 
             # Clean progress bar - no status details
             pct = completed / total_runs * 100
@@ -292,7 +336,7 @@ def grid_search_parallel(
             bar = "█" * filled + "░" * (bar_len - filled)
             valid = len(results)
             print(
-                f"\r⚡ [{bar}] {pct:5.1f}% | {completed}/{total_runs} | ✓ {valid} valid",
+                f"\r⚡ [{bar}] {pct:5.1f}% | {completed}/{total_runs} | ✓ {valid} valid | Last: {status}",
                 end="",
                 flush=True,
             )
@@ -310,6 +354,7 @@ def grid_search_sequential(
     min_trades: int = 5,
     initial_capital: float = 100_000,
     base_config_path: Optional[str] = None,
+    strategy_name: Optional[str] = None,
 ) -> List[OptimizationResult]:
     """Sequential grid search (fallback if parallel fails)"""
 
@@ -345,6 +390,7 @@ def grid_search_sequential(
                     strategy_params=params,
                     initial_capital=initial_capital,
                     base_config_path=base_config_path,
+                    strategy_name=strategy_name,
                 )
 
                 if result and result.total_trades >= min_trades:
@@ -453,131 +499,8 @@ def fetch_data_for_coins(coins: List[str], timeframes: List[str], data_dir: str 
                 print(f"✗ {e}")
 
 
-def quick_optimize(
-    parallel: bool = True,
-    generate_charts: bool = True,
-    base_config_path: Optional[str] = None,
-    sort_by: str = "sharpe",
-):
-    """Quick optimization with common parameter ranges"""
-
-    # Available coins on CoinDCX INR market
-    coins = ["BTC", "ETH", "SOL", "XRP", "DOGE"]
-    timeframes = ["4h"]  # Start with 4h only for quick
-
-    # Fetch any missing data
-    fetch_data_for_coins(coins, timeframes)
-
-    param_grid = {
-        "adx_threshold": [20.0, 25.0, 30.0],
-        "stop_atr_multiple": [2.5, 3.0, 3.5],
-        "target_atr_multiple": [5.0, 6.0, 7.0],
-    }
-
-    # Test each coin individually and some combos
-    symbols_list = [[f"{c}INR"] for c in coins] + [
-        ["BTCINR", "ETHINR"],
-        ["SOLINR", "XRPINR"],
-    ]
-
-    if parallel:
-        results = grid_search_parallel(
-            param_grid=param_grid,
-            symbols_list=symbols_list,
-            timeframes=timeframes,
-            data_dir="data",
-            min_trades=3,
-            base_config_path=base_config_path,
-        )
-    else:
-        results = grid_search_sequential(
-            param_grid=param_grid,
-            symbols_list=symbols_list,
-            timeframes=timeframes,
-            data_dir="data",
-            min_trades=3,
-            base_config_path=base_config_path,
-        )
-
-    # Sort by chosen metric
-    results.sort(key=lambda x: x.sort_key(sort_by), reverse=True)
-
-    print_results(results, top_n=15, sort_by=sort_by)
-    save_results(results, "results/optimization_results.csv")
-
-    # Generate charts for top results
-    if generate_charts and results:
-        generate_top_results_charts(results[:5], "results/charts")
-
-    return results
-
-
-def full_optimize(
-    parallel: bool = True,
-    generate_charts: bool = True,
-    base_config_path: Optional[str] = None,
-    sort_by: str = "sharpe",
-):
-    """Full optimization with more coins, timeframes, and parameters"""
-
-    # More coins to test
-    coins = ["BTC", "ETH", "SOL", "XRP", "DOGE", "MATIC", "ADA", "AVAX"]
-    timeframes = ["1h", "4h", "1d"]
-
-    # Fetch any missing data
-    fetch_data_for_coins(coins, timeframes)
-
-    param_grid = {
-        "adx_threshold": [20.0, 25.0, 30.0],
-        "stop_atr_multiple": [2.0, 2.5, 3.0, 3.5],
-        "target_atr_multiple": [4.0, 5.0, 6.0, 7.0],
-        "compression_threshold": [0.6, 0.7],
-    }
-
-    # Test each coin individually
-    symbols_list = [[f"{c}INR"] for c in coins]
-    # Add some combos
-    symbols_list.extend(
-        [
-            ["BTCINR", "ETHINR"],
-            ["SOLINR", "XRPINR", "DOGEINR"],
-        ]
-    )
-
-    if parallel:
-        results = grid_search_parallel(
-            param_grid=param_grid,
-            symbols_list=symbols_list,
-            timeframes=timeframes,
-            data_dir="data",
-            min_trades=3,
-            base_config_path=base_config_path,
-        )
-    else:
-        results = grid_search_sequential(
-            param_grid=param_grid,
-            symbols_list=symbols_list,
-            timeframes=timeframes,
-            data_dir="data",
-            min_trades=3,
-            base_config_path=base_config_path,
-        )
-
-    # Sort by chosen metric
-    results.sort(key=lambda x: x.sort_key(sort_by), reverse=True)
-
-    print_results(results, top_n=25, sort_by=sort_by)
-    save_results(results, "results/full_optimization_results.csv")
-
-    # Generate charts for top results
-    if generate_charts and results:
-        generate_top_results_charts(results[:5], "results/charts")
-
-    return results
-
-
 def generate_top_results_charts(
-    results: List[OptimizationResult], output_dir: str = "results/charts"
+    results: List[OptimizationResult], output_dir: str = "results/charts", strategy_name: str = None
 ):
     """Generate detailed charts for top optimization results"""
     from .charts import create_comprehensive_chart, create_comparison_chart
@@ -618,20 +541,21 @@ def generate_top_results_charts(
             # Recreate the config and run backtest with full details
             config = Config()
 
+            if strategy_name:
+                if config.strategy.name != strategy_name:
+                    config.strategy.name = strategy_name
+                    config.strategy.params = get_strategy_defaults(strategy_name)
+
             symbols_str = result.params.get("symbols", "")
             symbols = symbols_str.split(",") if symbols_str else ["BTCINR"]
             config.trading.pairs = symbols
             config.backtest.timeframe = result.params.get("timeframe", "4h")
 
             # Apply strategy params
-            for key in [
-                "adx_threshold",
-                "stop_atr_multiple",
-                "target_atr_multiple",
-                "compression_threshold",
-            ]:
-                if key in result.params:
-                    setattr(config.strategy, key, result.params[key])
+            # Note: We need to apply all params from the result, not just hardcoded ones
+            for key, value in result.params.items():
+                if key not in ["symbols", "timeframe"]:
+                    config.strategy.params[key] = value
 
             # Run backtest
             backtest_result = run_backtest(config, return_full_data=True)
@@ -665,59 +589,6 @@ def generate_top_results_charts(
             logger.warning("Failed to generate chart for config #%d: %s", i, e)
 
     print(f"\n✅ All charts saved to: {output_dir}/")
-
-    return results
-
-
-def custom_optimize(
-    symbols_list: List[List[str]],
-    timeframes: List[str],
-    param_grid: Dict[str, List[Any]],
-    data_dir: str = "data",
-    parallel: bool = True,
-    generate_charts: bool = True,
-    base_config_path: Optional[str] = None,
-    output_file: str = "results/custom_optimization_results.csv",
-    sort_by: str = "sharpe",
-):
-    """Custom optimization with user-specified parameters"""
-
-    # Extract unique coins for data fetching
-    all_symbols = set()
-    for symbols in symbols_list:
-        all_symbols.update(symbols)
-    coins = [s.replace("INR", "") for s in all_symbols]
-
-    # Fetch any missing data
-    fetch_data_for_coins(coins, timeframes, data_dir)
-
-    if parallel:
-        results = grid_search_parallel(
-            param_grid=param_grid,
-            symbols_list=symbols_list,
-            timeframes=timeframes,
-            data_dir=data_dir,
-            min_trades=3,
-            base_config_path=base_config_path,
-        )
-    else:
-        results = grid_search_sequential(
-            param_grid=param_grid,
-            symbols_list=symbols_list,
-            timeframes=timeframes,
-            data_dir=data_dir,
-            min_trades=3,
-            base_config_path=base_config_path,
-        )
-
-    # Sort by chosen metric
-    results.sort(key=lambda x: x.sort_key(sort_by), reverse=True)
-
-    print_results(results, top_n=15, sort_by=sort_by)
-    save_results(results, output_file)
-
-    if generate_charts and results:
-        generate_top_results_charts(results[:5], "results/charts")
 
     return results
 
@@ -766,194 +637,167 @@ def generate_coin_combinations(
 
 
 def main():
-    """Run optimization from command line"""
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Strategy Parameter Optimizer",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Quick preset optimization
-  uv run optimize --mode quick
-
-  # Full preset optimization  
-  uv run optimize --mode full
-
-  # Custom: test all combinations of 3 coins (7 combos: 3 singles + 3 pairs + 1 triple)
-  uv run optimize --mode custom --coins "BTC,ETH,SOL" --timeframes "1d"
-
-  # Custom: only test pairs and triples (skip singles)
-  uv run optimize --mode custom --coins "BTC,ETH,SOL,XRP" --min-combo 2 --timeframes "1d"
-
-  # Custom: only test pairs (no singles, no 3+ groups)
-  uv run optimize --mode custom --coins "BTC,ETH,SOL,XRP" --min-combo 2 --max-combo 2
-
-  # Custom with parameter sweep
-  uv run optimize --mode custom --coins "BTC,ETH,SOL" --adx "25,30" --stop-atr "2.0,2.5,3.0"
-
-  # Custom with base config
-  uv run optimize --mode custom --config configs/btc_eth_sol_bnb_xrp_1d.json --coins "BTC,ETH" --stop-atr "2.0,2.5,3.0"
-
-  # Explicit symbol groups (alternative to --coins)
-  uv run optimize --mode custom --symbols "BTCINR;ETHINR;BTCINR,ETHINR" --timeframes "1d"
-        """,
+    parser = argparse.ArgumentParser(description="Strategy Parameter Optimizer")
+    parser.add_argument(
+        "--strategy",
+        type=str,
+        required=True,
+        help="Strategy to optimize (e.g., volatility_regime, bollinger_reversion)",
     )
     parser.add_argument(
         "--mode",
+        type=str,
         choices=["quick", "full", "custom"],
         default="quick",
-        help="Optimization mode: quick, full, or custom",
+        help="Optimization mode",
     )
     parser.add_argument(
-        "--sequential", action="store_true", help="Run sequentially instead of parallel"
-    )
-    parser.add_argument("--config", type=str, help="Base config file for shared settings")
-    parser.add_argument("--data-dir", default="data", help="Data directory")
-    parser.add_argument(
-        "--output", default="results/optimization_results.csv", help="Output CSV file"
+        "--parallel", action="store_true", default=True, help="Run in parallel (default: True)"
     )
     parser.add_argument(
-        "--sort-by",
-        choices=["sharpe", "calmar", "return", "profit_factor", "win_rate"],
-        default="sharpe",
-        help="Metric to rank results by (default: sharpe). "
-        "sharpe=risk-adjusted, calmar=return/drawdown, return=total return",
+        "--no-parallel", action="store_false", dest="parallel", help="Run sequentially"
     )
+    parser.add_argument(
+        "--charts", action="store_true", default=True, help="Generate charts (default: True)"
+    )
+    parser.add_argument(
+        "--no-charts", action="store_false", dest="charts", help="Skip chart generation"
+    )
+    parser.add_argument(
+        "--sort", "--sort-by", dest="sort", type=str, default="sharpe", help="Metric to sort by"
+    )
+    parser.add_argument("--config", type=str, help="Base config file path")
+    parser.add_argument("--coins", type=str, help="Comma-separated list of coins")
+    parser.add_argument("--timeframes", type=str, help="Comma-separated list of timeframes")
+    parser.add_argument("--min-combo", type=int, default=1, help="Minimum coin combination size")
+    parser.add_argument("--max-combo", type=int, help="Maximum coin combination size")
 
-    # Custom mode parameters
-    parser.add_argument(
-        "--symbols",
-        type=str,
-        help="Symbols to test. Comma-separated for single group, semicolon for multiple groups. "
-        "E.g., 'BTCINR,ETHINR' or 'BTCINR;ETHINR;BTCINR,ETHINR'",
-    )
-    parser.add_argument(
-        "--coins",
-        type=str,
-        help="Coins to generate combinations from, comma-separated. "
-        "E.g., 'BTC,ETH,SOL' generates all combinations: BTC, ETH, SOL, BTC+ETH, BTC+SOL, etc.",
-    )
-    parser.add_argument(
-        "--min-combo",
-        type=int,
-        default=1,
-        help="Minimum combination size when using --coins (default: 1 = singles)",
-    )
-    parser.add_argument(
-        "--max-combo",
-        type=int,
-        default=None,
-        help="Maximum combination size when using --coins (default: all coins together)",
-    )
-    parser.add_argument(
-        "--timeframes",
-        type=str,
-        default="4h",
-        help="Timeframes to test, comma-separated. E.g., '1h,4h,1d' (default: 4h)",
-    )
-    parser.add_argument(
-        "--adx",
-        type=str,
-        help="ADX threshold values to test, comma-separated. E.g., '20,25,30'",
-    )
-    parser.add_argument(
-        "--stop-atr",
-        type=str,
-        help="Stop ATR multiples to test, comma-separated. E.g., '2.0,2.5,3.0'",
-    )
-    parser.add_argument(
-        "--target-atr",
-        type=str,
-        help="Target ATR multiples to test, comma-separated. E.g., '5.0,6.0,7.0'",
-    )
-    parser.add_argument(
-        "--compression",
-        type=str,
-        help="Compression threshold values to test, comma-separated. E.g., '0.6,0.7'",
-    )
+    args, unknown = parser.parse_known_args()
 
-    args = parser.parse_args()
+    # Get strategy-specific optimization grid
+    try:
+        grid_config = get_strategy_optimization_grid(args.strategy, args.mode)
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
-    # Ensure directories exist
-    Path("results").mkdir(exist_ok=True)
-    Path(args.data_dir).mkdir(exist_ok=True)
+    # Override with custom args
+    if args.coins:
+        grid_config["coins"] = [c.strip() for c in args.coins.split(",")]
 
-    parallel = not args.sequential
+    if args.timeframes:
+        grid_config["timeframes"] = [t.strip() for t in args.timeframes.split(",")]
 
-    if args.config:
-        print(f"   Base config: {args.config}")
+    # Parse unknown args as strategy params
+    # Common parameter aliases for CLI convenience
+    try:
+        PARAM_ALIASES = get_strategy_aliases(args.strategy)
+    except Exception:
+        PARAM_ALIASES = {}
 
-    print(f"   Sort by: {args.sort_by}")
+    if unknown:
+        param_grid = grid_config.get("param_grid", {})
+        i = 0
+        while i < len(unknown):
+            arg = unknown[i]
+            if arg.startswith("--"):
+                raw_key = arg.lstrip("-").replace("-", "_")  # Convert kebab-case to snake_case
+                # Map alias to actual parameter name if exists, else use raw key
+                key = PARAM_ALIASES.get(raw_key, raw_key)
 
-    if args.mode == "quick":
-        print("🚀 Running QUICK optimization...")
-        print(f"   Parallel: {parallel}")
-        results = quick_optimize(
-            parallel=parallel, base_config_path=args.config, sort_by=args.sort_by
-        )
+                if i + 1 < len(unknown) and not unknown[i + 1].startswith("--"):
+                    val = unknown[i + 1]
+                    # Parse comma-separated values
+                    parsed_vals = []
+                    for p in val.split(","):
+                        p = p.strip()
+                        try:
+                            if "." in p:
+                                parsed_vals.append(float(p))
+                            else:
+                                parsed_vals.append(int(p))
+                        except ValueError:
+                            parsed_vals.append(p)
+                    param_grid[key] = parsed_vals
+                    i += 2
+                else:
+                    print(f"Warning: No value provided for {arg}")
+                    i += 1
+            else:
+                i += 1
+        grid_config["param_grid"] = param_grid
 
-    elif args.mode == "full":
-        print("🚀 Running FULL optimization...")
-        print(f"   Parallel: {parallel}")
-        print("   ⚠️  This may take several minutes!")
-        results = full_optimize(
-            parallel=parallel, base_config_path=args.config, sort_by=args.sort_by
-        )
+    print(f"Optimizing strategy: {args.strategy} (Mode: {args.mode})")
 
-    elif args.mode == "custom":
-        # Validate required args for custom mode
-        if not args.symbols and not args.coins:
-            parser.error("--symbols or --coins is required for custom mode")
+    # Extract grid components
+    param_grid = grid_config.get("param_grid", {})
+    timeframes = grid_config.get("timeframes", ["4h"])
+    coins = grid_config.get("coins", ["BTC", "ETH"])
 
-        # Parse symbols - either from explicit list or generate combinations
-        if args.coins:
-            coins = [c.strip() for c in args.coins.split(",")]
+    # Generate symbol combinations if not provided explicitly
+    if "symbols_list" in grid_config:
+        symbols_list = grid_config["symbols_list"]
+    else:
+        # Default combination logic
+        if args.mode == "quick":
+            # Individual coins + one big combo
+            symbols_list = [[f"{c}INR"] for c in coins]
+            if len(coins) > 1:
+                symbols_list.append([f"{c}INR" for c in coins])
+        elif args.mode == "custom":
+            # Custom combination logic based on min/max combo
+            max_c = args.max_combo if args.max_combo is not None else len(coins)
             symbols_list = generate_coin_combinations(
-                coins, min_size=args.min_combo, max_size=args.max_combo
+                coins, min_size=args.min_combo, max_size=max_c
             )
-            print(f"   Generated {len(symbols_list)} coin combinations from {coins}")
         else:
-            symbols_list = parse_symbols_list(args.symbols)
+            # More combinations for full mode
+            symbols_list = generate_coin_combinations(coins, min_size=1, max_size=1)
+            if len(coins) >= 2:
+                symbols_list.extend(generate_coin_combinations(coins, min_size=2, max_size=2))
+            if len(coins) >= 3:
+                symbols_list.append([f"{c}INR" for c in coins])
 
-        # Parse timeframes
-        timeframes = [t.strip() for t in args.timeframes.split(",")]
+    # Fetch data
+    fetch_data_for_coins(coins, timeframes)
 
-        # Build param grid from provided args
-        param_grid = {}
-        if args.adx:
-            param_grid["adx_threshold"] = parse_float_list(args.adx)
-        if args.stop_atr:
-            param_grid["stop_atr_multiple"] = parse_float_list(args.stop_atr)
-        if args.target_atr:
-            param_grid["target_atr_multiple"] = parse_float_list(args.target_atr)
-        if args.compression:
-            param_grid["compression_threshold"] = parse_float_list(args.compression)
-
-        if not param_grid:
-            # Default to testing a few ADX values if nothing specified
-            param_grid = {"adx_threshold": [25.0, 30.0]}
-            print("   ⚠️  No parameters specified, defaulting to ADX: 25, 30")
-
-        print("🚀 Running CUSTOM optimization...")
-        print(f"   Symbols:    {symbols_list}")
-        print(f"   Timeframes: {timeframes}")
-        print(f"   Parameters: {param_grid}")
-        print(f"   Parallel:   {parallel}")
-
-        results = custom_optimize(
+    # Run optimization
+    if args.parallel:
+        results = grid_search_parallel(
+            param_grid=param_grid,
             symbols_list=symbols_list,
             timeframes=timeframes,
-            param_grid=param_grid,
-            data_dir=args.data_dir,
-            parallel=parallel,
+            data_dir="data",
+            min_trades=3,
             base_config_path=args.config,
-            output_file=args.output,
-            sort_by=args.sort_by,
+            strategy_name=args.strategy,
+        )
+    else:
+        results = grid_search_sequential(
+            param_grid=param_grid,
+            symbols_list=symbols_list,
+            timeframes=timeframes,
+            data_dir="data",
+            min_trades=3,
+            base_config_path=args.config,
+            strategy_name=args.strategy,
         )
 
-    return 0
+    # Sort and save
+    results.sort(key=lambda x: x.sort_key(args.sort), reverse=True)
+
+    output_file = f"results/{args.strategy}_{args.mode}_optimization.csv"
+    print_results(results, top_n=15, sort_by=args.sort)
+    save_results(results, output_file)
+
+    if args.charts and results:
+        chart_dir = f"results/charts/{args.strategy}_{args.mode}"
+        generate_top_results_charts(results[:5], chart_dir, strategy_name=args.strategy)
 
 
 if __name__ == "__main__":
-    exit(main())
+    # Support running without args for backward compatibility or testing
+    if len(sys.argv) == 1:
+        print("Usage: python -m src.optimizer --strategy <name> --mode <quick|full>")
+        sys.exit(1)
+    main()

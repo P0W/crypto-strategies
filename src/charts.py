@@ -150,6 +150,16 @@ def create_comprehensive_chart(
     ax2 = fig.add_subplot(gs[0, 2])
     ax2.axis("off")
 
+    # Format parameters dynamically
+    params_str = ""
+    # Filter out non-parameter keys if any
+    display_params = {k: v for k, v in config_params.items() if k not in ['symbols', 'timeframe']}
+    # Take top 3-4 important parameters
+    for k, v in list(display_params.items())[:4]:
+        # Shorten key if too long
+        key_display = (k[:10] + '..') if len(k) > 12 else k
+        params_str += f"║  {key_display:<12} {str(v):<18} ║\n"
+
     metrics_text = f"""
 ╔══════════════════════════════════╗
 ║     PERFORMANCE METRICS          ║
@@ -168,10 +178,7 @@ def create_comprehensive_chart(
 ╠══════════════════════════════════╣
 ║  Symbols:     {str(config_params.get('symbols', 'N/A')):<18} ║
 ║  Timeframe:   {str(config_params.get('timeframe', '4h')):<18} ║
-║  ADX Thresh:  {config_params.get('adx_threshold', 25):<18} ║
-║  Stop ATR:    {config_params.get('stop_atr_multiple', 3.0):<18} ║
-║  Target ATR:  {config_params.get('target_atr_multiple', 6.0):<18} ║
-╚══════════════════════════════════╝
+{params_str}╚══════════════════════════════════╝
 """
     ax2.text(
         0.1,

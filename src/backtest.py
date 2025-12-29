@@ -13,7 +13,7 @@ from typing import Optional
 import backtrader as bt
 import pandas as pd
 
-from .strategy import CoinDCXStrategy
+from .strategies import get_strategy_class
 from .config import Config, get_default_config, setup_logging
 from .risk import calculate_minimum_edge
 
@@ -238,7 +238,10 @@ def run_backtest(
 
     # Add strategy with params from unified config
     strategy_params = config.get_strategy_params()
-    cerebro.addstrategy(CoinDCXStrategy, **strategy_params)
+
+    # Dynamically load strategy class
+    strategy_class = get_strategy_class(config.strategy.name)
+    cerebro.addstrategy(strategy_class, **strategy_params)
 
     # Add data feeds
     if data_feeds:

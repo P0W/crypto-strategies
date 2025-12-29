@@ -63,3 +63,5 @@ Thumbs.db
 # Backtest artifacts
 *.pkl
 *.pickle
+
+configs/archive/

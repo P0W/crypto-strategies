@@ -48,41 +48,65 @@ plt.rcParams.update(
 def calculate_indicators(df: pd.DataFrame, config: Dict) -> pd.DataFrame:
     """Calculate all technical indicators used by the strategy"""
 
-    # EMA
-    ema_fast = config.get("ema_fast", 8)
-    ema_slow = config.get("ema_slow", 21)
-    df["ema_fast"] = df["close"].ewm(span=ema_fast, adjust=False).mean()
-    df["ema_slow"] = df["close"].ewm(span=ema_slow, adjust=False).mean()
+    # EMA (Common)
+    if "ema_fast" in config:
+        ema_fast = config.get("ema_fast", 8)
+        df["ema_fast"] = df["close"].ewm(span=ema_fast, adjust=False).mean()
 
-    # ATR
-    atr_period = config.get("atr_period", 14)
-    high_low = df["high"] - df["low"]
-    high_close = np.abs(df["high"] - df["close"].shift())
-    low_close = np.abs(df["low"] - df["close"].shift())
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    df["atr"] = tr.rolling(window=atr_period).mean()
+    if "ema_slow" in config:
+        ema_slow = config.get("ema_slow", 21)
+        df["ema_slow"] = df["close"].ewm(span=ema_slow, adjust=False).mean()
 
-    # ADX
-    adx_period = config.get("adx_period", 14)
-    plus_dm = df["high"].diff()
-    minus_dm = df["low"].diff().abs() * -1
-    plus_dm[plus_dm < 0] = 0
-    minus_dm[minus_dm > 0] = 0
-    minus_dm = minus_dm.abs()
+    # Bollinger Bands
+    if "bb_period" in config:
+        bb_period = config.get("bb_period", 20)
+        bb_dev = config.get("bb_dev", 2.0)
+        df["bb_mid"] = df["close"].rolling(window=bb_period).mean()
+        df["bb_std"] = df["close"].rolling(window=bb_period).std()
+        df["bb_top"] = df["bb_mid"] + (df["bb_std"] * bb_dev)
+        df["bb_bot"] = df["bb_mid"] - (df["bb_std"] * bb_dev)
 
-    tr_smooth = tr.rolling(window=adx_period).sum()
-    plus_di = 100 * (plus_dm.rolling(window=adx_period).sum() / tr_smooth)
-    minus_di = 100 * (minus_dm.rolling(window=adx_period).sum() / tr_smooth)
+    # RSI
+    if "rsi_period" in config:
+        rsi_period = config.get("rsi_period", 14)
+        delta = df["close"].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
+        rs = gain / loss
+        df["rsi"] = 100 - (100 / (1 + rs))
 
-    dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
-    df["adx"] = dx.rolling(window=adx_period).mean()
-    df["plus_di"] = plus_di
-    df["minus_di"] = minus_di
+    # ATR (Common)
+    if "atr_period" in config:
+        atr_period = config.get("atr_period", 14)
+        high_low = df["high"] - df["low"]
+        high_close = np.abs(df["high"] - df["close"].shift())
+        low_close = np.abs(df["low"] - df["close"].shift())
+        tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        df["atr"] = tr.rolling(window=atr_period).mean()
 
-    # Volatility regime
-    volatility_lookback = config.get("volatility_lookback", 20)
-    df["atr_ma"] = df["atr"].rolling(window=volatility_lookback).mean()
-    df["volatility_ratio"] = df["atr"] / df["atr_ma"]
+        # ADX (Depends on ATR calculation)
+        if "adx_period" in config:
+            adx_period = config.get("adx_period", 14)
+            plus_dm = df["high"].diff()
+            minus_dm = df["low"].diff().abs() * -1
+            plus_dm[plus_dm < 0] = 0
+            minus_dm[minus_dm > 0] = 0
+            minus_dm = minus_dm.abs()
+
+            tr_smooth = tr.rolling(window=adx_period).sum()
+            plus_di = 100 * (plus_dm.rolling(window=adx_period).sum() / tr_smooth)
+            minus_di = 100 * (minus_dm.rolling(window=adx_period).sum() / tr_smooth)
+
+            dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
+            df["adx"] = dx.rolling(window=adx_period).mean()
+            df["plus_di"] = plus_di
+            df["minus_di"] = minus_di
+
+        # Volatility regime (Depends on ATR)
+        if "volatility_lookback" in config:
+            volatility_lookback = config.get("volatility_lookback", 20)
+            df["atr_ma"] = df["atr"].rolling(window=volatility_lookback).mean()
+            df["volatility_ratio"] = df["atr"] / df["atr_ma"]
 
     return df
 
@@ -298,9 +322,24 @@ def create_trade_chart(
         logger.info("No trades for %s", symbol)
         return None
 
+    # Determine panels to show based on available data
+    panels = []
+    if "adx" in df.columns:
+        panels.append("adx")
+    if "atr" in df.columns:
+        panels.append("atr")
+    if "volatility_ratio" in df.columns:
+        panels.append("vol_ratio")
+    if "rsi" in df.columns:
+        panels.append("rsi")
+
+    # Height ratios: Main chart gets 3, others get 1
+    height_ratios = [3] + [1] * len(panels)
+    total_height = 10 + 2 * len(panels)
+
     # Create figure with subplots
-    fig = plt.figure(figsize=(24, 16))
-    gs = GridSpec(4, 1, figure=fig, height_ratios=[3, 1, 1, 1], hspace=0.1)
+    fig = plt.figure(figsize=(24, total_height))
+    gs = GridSpec(len(height_ratios), 1, figure=fig, height_ratios=height_ratios, hspace=0.1)
 
     # === Main Price Chart ===
     ax1 = fig.add_subplot(gs[0])
@@ -309,27 +348,51 @@ def create_trade_chart(
     ax1.fill_between(df.index, df["low"], df["high"], alpha=0.1, color="#58a6ff")
     ax1.plot(df.index, df["close"], color="#58a6ff", linewidth=1.5, label="Close", alpha=0.8)
 
-    # Plot EMAs
-    ema_fast = config.get("ema_fast", 8)
-    ema_slow = config.get("ema_slow", 21)
-    ax1.plot(
-        df.index,
-        df["ema_fast"],
-        color="#f0883e",
-        linewidth=1.2,
-        linestyle="-",
-        label=f"EMA {ema_fast}",
-        alpha=0.9,
-    )
-    ax1.plot(
-        df.index,
-        df["ema_slow"],
-        color="#a371f7",
-        linewidth=1.2,
-        linestyle="-",
-        label=f"EMA {ema_slow}",
-        alpha=0.9,
-    )
+    # Plot EMAs if available
+    if "ema_fast" in df.columns:
+        ema_fast = config.get("ema_fast", 8)
+        ax1.plot(
+            df.index,
+            df["ema_fast"],
+            color="#f0883e",
+            linewidth=1.2,
+            linestyle="-",
+            label=f"EMA {ema_fast}",
+            alpha=0.9,
+        )
+    if "ema_slow" in df.columns:
+        ema_slow = config.get("ema_slow", 21)
+        ax1.plot(
+            df.index,
+            df["ema_slow"],
+            color="#a371f7",
+            linewidth=1.2,
+            linestyle="-",
+            label=f"EMA {ema_slow}",
+            alpha=0.9,
+        )
+
+    # Plot Bollinger Bands if available
+    if "bb_top" in df.columns:
+        ax1.plot(
+            df.index,
+            df["bb_top"],
+            color="#8b949e",
+            linewidth=1,
+            linestyle="--",
+            alpha=0.5,
+            label="BB Top",
+        )
+        ax1.plot(
+            df.index,
+            df["bb_bot"],
+            color="#8b949e",
+            linewidth=1,
+            linestyle="--",
+            alpha=0.5,
+            label="BB Bot",
+        )
+        ax1.fill_between(df.index, df["bb_top"], df["bb_bot"], color="#8b949e", alpha=0.05)
 
     # Plot trades
     for trade in symbol_trades:
@@ -479,100 +542,131 @@ def create_trade_chart(
     ax1.grid(True, alpha=0.3)
     ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
 
-    # === ADX Panel ===
-    ax2 = fig.add_subplot(gs[1], sharex=ax1)
-    adx_threshold = config.get("adx_threshold", 30)
+    # === Dynamic Subplots ===
+    axes = [ax1]
 
-    ax2.plot(df.index, df["adx"], color="#f0883e", linewidth=1.5, label="ADX")
-    ax2.plot(df.index, df["plus_di"], color="#3fb950", linewidth=1, alpha=0.7, label="+DI")
-    ax2.plot(df.index, df["minus_di"], color="#f85149", linewidth=1, alpha=0.7, label="-DI")
-    ax2.axhline(
-        y=adx_threshold,
-        color="#8b949e",
-        linestyle="--",
-        linewidth=1,
-        label=f"Threshold ({adx_threshold})",
-    )
-    ax2.fill_between(
-        df.index,
-        adx_threshold,
-        df["adx"],
-        where=df["adx"] >= adx_threshold,
-        color="#3fb950",
-        alpha=0.2,
-    )
-    ax2.set_ylabel("ADX", fontsize=11)
-    ax2.set_ylim(0, 60)
-    ax2.legend(loc="upper left", facecolor="#161b22", edgecolor="#30363d", ncol=4)
-    ax2.grid(True, alpha=0.3)
+    for i, panel in enumerate(panels):
+        ax = fig.add_subplot(gs[i + 1], sharex=ax1)
+        axes.append(ax)
 
-    # === ATR Panel ===
-    ax3 = fig.add_subplot(gs[2], sharex=ax1)
-    ax3.plot(df.index, df["atr"], color="#a371f7", linewidth=1.5, label="ATR")
-    ax3.plot(
-        df.index,
-        df["atr_ma"],
-        color="#8b949e",
-        linewidth=1,
-        linestyle="--",
-        label="ATR MA",
-        alpha=0.7,
-    )
-    ax3.set_ylabel("ATR", fontsize=11)
-    ax3.legend(loc="upper left", facecolor="#161b22", edgecolor="#30363d")
-    ax3.grid(True, alpha=0.3)
+        if panel == "adx":
+            adx_threshold = config.get("adx_threshold", 30)
+            ax.plot(df.index, df["adx"], color="#f0883e", linewidth=1.5, label="ADX")
+            if "plus_di" in df.columns:
+                ax.plot(
+                    df.index, df["plus_di"], color="#3fb950", linewidth=1, alpha=0.7, label="+DI"
+                )
+                ax.plot(
+                    df.index, df["minus_di"], color="#f85149", linewidth=1, alpha=0.7, label="-DI"
+                )
+            ax.axhline(
+                y=adx_threshold,
+                color="#8b949e",
+                linestyle="--",
+                linewidth=1,
+                label=f"Threshold ({adx_threshold})",
+            )
+            ax.fill_between(
+                df.index,
+                adx_threshold,
+                df["adx"],
+                where=df["adx"] >= adx_threshold,
+                color="#3fb950",
+                alpha=0.2,
+            )
+            ax.set_ylabel("ADX", fontsize=11)
+            ax.set_ylim(0, 60)
+            ax.legend(loc="upper left", facecolor="#161b22", edgecolor="#30363d", ncol=4)
+            ax.grid(True, alpha=0.3)
 
-    # === Volatility Ratio Panel ===
-    ax4 = fig.add_subplot(gs[3], sharex=ax1)
-    compression_threshold = config.get("compression_threshold", 0.6)
-    expansion_threshold = config.get("expansion_threshold", 1.5)
+        elif panel == "atr":
+            ax.plot(df.index, df["atr"], color="#a371f7", linewidth=1.5, label="ATR")
+            if "atr_ma" in df.columns:
+                ax.plot(
+                    df.index,
+                    df["atr_ma"],
+                    color="#8b949e",
+                    linewidth=1,
+                    linestyle="--",
+                    label="ATR MA",
+                    alpha=0.7,
+                )
+            ax.set_ylabel("ATR", fontsize=11)
+            ax.legend(loc="upper left", facecolor="#161b22", edgecolor="#30363d")
+            ax.grid(True, alpha=0.3)
 
-    ax4.plot(df.index, df["volatility_ratio"], color="#58a6ff", linewidth=1.5, label="Vol Ratio")
-    ax4.axhline(y=1.0, color="#8b949e", linestyle="-", linewidth=1, alpha=0.5)
-    ax4.axhline(
-        y=compression_threshold,
-        color="#3fb950",
-        linestyle="--",
-        linewidth=1,
-        label=f"Compression ({compression_threshold})",
-    )
-    ax4.axhline(
-        y=expansion_threshold,
-        color="#f85149",
-        linestyle="--",
-        linewidth=1,
-        label=f"Expansion ({expansion_threshold})",
-    )
-    ax4.fill_between(
-        df.index,
-        0,
-        df["volatility_ratio"],
-        where=df["volatility_ratio"] <= compression_threshold,
-        color="#3fb950",
-        alpha=0.2,
-        label="_nolegend_",
-    )
-    ax4.fill_between(
-        df.index,
-        df["volatility_ratio"],
-        3,
-        where=df["volatility_ratio"] >= expansion_threshold,
-        color="#f85149",
-        alpha=0.2,
-        label="_nolegend_",
-    )
-    ax4.set_ylabel("Vol Ratio", fontsize=11)
-    ax4.set_ylim(0, 3)
-    ax4.legend(loc="upper left", facecolor="#161b22", edgecolor="#30363d", ncol=3)
-    ax4.grid(True, alpha=0.3)
-    ax4.set_xlabel("Date", fontsize=12)
-    ax4.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
-    plt.setp(ax4.xaxis.get_majorticklabels(), rotation=45, ha="right")
+        elif panel == "vol_ratio":
+            compression_threshold = config.get("compression_threshold", 0.6)
+            expansion_threshold = config.get("expansion_threshold", 1.5)
+
+            ax.plot(
+                df.index, df["volatility_ratio"], color="#58a6ff", linewidth=1.5, label="Vol Ratio"
+            )
+            ax.axhline(y=1.0, color="#8b949e", linestyle="-", linewidth=1, alpha=0.5)
+            ax.axhline(
+                y=compression_threshold,
+                color="#3fb950",
+                linestyle="--",
+                linewidth=1,
+                label=f"Compression ({compression_threshold})",
+            )
+            ax.axhline(
+                y=expansion_threshold,
+                color="#f85149",
+                linestyle="--",
+                linewidth=1,
+                label=f"Expansion ({expansion_threshold})",
+            )
+            ax.fill_between(
+                df.index,
+                0,
+                df["volatility_ratio"],
+                where=df["volatility_ratio"] <= compression_threshold,
+                color="#3fb950",
+                alpha=0.2,
+                label="_nolegend_",
+            )
+            ax.fill_between(
+                df.index,
+                df["volatility_ratio"],
+                3,
+                where=df["volatility_ratio"] >= expansion_threshold,
+                color="#f85149",
+                alpha=0.2,
+                label="_nolegend_",
+            )
+            ax.set_ylabel("Vol Ratio", fontsize=11)
+            ax.set_ylim(0, 3)
+            ax.legend(loc="upper left", facecolor="#161b22", edgecolor="#30363d", ncol=3)
+            ax.grid(True, alpha=0.3)
+
+        elif panel == "rsi":
+            rsi_oversold = config.get("rsi_oversold", 30)
+            rsi_overbought = config.get("rsi_overbought", 70)
+
+            ax.plot(df.index, df["rsi"], color="#a371f7", linewidth=1.5, label="RSI")
+            ax.axhline(
+                y=rsi_oversold, color="#3fb950", linestyle="--", linewidth=1, label="Oversold"
+            )
+            ax.axhline(
+                y=rsi_overbought, color="#f85149", linestyle="--", linewidth=1, label="Overbought"
+            )
+            ax.fill_between(df.index, 0, rsi_oversold, color="#3fb950", alpha=0.1)
+            ax.fill_between(df.index, rsi_overbought, 100, color="#f85149", alpha=0.1)
+            ax.set_ylabel("RSI", fontsize=11)
+            ax.set_ylim(0, 100)
+            ax.legend(loc="upper left", facecolor="#161b22", edgecolor="#30363d")
+            ax.grid(True, alpha=0.3)
 
     # Hide x-axis labels for upper panels
-    plt.setp(ax1.get_xticklabels(), visible=False)
-    plt.setp(ax2.get_xticklabels(), visible=False)
-    plt.setp(ax3.get_xticklabels(), visible=False)
+    for ax in axes[:-1]:
+        plt.setp(ax.get_xticklabels(), visible=False)
+
+    # Format x-axis for the last panel
+    last_ax = axes[-1]
+    last_ax.set_xlabel("Date", fontsize=12)
+    last_ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+    plt.setp(last_ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
 
     plt.tight_layout()
 

@@ -39,15 +39,25 @@ Cryptocurrency markets exhibit strong volatility clustering (GARCH effects) wher
 
 ## Strategy Class
 
-**Volatility Regime + Trend Confirmation Hybrid**
+**Modular Strategy Framework**
 
-1. **Volatility Regime Detection** - Identify market state (compression vs expansion)
-2. **Trend Confirmation** - Enter only with momentum alignment
-3. **Adaptive Position Sizing** - Scale exposure based on regime quality
+The system now supports multiple strategies via a modular plugin architecture.
+
+### Available Strategies
+
+1. **Volatility Regime (Default)**
+   - **Logic**: Exploits volatility clustering and regime persistence.
+   - **Best For**: 4H/1D timeframes on major pairs (BTC, ETH).
+   - **Key Components**: ATR Regime Filter, Trend Confirmation, Adaptive Sizing.
+
+2. **Bollinger Reversion**
+   - **Logic**: Mean reversion trading using Bollinger Bands and RSI.
+   - **Best For**: Lower timeframes (15m, 1h) on ranging markets.
+   - **Key Components**: Bollinger Band Width, RSI Divergence.
 
 ---
 
-## Entry Logic
+## Entry Logic (Volatility Regime)
 
 **Winning Config:** `configs/btc_eth_sol_bnb_xrp_1d.json`
 
@@ -226,6 +236,18 @@ COINDCX_API_SECRET=your_api_secret_here
 
 3. Modify config file in `configs/` for strategy parameters.
 
+To switch strategies, update the `strategy` section in your config:
+
+```json
+"strategy": {
+    "name": "bollinger_reversion",
+    "params": {
+        "period": 20,
+        "devfactor": 2.0
+    }
+}
+```
+
 ---
 
 ## Usage
@@ -233,20 +255,23 @@ COINDCX_API_SECRET=your_api_secret_here
 ### Backtesting
 
 ```bash
-# Run backtest with default config
+# Run backtest with default config (Volatility Regime)
 uv run backtest
 
 # Run with specific config file
-uv run backtest --config configs/btc_eth_sol_bnb_xrp_1d.json
+uv run backtest --config configs/sample_config.json
+
+# Run with Bollinger Reversion strategy
+uv run backtest --config configs/bollinger_test.json
 
 # With custom parameters
-uv run backtest --config configs/btc_eth_sol_bnb_xrp_1d.json --capital 100000
+uv run backtest --config configs/sample_config.json --capital 100000
 
 # Generate trade visualization charts
-uv run backtest --config configs/btc_eth_sol_bnb_xrp_1d.json --chart
+uv run backtest --config configs/sample_config.json --chart
 
 # Verbose output with charts
-uv run backtest --config configs/btc_eth_sol_bnb_xrp_1d.json --chart -v
+uv run backtest --config configs/sample_config.json --chart -v
 
 # Custom date range
 uv run backtest --start 2023-01-01 --end 2024-01-01
@@ -256,29 +281,32 @@ uv run backtest --start 2023-01-01 --end 2024-01-01
 
 ```bash
 # Quick optimization (faster, fewer combinations)
-uv run optimize --mode quick
+uv run optimize --strategy volatility_regime --mode quick
 
 # Full optimization (comprehensive, takes longer)
-uv run optimize --mode full
+uv run optimize --strategy volatility_regime --mode full
+
+# Optimize Bollinger Reversion strategy
+uv run optimize --strategy bollinger_reversion --mode quick
 
 # Custom optimization with coin combinations
-uv run optimize --mode custom --coins "BTC,ETH,SOL,BNB,XRP" --timeframes "1d"
+uv run optimize --strategy volatility_regime --mode custom --coins "BTC,ETH,SOL,BNB,XRP" --timeframes "1d"
 
 # Test only pairs and larger portfolios (skip singles)
-uv run optimize --mode custom --coins "BTC,ETH,SOL,BNB,XRP" --min-combo 2
+uv run optimize --strategy volatility_regime --mode custom --coins "BTC,ETH,SOL,BNB,XRP" --min-combo 2
 
 # Test specific parameter ranges
-uv run optimize --mode custom --coins "BTC,ETH,SOL" --adx "25,30" --stop-atr "2.0,2.5,3.0"
+uv run optimize --strategy volatility_regime --mode custom --coins "BTC,ETH,SOL" --adx "25,30" --stop-atr "2.0,2.5,3.0"
 
 # Sort by different metrics (default: sharpe)
-uv run optimize --mode custom --coins "BTC,ETH,SOL" --sort-by calmar  # return/drawdown
-uv run optimize --mode custom --coins "BTC,ETH,SOL" --sort-by return  # raw return
+uv run optimize --strategy volatility_regime --mode custom --coins "BTC,ETH,SOL" --sort-by calmar  # return/drawdown
+uv run optimize --strategy volatility_regime --mode custom --coins "BTC,ETH,SOL" --sort-by return  # raw return
 
 # Use base config for shared settings
-uv run optimize --mode quick --config configs/btc_eth_sol_bnb_xrp_1d.json
+uv run optimize --strategy volatility_regime --mode quick --config configs/sample_config.json
 
 # Run sequentially (instead of parallel)
-uv run optimize --mode quick --sequential
+uv run optimize --strategy volatility_regime --mode quick --sequential
 ```
 
 **Sorting Options:**
@@ -314,7 +342,7 @@ Use `uv run fetch-data` to download historical data from CoinDCX API.
 uv run live --paper
 
 # Paper trading with custom config
-uv run live --paper --config configs/btc_eth_sol_bnb_xrp_1d.json
+uv run live --paper --config configs/sample_config.json
 
 # Custom cycle interval (seconds)
 uv run live --paper --interval 300
@@ -380,7 +408,9 @@ crypto-strategies/
 ├── state/                  # State persistence (SQLite + JSON)
 └── src/
     ├── __init__.py
-    ├── strategy.py         # Backtrader strategy implementation
+    ├── strategies/         # Strategy implementations
+    │   ├── volatility_regime/   # Volatility Regime Strategy
+    │   └── bollinger_reversion/ # Bollinger Reversion Strategy
     ├── exchange.py         # CoinDCX API client
     ├── risk.py             # Risk management framework
     ├── config.py           # Configuration management

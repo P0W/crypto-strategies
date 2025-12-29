@@ -29,7 +29,7 @@ import backtrader as bt
 import pandas as pd
 
 from .exchange import CoinDCXClient, CoinDCXExecutor
-from .strategy import CoinDCXStrategy
+from .strategies import get_strategy_class
 from .config import Config, get_default_config
 from .state_manager import (
     StateManager,
@@ -143,15 +143,11 @@ class CoinDCXLiveData(bt.feeds.PandasData):
 # =============================================================================
 
 
-class LiveTradingStrategy(CoinDCXStrategy):
+class LiveTradingMixin:
     """
-    Live trading version of CoinDCXStrategy.
+    Live trading mixin.
 
-    INHERITS 100% of the backtest logic from CoinDCXStrategy.
-    Only adds enhanced logging for live trading visibility.
-
-    NOTE: Uses same params as parent (defined in CoinDCXStrategy).
-    Live-specific params (logger, executor, paper_trade) are also in parent.
+    Adds enhanced logging for live trading visibility.
     """
 
     def __init__(self):
@@ -192,6 +188,20 @@ class LiveTradingStrategy(CoinDCXStrategy):
                     else:
                         self.log_obj.trade("  Mode:       [LIVE EXECUTION]")
 
+                # Execute via executor if available
+                if self.executor:
+                    # Try to extract stop/target from strategy if available
+                    stop_loss = getattr(self, "stop_prices", {}).get(symbol, 0.0)
+                    take_profit = getattr(self, "target_prices", {}).get(symbol, 0.0)
+
+                    self.executor.execute_buy(
+                        symbol=symbol,
+                        quantity=order.executed.size,
+                        price=order.executed.price,
+                        stop_loss=stop_loss,
+                        take_profit=take_profit,
+                    )
+
             else:  # Sell
                 if self.log_obj:
                     self.log_obj.section(f"SELL ORDER - {symbol}")
@@ -204,6 +214,15 @@ class LiveTradingStrategy(CoinDCXStrategy):
                         self.log_obj.trade("  Mode:       [PAPER TRADE]")
                     else:
                         self.log_obj.trade("  Mode:       [LIVE EXECUTION]")
+
+                # Execute via executor if available
+                if self.executor:
+                    self.executor.execute_sell(
+                        symbol=symbol,
+                        quantity=abs(order.executed.size),
+                        price=order.executed.price,
+                        exit_reason="Strategy Signal",
+                    )
 
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
             if self.log_obj:
@@ -251,19 +270,25 @@ class LiveTradingStrategy(CoinDCXStrategy):
         for d in self.datas:
             if d._name in self.indicators:
                 ind = self.indicators[d._name]
-                regime_val = int(ind["regime"].regime[0])
-                regime_names = ["COMPRESSION", "NORMAL", "EXPANSION", "EXTREME"]
-                regime_name = regime_names[regime_val] if 0 <= regime_val < 4 else "UNKNOWN"
 
+                # Generic indicator logging
+                ind_str_parts = []
+                for name, indicator in ind.items():
+                    try:
+                        # Try to get the first line value
+                        val = indicator[0]
+                        if isinstance(val, (int, float)):
+                            ind_str_parts.append(f"{name}: {val:.2f}")
+                    except:
+                        pass
+
+                ind_str = " | ".join(ind_str_parts)
                 pos = self.getposition(d)
                 pos_str = f"Position: {pos.size:.6f}" if pos.size else "No Position"
 
                 if self.log_obj:
                     self.log_obj.debug(
-                        f"[{d._name}] Close: Rs{d.close[0]:,.2f} | "
-                        f"EMA: {ind['ema_fast'][0]:.0f}/{ind['ema_slow'][0]:.0f} | "
-                        f"ATR: Rs{ind['atr'][0]:,.0f} | ADX: {ind['adx'][0]:.1f} | "
-                        f"Regime: {regime_name} | {pos_str}"
+                        f"[{d._name}] Close: Rs{d.close[0]:,.2f} | " f"{ind_str} | {pos_str}"
                     )
 
         # Run the ACTUAL strategy logic (100% inherited from CoinDCXStrategy)
@@ -304,13 +329,13 @@ class LiveOrderExecutor:
         stop_loss: float = 0.0,
         take_profit: float = 0.0,
         atr: float = 0.0,
-        regime: str = "",
+        market_state: str = "",
     ) -> bool:
         """Execute buy order with state persistence and full context"""
         if self.paper_trade:
             self.logger.trade(f"[PAPER] BUY {quantity:.6f} {symbol} @ Rs {price:,.2f}")
             self.logger.trade(
-                f"  Stop: Rs {stop_loss:,.2f} | Target: Rs {take_profit:,.2f} | ATR: Rs {atr:,.2f} | Regime: {regime}"
+                f"  Stop: Rs {stop_loss:,.2f} | Target: Rs {take_profit:,.2f} | ATR: Rs {atr:,.2f} | State: {market_state}"
             )
 
             # Record position in state manager
@@ -330,7 +355,7 @@ class LiveOrderExecutor:
                             "paper_trade": True,
                             "execution_type": "market",
                             "atr_at_entry": atr,
-                            "regime_at_entry": regime,
+                            "market_state_entry": market_state,
                         },
                     )
                     self.state_manager.save_position(position)
@@ -371,7 +396,7 @@ class LiveOrderExecutor:
                                 "paper_trade": False,
                                 "execution_type": "limit",
                                 "atr_at_entry": atr,
-                                "regime_at_entry": regime,
+                                "market_state_entry": market_state,
                                 "raw_response": response,
                             },
                         )
@@ -397,7 +422,7 @@ class LiveOrderExecutor:
         fees: float = 0.0,
         tax: float = 0.0,
         exit_reason: str = "",
-        regime: str = "",
+        market_state: str = "",
     ) -> bool:
         """Execute sell order with state persistence and full trade details"""
         if self.paper_trade:
@@ -407,7 +432,7 @@ class LiveOrderExecutor:
             self.logger.trade(
                 f"  Gross P&L: Rs {gross_pnl:+,.2f} | Fees: Rs {fees:.2f} | Tax: Rs {tax:.2f} | Net: Rs {net_pnl:+,.2f} [{result}]"
             )
-            self.logger.trade(f"  Exit Reason: {exit_reason} | Regime: {regime}")
+            self.logger.trade(f"  Exit Reason: {exit_reason} | State: {market_state}")
 
             # Close position in state manager with full details
             if self.state_manager:
@@ -420,7 +445,7 @@ class LiveOrderExecutor:
                         fees=fees,
                         tax=tax,
                         exit_reason=exit_reason,
-                        regime_at_exit=regime,
+                        market_state_exit=market_state,
                     )
                 except Exception as e:
                     self.logger.warning("Failed to close position in state: %s", e)
@@ -454,7 +479,7 @@ class LiveOrderExecutor:
                             fees=fees,
                             tax=tax,
                             exit_reason=exit_reason,
-                            regime_at_exit=regime,
+                            market_state_exit=market_state,
                         )
                     except Exception as e:
                         self.logger.warning("Failed to close position in state: %s", e)
@@ -549,14 +574,14 @@ class LiveTrader:
 
     def _compute_config_hash(self) -> str:
         """Compute hash of config for change detection."""
+        # Use params dict for hashing
+        params = self.config.strategy.params
+        # Sort params to ensure consistent hashing
+        sorted_params = sorted(params.items())
+        params_str = "|".join([f"{k}:{v}" for k, v in sorted_params])
+
         config_str = (
-            f"{self.config.trading.pairs}|"
-            f"{self.config.trading.timeframe}|"
-            f"{self.config.strategy.ema_fast}|"
-            f"{self.config.strategy.ema_slow}|"
-            f"{self.config.strategy.adx_threshold}|"
-            f"{self.config.strategy.stop_atr_multiple}|"
-            f"{self.config.strategy.target_atr_multiple}"
+            f"{self.config.trading.pairs}|" f"{self.config.trading.timeframe}|" f"{params_str}"
         )
         return hashlib.md5(config_str.encode()).hexdigest()[:8]
 
@@ -660,6 +685,7 @@ class LiveTrader:
     def _log_startup(self):
         """Log startup configuration"""
         mode = "PAPER TRADE" if self.paper_trade else "*** LIVE TRADING ***"
+        params = self.config.strategy.params
 
         self.logger.section(f"LIVE TRADER INITIALIZED - {mode}")
         self.logger.trade(f"  Capital:    Rs {self.config.trading.initial_capital:,.2f}")
@@ -669,12 +695,9 @@ class LiveTrader:
         self.logger.trade(f"  Config:     {self._config_hash}")
         self.logger.trade("")
         self.logger.trade("  STRATEGY PARAMETERS:")
-        self.logger.trade(
-            f"    EMA Fast/Slow:      {self.config.strategy.ema_fast}/{self.config.strategy.ema_slow}"
-        )
-        self.logger.trade(f"    ADX Threshold:      {self.config.strategy.adx_threshold}")
-        self.logger.trade(f"    Stop ATR Multiple:  {self.config.strategy.stop_atr_multiple}x")
-        self.logger.trade(f"    Target ATR Multiple:{self.config.strategy.target_atr_multiple}x")
+        for key, value in params.items():
+            self.logger.trade(f"    {key:<20}: {value}")
+
         self.logger.trade(f"    Risk Per Trade:     {self.config.trading.risk_per_trade*100:.1f}%")
         self.logger.trade(
             f"    Max Position:       {self.config.trading.max_position_pct*100:.0f}%"
@@ -747,7 +770,14 @@ class LiveTrader:
             paper_trade=self.paper_trade,
         )
 
-        cerebro.addstrategy(LiveTradingStrategy, **strategy_params)
+        # Dynamically load base strategy
+        base_strategy_class = get_strategy_class(self.config.strategy.name)
+
+        # Create dynamic LiveTradingStrategy inheriting from Mixin and Base
+        # Mixin first to ensure its methods override/extend base
+        LiveStrategy = type("LiveTradingStrategy", (LiveTradingMixin, base_strategy_class), {})
+
+        cerebro.addstrategy(LiveStrategy, **strategy_params)
 
         # Set broker parameters
         cerebro.broker.setcash(self.config.trading.initial_capital)

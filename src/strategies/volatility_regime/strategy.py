@@ -54,7 +54,7 @@ from typing import TYPE_CHECKING
 import backtrader as bt
 
 if TYPE_CHECKING:
-    from .config import Config
+    from src.config import Config
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
