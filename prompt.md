@@ -83,6 +83,7 @@ uv run live --config configs/btc_eth_1d.json
   - Fully backtestable
   - Logically falsifiable
   - Robust after fees, slippage, and Indian taxes
+- **Robustness Requirement**: The strategy logic must hold across different market regimes (e.g., bear markets) without extreme parameter tweaking. Avoid "brittle" logic that breaks with slight parameter changes.
 
 Use **first-principles reasoning**, market microstructure understanding, and quantitative rigor.
 
@@ -109,10 +110,11 @@ Robustness, capital preservation, and **post-tax profitability** matter more tha
 ## CAPITAL & RISK CONSTRAINTS
 
 - Initial Capital: ₹1 Lakh
-- Risk Per Trade: 1–2% of equity
+- Risk Per Trade: **2-3% of equity** (Reduced from aggressive levels to ensure survival)
 - Max Portfolio Heat: 6–10%
 - Max Drawdown Tolerance: 15–25%
 - Capital Allocation: Fully funded spot positions only
+- **Correlation Management**: Implement portfolio-level risk caps to handle high correlation between crypto assets (e.g., BTC dumping drags everything down).
 - Position Sizing:
   - You must **select and justify** the sizing model  
   (e.g., fixed fractional, volatility-adjusted, adaptive sizing)
@@ -327,6 +329,7 @@ Provide defensible, non-marketing expectations:
 - Profit Factor
 - Sharpe Ratio
 - Trades per month
+- **Statistical Significance**: Ensure the strategy generates enough trades (N > 100) to be statistically significant. Consider lower timeframes (e.g., 3m, 5m, 15m, 4h) if necessary to achieve this sample size.
 
 Explain why these metrics are realistic for this strategy.
 
@@ -361,6 +364,7 @@ Each must include:
 - Risk & capital management framework
 - Fee- and tax-adjusted edge validation
 - Step-by-step roadmap to go live on CoinDCX
+- **Walk-Forward Analysis Plan**: A plan to validate the strategy on out-of-sample data (e.g., bear market periods) to ensure robustness.
 
 Do NOT optimize.
 Do NOT curve-fit.
