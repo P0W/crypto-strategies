@@ -91,11 +91,11 @@ The system now supports multiple strategies via a modular plugin architecture.
 
 | Parameter | Value | Justification |
 |-----------|-------|---------------|
-| Risk Per Trade | 15% | Aggressive risk per trade |
-| Max Positions | 5 | Full portfolio diversification (BTC, ETH, SOL, BNB, XRP) |
-| Max Portfolio Heat | 30% | Total risk capped across all positions |
-| Max Position % | 20% | Single position cap per asset |
-| Max Drawdown | 20% | Trading halt trigger |
+| Risk Per Trade | 0.5% - 2% | Conservative per-trade risk (Dynamic) |
+| Max Positions | 2 | Focused capital allocation |
+| Max Portfolio Heat | 10% | Total portfolio risk cap |
+| Max Position % | 40% | High conviction sizing allowed |
+| Max Drawdown | 20% | Hard trading halt trigger |
 
 ### Drawdown-Based De-Risking
 
@@ -106,31 +106,29 @@ The system now supports multiple strategies via a modular plugin architecture.
 ### Consecutive Loss Protection
 
 - After 3 consecutive losses: Reduce size by 25%
-- Reset after consecutive wins
+- Reset after 2 consecutive wins
 
 ---
 
-## Fee & Tax Reality Check
+## Fee & Tax Reality Check (India Specific)
 
-### Indian Crypto Tax Regime
+### Indian Crypto Tax Regime (2024)
 
-- **30% flat tax** on gains
-- **1% TDS** on transactions
-- **No loss offset** allowed
+- **30% Flat Tax** on all gains (no slab benefits)
+- **1% TDS** on every sell transaction
+- **No Loss Offset**: Losses cannot be set off against profits
 
 ### Minimum Edge Requirement
 
-```
-Round-trip cost: ~0.4% (fees + slippage)
-Monthly trading cost: ~2.4% (6 trades/month)
-Annual trading cost: ~28.8%
+To be profitable post-tax/fees in this environment:
 
-With 30% tax on gains and no loss offset:
-- 2:1 payoff requires >45% win rate to profit
-- 3:1 payoff requires >35% win rate to profit
+1. **Round-Trip Cost**: ~0.4% (0.2% fees + 0.2% slippage)
+2. **Monthly Cost Drag**: ~2.4% (assuming 6 trades/month)
+3. **Profitability Thresholds**:
+   - **2:1 Reward/Risk**: Requires **>45% Win Rate**
+   - **3:1 Reward/Risk**: Requires **>35% Win Rate**
 
-Target: 2:1 reward-risk with 50%+ win rate
-```
+*Recommendation: Target 2:1 reward-risk with >50% win rate to ensure post-tax viability.*
 
 ---
 
