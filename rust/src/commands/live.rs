@@ -18,6 +18,9 @@ use tokio::sync::mpsc;
 use tokio::time::{interval, sleep};
 use tracing::{debug, error, info, warn};
 
+use crypto_strategies::coindcx::{
+    types::OrderRequest as CoinDCXOrderRequest, ClientConfig, CoinDCXClient,
+};
 use crypto_strategies::risk::RiskManager;
 use crypto_strategies::state_manager::{
     create_state_manager, Checkpoint, Position as StatePosition, SqliteStateManager,
@@ -27,8 +30,7 @@ use crypto_strategies::strategies::volatility_regime::{
 };
 use crypto_strategies::strategies::Strategy;
 use crypto_strategies::{
-    Candle, Config, Order, OrderExecution, OrderStatus, Position, RobustCoinDCXClient, Side,
-    Signal, Symbol, Trade,
+    Candle, Config, Order, OrderExecution, OrderStatus, Position, Side, Signal, Symbol, Trade,
 };
 
 /// Live trader state
@@ -36,7 +38,7 @@ struct LiveTrader {
     config: Config,
     strategy: VolatilityRegimeStrategy,
     risk_manager: RiskManager,
-    exchange: RobustCoinDCXClient,
+    exchange: CoinDCXClient,
     state_manager: SqliteStateManager,
     positions: HashMap<Symbol, Position>,
     candle_cache: HashMap<Symbol, Vec<Candle>>,
@@ -67,13 +69,12 @@ impl LiveTrader {
         let api_key = config.exchange.api_key.clone().unwrap_or_default();
         let api_secret = config.exchange.api_secret.clone().unwrap_or_default();
 
-        let exchange = RobustCoinDCXClient::with_config(
-            api_key,
-            api_secret,
-            3,
-            config.exchange.rate_limit as usize,
-            Duration::from_secs(30),
-        );
+        let client_config = ClientConfig::default()
+            .with_max_retries(3)
+            .with_rate_limit(config.exchange.rate_limit as usize)
+            .with_timeout(Duration::from_secs(30));
+
+        let exchange = CoinDCXClient::with_config(api_key, api_secret, client_config);
 
         let state_dir = std::path::Path::new(state_db_path)
             .parent()
@@ -351,21 +352,20 @@ impl LiveTrader {
                 symbol, quantity, entry_price, stop_price, target_price
             );
         } else {
-            let order_request = crypto_strategies::exchange::OrderRequest {
-                side: "buy".to_string(),
-                order_type: "market_order".to_string(),
-                market: symbol.as_str().to_string(),
-                price_per_unit: None,
-                total_quantity: quantity,
-                timestamp: Utc::now().timestamp_millis(),
-            };
+            let order_request = CoinDCXOrderRequest::market(
+                crypto_strategies::coindcx::types::OrderSide::Buy,
+                symbol.as_str(),
+                quantity,
+            );
 
             match self.exchange.place_order(&order_request).await {
                 Ok(response) => {
-                    info!(
-                        "📈 [LIVE] LONG {} qty={:.6} @ {:.2} | Order ID: {}",
-                        symbol, quantity, entry_price, response.id
-                    );
+                    if let Some(order) = response.orders.first() {
+                        info!(
+                            "📈 [LIVE] LONG {} qty={:.6} @ {:.2} | Order ID: {}",
+                            symbol, quantity, entry_price, order.id
+                        );
+                    }
                 }
                 Err(e) => {
                     error!("Failed to place order for {}: {}", symbol, e);
@@ -450,22 +450,21 @@ impl LiveTrader {
                 emoji, symbol, position.quantity, exit_price_adj, net_pnl, reason
             );
         } else {
-            let order_request = crypto_strategies::exchange::OrderRequest {
-                side: "sell".to_string(),
-                order_type: "market_order".to_string(),
-                market: symbol.as_str().to_string(),
-                price_per_unit: None,
-                total_quantity: position.quantity,
-                timestamp: Utc::now().timestamp_millis(),
-            };
+            let order_request = CoinDCXOrderRequest::market(
+                crypto_strategies::coindcx::types::OrderSide::Sell,
+                symbol.as_str(),
+                position.quantity,
+            );
 
             match self.exchange.place_order(&order_request).await {
                 Ok(response) => {
                     let emoji = if net_pnl > 0.0 { "✅" } else { "❌" };
-                    info!(
-                        "{} [LIVE] CLOSE {} qty={:.6} @ {:.2} | PnL={:+.2} | Order: {}",
-                        emoji, symbol, position.quantity, exit_price_adj, net_pnl, response.id
-                    );
+                    if let Some(order) = response.orders.first() {
+                        info!(
+                            "{} [LIVE] CLOSE {} qty={:.6} @ {:.2} | PnL={:+.2} | Order: {}",
+                            emoji, symbol, position.quantity, exit_price_adj, net_pnl, order.id
+                        );
+                    }
                 }
                 Err(e) => {
                     error!("Failed to close position for {}: {}", symbol, e);

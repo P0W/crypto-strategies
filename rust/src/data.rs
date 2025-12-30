@@ -9,24 +9,37 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::thread::sleep;
-use std::time::Duration as StdDuration;
 use tracing::{info, warn};
 
+use crate::coindcx::{self, CoinDCXClient};
 use crate::{Candle, Symbol};
 
 // =============================================================================
 // Constants
 // =============================================================================
 
-const COINDCX_CANDLES_URL: &str = "https://public.coindcx.com/market_data/candles";
-const COINDCX_MARKETS_URL: &str = "https://api.coindcx.com/exchange/v1/markets_details";
-const REQUEST_DELAY_MS: u64 = 500;
-
 /// Valid intervals for CoinDCX
 pub const INTERVALS: &[&str] = &[
     "1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "1d", "3d", "1w", "1M",
 ];
+
+// =============================================================================
+// Candle Conversion
+// =============================================================================
+
+/// Convert from CoinDCX API candle to internal Candle type
+impl From<coindcx::types::Candle> for Candle {
+    fn from(c: coindcx::types::Candle) -> Self {
+        Candle {
+            datetime: DateTime::from_timestamp_millis(c.time).unwrap_or_else(Utc::now),
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+            volume: c.volume,
+        }
+    }
+}
 
 // =============================================================================
 // CSV Data Loading
@@ -121,32 +134,16 @@ pub fn load_multi_symbol(
 }
 
 // =============================================================================
-// CoinDCX Data Fetcher (like Python's CoinDCXDataFetcher class)
+// CoinDCX Data Fetcher (uses coindcx client library)
 // =============================================================================
 
-/// Fetch historical OHLCV data from CoinDCX public API
-/// Equivalent to Python's CoinDCXDataFetcher class
+/// Fetch historical OHLCV data from CoinDCX API
+///
+/// This fetcher uses the full-featured `CoinDCXClient` with rate limiting,
+/// circuit breaker, and retry logic.
 pub struct CoinDCXDataFetcher {
-    client: reqwest::blocking::Client,
+    client: CoinDCXClient,
     pub data_dir: PathBuf,
-    request_delay: StdDuration,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct CandleResponse {
-    time: i64,
-    open: f64,
-    high: f64,
-    low: f64,
-    close: f64,
-    volume: f64,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct MarketDetails {
-    pair: Option<String>,
-    base_currency_short_name: Option<String>,
-    status: Option<String>,
 }
 
 impl CoinDCXDataFetcher {
@@ -155,16 +152,18 @@ impl CoinDCXDataFetcher {
         let data_dir = data_dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&data_dir).ok();
 
-        let client = reqwest::blocking::Client::builder()
-            .timeout(StdDuration::from_secs(30))
-            .build()
-            .expect("Failed to build HTTP client");
+        // Create client without credentials (for public endpoints only)
+        let client = CoinDCXClient::new("", "");
 
-        Self {
-            client,
-            data_dir,
-            request_delay: StdDuration::from_millis(REQUEST_DELAY_MS),
-        }
+        Self { client, data_dir }
+    }
+
+    /// Create with a custom client configuration
+    pub fn with_client(client: CoinDCXClient, data_dir: impl AsRef<Path>) -> Self {
+        let data_dir = data_dir.as_ref().to_path_buf();
+        std::fs::create_dir_all(&data_dir).ok();
+
+        Self { client, data_dir }
     }
 
     /// Convert symbol to CoinDCX pair format: BTCINR -> I-BTC_INR
@@ -176,77 +175,35 @@ impl CoinDCXDataFetcher {
         }
     }
 
-    /// Get list of available INR trading pairs
-    pub fn list_inr_pairs(&self) -> Result<Vec<String>> {
-        let response = self
-            .client
-            .get(COINDCX_MARKETS_URL)
-            .send()
-            .context("Failed to fetch markets")?;
-
-        let markets: Vec<MarketDetails> = response.json().context("Failed to parse markets")?;
-
-        let pairs: Vec<String> = markets
-            .into_iter()
-            .filter(|m| {
-                m.base_currency_short_name.as_deref() == Some("INR")
-                    && m.status.as_deref() == Some("active")
-            })
-            .filter_map(|m| m.pair)
-            .collect();
-
-        Ok(pairs)
-    }
-
-    /// Fetch candles from CoinDCX API
-    pub fn fetch_candles(
+    /// Fetch candles using the CoinDCX client
+    pub async fn fetch_candles(
         &self,
         pair: &str,
         interval: &str,
-        end_time: Option<DateTime<Utc>>,
-        limit: u32,
+        limit: Option<u32>,
     ) -> Result<Vec<Candle>> {
-        let mut url = format!(
-            "{}?pair={}&interval={}&limit={}",
-            COINDCX_CANDLES_URL,
-            pair,
-            interval,
-            limit.min(1000)
-        );
-
-        if let Some(end) = end_time {
-            url.push_str(&format!("&endTime={}", end.timestamp_millis()));
-        }
-
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .context("Failed to send request")?;
-
-        if !response.status().is_success() {
-            anyhow::bail!("API returned status: {}", response.status());
-        }
-
-        let candles: Vec<CandleResponse> = response.json().context("Failed to parse response")?;
-
-        let candles: Vec<Candle> = candles
-            .into_iter()
-            .map(|c| Candle {
-                datetime: DateTime::from_timestamp_millis(c.time).unwrap_or_else(Utc::now),
-                open: c.open,
-                high: c.high,
-                low: c.low,
-                close: c.close,
-                volume: c.volume,
-            })
-            .collect();
-
-        Ok(candles)
+        let api_candles = self.client.get_candles(pair, interval, limit).await?;
+        Ok(api_candles.into_iter().map(Candle::from).collect())
     }
 
-    /// Fetch full historical data by making multiple API calls
-    pub fn fetch_full_history(
+    /// Get list of available markets
+    pub async fn list_markets(&self) -> Result<Vec<coindcx::types::MarketDetails>> {
+        self.client.get_markets_details().await
+    }
+
+    /// Get list of available INR trading pairs
+    pub async fn list_inr_pairs(&self) -> Result<Vec<String>> {
+        let markets = self.client.get_markets_details().await?;
+        let pairs: Vec<String> = markets
+            .into_iter()
+            .filter(|m| m.base_currency_short_name == "INR" && m.status == "active")
+            .filter_map(|m| m.pair)
+            .collect();
+        Ok(pairs)
+    }
+
+    /// Fetch full historical data
+    pub async fn fetch_full_history(
         &self,
         pair: &str,
         interval: &str,
@@ -260,65 +217,38 @@ impl CoinDCXDataFetcher {
             pair, interval, start_time, end_time
         );
 
-        let mut all_candles: Vec<Candle> = Vec::new();
-        let mut current_end = end_time;
-        let mut last_oldest_time: Option<i64> = None;
+        // Fetch candles (CoinDCX public API returns up to 1000 most recent)
+        let candles = self.fetch_candles(pair, interval, Some(1000)).await?;
 
-        while current_end > start_time {
-            let candles = self.fetch_candles(pair, interval, Some(current_end), 1000)?;
-
-            if candles.is_empty() {
-                warn!("No more data available before {}", current_end);
-                break;
-            }
-
-            // Find oldest candle time
-            let oldest_time = candles.iter().map(|c| c.datetime.timestamp_millis()).min();
-
-            // If oldest time hasn't changed, we've reached the limit of available data
-            if last_oldest_time == oldest_time {
-                break;
-            }
-            last_oldest_time = oldest_time;
-
-            let oldest_dt = candles
-                .iter()
-                .map(|c| c.datetime)
-                .min()
-                .unwrap_or(start_time);
-
-            info!(
-                "  Fetched {} candles, oldest: {}",
-                candles.len(),
-                oldest_dt.format("%Y-%m-%d %H:%M")
-            );
-
-            all_candles.extend(candles);
-
-            // Move window back
-            current_end = oldest_dt - Duration::minutes(1);
-
-            // Rate limiting
-            sleep(self.request_delay);
-
-            if oldest_dt <= start_time {
-                break;
-            }
+        if candles.is_empty() {
+            info!("No candles available for {}", pair);
+            return Ok(Vec::new());
         }
 
-        if all_candles.is_empty() {
-            return Ok(all_candles);
-        }
+        let oldest_dt = candles
+            .iter()
+            .map(|c| c.datetime)
+            .min()
+            .unwrap_or(start_time);
+        let newest_dt = candles.iter().map(|c| c.datetime).max().unwrap_or(end_time);
 
-        // Sort by time (oldest first) and deduplicate
+        info!(
+            "  Fetched {} candles, range: {} to {}",
+            candles.len(),
+            oldest_dt.format("%Y-%m-%d %H:%M"),
+            newest_dt.format("%Y-%m-%d %H:%M")
+        );
+
+        // Filter to requested date range, sort and deduplicate
+        let mut all_candles: Vec<Candle> = candles
+            .into_iter()
+            .filter(|c| c.datetime >= start_time)
+            .collect();
+
         all_candles.sort_by_key(|c| c.datetime);
         all_candles.dedup_by_key(|c| c.datetime);
 
-        // Filter to requested date range
-        all_candles.retain(|c| c.datetime >= start_time);
-
-        info!("Total candles fetched: {}", all_candles.len());
-
+        info!("Total candles after filtering: {}", all_candles.len());
         Ok(all_candles)
     }
 
@@ -327,10 +257,8 @@ impl CoinDCXDataFetcher {
         let filepath = self.data_dir.join(filename);
         let mut file = File::create(&filepath).context("Failed to create output file")?;
 
-        // Write header
         writeln!(file, "datetime,open,high,low,close,volume")?;
 
-        // Write data
         for candle in candles {
             writeln!(
                 file,
@@ -349,15 +277,19 @@ impl CoinDCXDataFetcher {
     }
 
     /// Download historical data for a symbol and save to CSV
-    pub fn download_pair(&self, symbol: &str, interval: &str, days_back: u32) -> Result<PathBuf> {
+    pub async fn download_pair(
+        &self,
+        symbol: &str,
+        interval: &str,
+        days_back: u32,
+    ) -> Result<PathBuf> {
         let pair = Self::to_pair(symbol);
-        let candles = self.fetch_full_history(&pair, interval, days_back)?;
+        let candles = self.fetch_full_history(&pair, interval, days_back).await?;
 
         if candles.is_empty() {
             anyhow::bail!("No data fetched for {}", symbol);
         }
 
-        // Normalize symbol for filename
         let symbol_name = if symbol.ends_with("INR") {
             symbol.to_string()
         } else {
@@ -368,6 +300,7 @@ impl CoinDCXDataFetcher {
         self.save_to_csv(&candles, &filename)
     }
 }
+
 // =============================================================================
 // Data Cache
 // =============================================================================

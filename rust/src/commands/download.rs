@@ -8,6 +8,9 @@ use tracing::info;
 pub fn run(pairs: String, interval: String, days: u32, output: String) -> Result<()> {
     info!("Starting data download");
 
+    // Create a tokio runtime for async operations
+    let rt = tokio::runtime::Runtime::new()?;
+
     let fetcher = CoinDCXDataFetcher::new(&output);
 
     // Parse pairs
@@ -28,7 +31,7 @@ pub fn run(pairs: String, interval: String, days: u32, output: String) -> Result
     for symbol in &symbols {
         println!("Downloading {}...", symbol);
 
-        match fetcher.download_pair(symbol, &interval, days) {
+        match rt.block_on(fetcher.download_pair(symbol, &interval, days)) {
             Ok(filepath) => {
                 if let Ok(candles) = load_csv(&filepath) {
                     total_candles += candles.len();
