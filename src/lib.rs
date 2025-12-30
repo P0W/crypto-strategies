@@ -1,6 +1,6 @@
 //! Crypto Trading Strategies
 //!
-//! A production-grade automated trading system for cryptocurrency markets,
+//! An automated trading system for cryptocurrency markets,
 //! featuring volatility-based strategies, comprehensive backtesting, and
 //! parameter optimization.
 

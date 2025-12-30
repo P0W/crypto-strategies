@@ -52,7 +52,7 @@ impl Backtester {
         // Find the common date range and align all symbols
         let aligned_data = self.align_data(data);
         if aligned_data.is_empty() {
-            log::error!("No aligned data available for backtesting");
+            tracing::error!("No aligned data available for backtesting");
             return BacktestResult::default();
         }
 

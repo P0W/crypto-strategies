@@ -3,20 +3,12 @@ name = "crypto-strategies"
 version = "0.1.0"
 edition = "2021"
 authors = ["Prashant Srivastava"]
-description = "Production-grade crypto trading strategies with backtesting and optimization"
+description = "Crypto trading strategies with backtesting, optimization, and live trading"
 license = "MIT"
 
 [[bin]]
-name = "backtest"
-path = "src/bin/backtest.rs"
-
-[[bin]]
-name = "optimize"
-path = "src/bin/optimize.rs"
-
-[[bin]]
-name = "live"
-path = "src/bin/live.rs"
+name = "crypto-strategies"
+path = "src/main.rs"
 
 [dependencies]
 # Async runtime
@@ -35,8 +27,9 @@ reqwest = { version = "0.12", features = ["json"] }
 
 # CLI and logging
 clap = { version = "4.5", features = ["derive"] }
-env_logger = "0.11"
-log = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi", "json"] }
+tracing-appender = "0.2"
 
 # Error handling
 anyhow = "1.0"
@@ -45,8 +38,15 @@ thiserror = "2.0"
 # Numerical computations
 statrs = "0.17"
 
-# Parallelization
+# Parallelization and progress
 rayon = "1.10"
+indicatif = { version = "0.17", features = ["rayon"] }
+
+# Utilities
+itertools = "0.13"
+
+# Database for state management
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Configuration
 dotenv = "0.15"

@@ -4,6 +4,7 @@
 
 use rayon::prelude::*;
 use std::collections::HashMap;
+use indicatif::ProgressBar;
 
 use crate::{Candle, Config, Symbol};
 use crate::backtest::Backtester;
@@ -46,7 +47,7 @@ impl Optimizer {
     where
         F: Fn(&Config) -> Box<dyn Strategy> + Send + Sync,
     {
-        log::info!("Testing {} parameter combinations", configs.len());
+        tracing::info!("Testing {} parameter combinations", configs.len());
 
         let results: Vec<OptimizationResult> = configs
             .par_iter()
@@ -54,6 +55,44 @@ impl Optimizer {
                 let strategy = strategy_factory(config);
                 let mut backtester = Backtester::new(config.clone(), strategy);
                 let result = backtester.run(data.clone());
+
+                OptimizationResult {
+                    params: HashMap::new(), // To be filled by caller
+                    sharpe_ratio: result.metrics.sharpe_ratio,
+                    total_return: result.metrics.total_return,
+                    max_drawdown: result.metrics.max_drawdown,
+                    win_rate: result.metrics.win_rate,
+                    total_trades: result.metrics.total_trades,
+                    calmar_ratio: result.metrics.calmar_ratio,
+                    profit_factor: result.metrics.profit_factor,
+                }
+            })
+            .collect();
+
+        results
+    }
+
+    /// Run optimization with progress tracking
+    pub fn optimize_with_progress<F>(
+        &self,
+        data: HashMap<Symbol, Vec<Candle>>,
+        configs: Vec<Config>,
+        strategy_factory: F,
+        progress_bar: ProgressBar,
+    ) -> Vec<OptimizationResult>
+    where
+        F: Fn(&Config) -> Box<dyn Strategy> + Send + Sync,
+    {
+        tracing::info!("Testing {} parameter combinations with progress tracking", configs.len());
+
+        let results: Vec<OptimizationResult> = configs
+            .par_iter()
+            .map(|config| {
+                let strategy = strategy_factory(config);
+                let mut backtester = Backtester::new(config.clone(), strategy);
+                let result = backtester.run(data.clone());
+
+                progress_bar.inc(1);
 
                 OptimizationResult {
                     params: HashMap::new(), // To be filled by caller

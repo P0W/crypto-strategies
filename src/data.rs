@@ -91,14 +91,14 @@ pub fn load_multi_symbol(
         let path = data_dir.as_ref().join(&filename);
 
         if !path.exists() {
-            log::warn!("Data file not found: {}", path.display());
+            tracing::warn!("Data file not found: {}", path.display());
             continue;
         }
 
         let candles = load_csv(&path)
             .context(format!("Failed to load data for {}", symbol))?;
         
-        log::info!("Loaded {} candles for {}", candles.len(), symbol);
+        tracing::info!("Loaded {} candles for {}", candles.len(), symbol);
         data.insert(symbol.clone(), candles);
     }
 

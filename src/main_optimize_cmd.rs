@@ -1,74 +1,60 @@
-//! Optimization binary
-//!
-//! Run parameter optimization from the command line.
+//! Optimize command implementation with progress tracking
 
 use anyhow::Result;
-use clap::Parser;
-use crypto_strategies::{Config, data, optimizer::Optimizer};
+use tracing::{info, debug, error};
+use indicatif::{ProgressBar, ProgressStyle};
+use crypto_strategies::{Config, data, optimizer::Optimizer, Strategy};
 use crypto_strategies::strategies::volatility_regime::{self, GridParams};
 
-#[derive(Parser, Debug)]
-#[command(name = "optimize")]
-#[command(about = "Optimize strategy parameters", long_about = None)]
-struct Args {
-    /// Path to base configuration file
-    #[arg(short, long, default_value = "configs/btc_eth_sol_bnb_xrp_1d.json")]
-    config: String,
-
-    /// Optimization mode (quick or full)
-    #[arg(short, long, default_value = "quick")]
+pub fn run(
+    config_path: String,
     mode: String,
-
-    /// Sort results by metric (sharpe, calmar, return, win_rate, profit_factor)
-    #[arg(long, default_value = "sharpe")]
     sort_by: String,
-
-    /// Number of top results to show
-    #[arg(short, long, default_value = "10")]
     top: usize,
-}
-
-fn main() -> Result<()> {
-    // Initialize logger
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .init();
-
-    let args = Args::parse();
-
+) -> Result<()> {
+    info!("Starting optimization");
+    
     // Load base configuration
-    let config = Config::from_file(&args.config)?;
+    let config = Config::from_file(&config_path)?;
+    info!("Loaded configuration from: {}", config_path);
 
-    log::info!("Loading data from {}", config.backtest.data_dir);
+    // Load data
+    info!("Loading data from: {}", config.backtest.data_dir);
     let symbols = config.trading.symbols();
+    debug!("Symbols: {:?}", symbols);
+    
     let data = data::load_multi_symbol(
         &config.backtest.data_dir,
         &symbols,
         &config.trading.timeframe,
     )?;
 
-    log::info!("Loaded data for {} symbols", data.len());
+    info!("Loaded data for {} symbols", data.len());
 
     // Determine strategy and create appropriate parameter grid
-    let (configs, strategy_factory): (Vec<Config>, Box<dyn Fn(&Config) -> Box<dyn crypto_strategies::Strategy> + Send + Sync>) = 
+    info!("Strategy: {}", config.strategy_name);
+    let (configs, strategy_factory): (Vec<Config>, Box<dyn Fn(&Config) -> Box<dyn Strategy> + Send + Sync>) = 
         match config.strategy_name.as_str() {
             "volatility_regime" => {
                 // Create parameter grid
-                let grid_params = match args.mode.as_str() {
+                let grid_params = match mode.as_str() {
                     "full" => GridParams::full(),
                     "quick" | _ => GridParams::quick(),
                 };
 
-                log::info!("Grid will test {} combinations", grid_params.total_combinations());
+                let total_combinations = grid_params.total_combinations();
+                info!("Optimization mode: {}", mode);
+                info!("Grid will test {} combinations", total_combinations);
 
                 // Generate all configs from grid
                 let configs = volatility_regime::generate_configs(&config, &grid_params);
                 
-                let factory: Box<dyn Fn(&Config) -> Box<dyn crypto_strategies::Strategy> + Send + Sync> = 
-                    Box::new(|cfg: &Config| -> Box<dyn crypto_strategies::Strategy> {
+                let factory: Box<dyn Fn(&Config) -> Box<dyn Strategy> + Send + Sync> = 
+                    Box::new(|cfg: &Config| -> Box<dyn Strategy> {
                         match volatility_regime::create_strategy_from_config(cfg) {
                             Ok(strategy) => Box::new(strategy),
                             Err(e) => {
-                                log::error!("Failed to create strategy: {}", e);
+                                error!("Failed to create strategy: {}", e);
                                 panic!("Strategy creation failed");
                             }
                         }
@@ -81,11 +67,23 @@ fn main() -> Result<()> {
             }
         };
 
+    // Create progress bar
+    let pb = ProgressBar::new(configs.len() as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    pb.set_message("Optimizing...");
+
     // Run optimization using the generic optimizer
     let optimizer = Optimizer::new(config.clone());
-    log::info!("Starting optimization in {} mode...", args.mode);
+    info!("Starting parallel optimization...");
     
-    let mut results = optimizer.optimize(data, configs.clone(), strategy_factory);
+    let mut results = optimizer.optimize_with_progress(data, configs.clone(), strategy_factory, pb.clone());
+
+    pb.finish_with_message("Optimization complete");
 
     // Add parameter information to results based on strategy
     match config.strategy_name.as_str() {
@@ -100,11 +98,13 @@ fn main() -> Result<()> {
     }
 
     // Sort results
-    Optimizer::sort_results(&mut results, &args.sort_by);
+    Optimizer::sort_results(&mut results, &sort_by);
+    info!("Results sorted by: {}", sort_by);
 
     // Display top results
+    let display_count = top.min(results.len());
     println!("\n{}", "=".repeat(100));
-    println!("TOP {} OPTIMIZATION RESULTS (sorted by {})", args.top.min(results.len()), args.sort_by);
+    println!("TOP {} OPTIMIZATION RESULTS (sorted by {})", display_count, sort_by);
     println!("{}", "=".repeat(100));
     println!(
         "{:<6} {:>8} {:>10} {:>10} {:>10} {:>8} | {}",
@@ -112,7 +112,7 @@ fn main() -> Result<()> {
     );
     println!("{}", "-".repeat(100));
 
-    for (i, result) in results.iter().take(args.top).enumerate() {
+    for (i, result) in results.iter().take(top).enumerate() {
         let params_str = format!(
             "ATR:{} EMA:{}/{} ADX:{} Stop:{:.1} Target:{:.1}",
             *result.params.get("atr_period").unwrap_or(&0.0) as usize,
@@ -135,6 +135,8 @@ fn main() -> Result<()> {
         );
     }
     println!("{}", "=".repeat(100));
+
+    info!("Optimization completed successfully");
 
     Ok(())
 }
