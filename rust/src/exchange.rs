@@ -273,7 +273,7 @@ impl RobustCoinDCXClient {
                 let text = response.text().await.context("Failed to read response")?;
 
                 let tickers: Vec<Ticker> =
-                    serde_json::from_str(&text).context(format!("Failed to parse ticker JSON"))?;
+                    serde_json::from_str(&text).context("Failed to parse ticker JSON")?;
 
                 tickers
                     .into_iter()

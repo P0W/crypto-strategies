@@ -54,8 +54,8 @@
     },
     
     "backtest": {
-        "data_dir": "data",
-        "results_dir": "results",
+        "data_dir": "../data",
+        "results_dir": "../results",
         "timeframe": "1d",
         "start_date": null,
         "end_date": null,

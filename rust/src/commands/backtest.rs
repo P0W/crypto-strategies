@@ -75,6 +75,7 @@ pub fn run(
     println!("{}", "=".repeat(60));
     println!("Initial Capital:    ₹{:.2}", config.trading.initial_capital);
     println!("Total Return:       {:.2}%", result.metrics.total_return);
+    println!("Post-Tax Return:    {:.2}%", result.metrics.post_tax_return);
     println!("Sharpe Ratio:       {:.2}", result.metrics.sharpe_ratio);
     println!("Calmar Ratio:       {:.2}", result.metrics.calmar_ratio);
     println!("Max Drawdown:       {:.2}%", result.metrics.max_drawdown);
@@ -87,6 +88,12 @@ pub fn run(
     println!("Average Loss:       ₹{:.2}", result.metrics.avg_loss);
     println!("Largest Win:        ₹{:.2}", result.metrics.largest_win);
     println!("Largest Loss:       ₹{:.2}", result.metrics.largest_loss);
+    println!("{}", "-".repeat(60));
+    println!(
+        "Total Commission:   ₹{:.2}",
+        result.metrics.total_commission
+    );
+    println!("Tax (30%):          ₹{:.2}", result.metrics.tax_amount);
     println!("{}", "=".repeat(60));
 
     info!("Backtest completed successfully");

@@ -415,7 +415,22 @@ impl Backtester {
 
         let initial_capital = self.config.trading.initial_capital;
         let final_capital = equity_curve.last().unwrap().1;
-        let total_return = ((final_capital - initial_capital) / initial_capital) * 100.0;
+        let pre_tax_profit = final_capital - initial_capital;
+        let total_return = (pre_tax_profit / initial_capital) * 100.0;
+
+        // Calculate total commission from trades
+        let total_commission: f64 = trades.iter().map(|t| t.commission).sum();
+
+        // Calculate tax on profits only (losses not taxed in India)
+        let tax_rate = self.config.tax.tax_rate;
+        let taxable_profit = if pre_tax_profit > 0.0 {
+            pre_tax_profit
+        } else {
+            0.0
+        };
+        let tax_amount = taxable_profit * tax_rate;
+        let post_tax_profit = pre_tax_profit - tax_amount;
+        let post_tax_return = (post_tax_profit / initial_capital) * 100.0;
 
         let winning_trades: Vec<&Trade> = trades.iter().filter(|t| t.net_pnl > 0.0).collect();
         let losing_trades: Vec<&Trade> = trades.iter().filter(|t| t.net_pnl <= 0.0).collect();
@@ -511,6 +526,7 @@ impl Backtester {
 
         PerformanceMetrics {
             total_return,
+            post_tax_return,
             sharpe_ratio,
             calmar_ratio,
             max_drawdown: max_dd * 100.0,
@@ -523,6 +539,8 @@ impl Backtester {
             avg_loss,
             largest_win,
             largest_loss,
+            total_commission,
+            tax_amount,
         }
     }
 }

@@ -4,33 +4,78 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Crypto Trading Strategy System** - A production-grade automated trading system for CoinDCX (Indian crypto exchange), written in Rust. This is a complete rewrite from Python focusing on performance, type safety, and production resilience.
+**Crypto Trading Strategy System** - A production-grade automated trading system for CoinDCX (Indian crypto exchange).
+
+This is a **multi-language repository** with two implementations:
+
+| Implementation | Directory | Language | Status |
+|---------------|-----------|----------|--------|
+| **Rust** | `rust/` | Rust | Production-ready (performance focus) |
+| **Python** | `py/` | Python | Production-ready (prototyping focus) |
 
 **Core Strategy**: Volatility Regime Adaptive Strategy (VRAS) exploiting volatility clustering and regime persistence inefficiencies in crypto markets.
 
+## Repository Structure
+
+```
+crypto-strategies/
+├── rust/                 # Rust implementation
+│   ├── src/              # Source code
+│   ├── tests/            # Integration tests
+│   ├── Cargo.toml        # Rust dependencies
+│   └── README.md         # Rust-specific docs
+├── py/                   # Python implementation
+│   ├── src/              # Source code
+│   ├── pyproject.toml    # Python dependencies
+│   └── README.md         # Python-specific docs
+├── configs/              # Shared configuration files (JSON)
+├── data/                 # Shared OHLCV data (CSV)
+├── results/              # Backtest results
+├── logs/                 # Trading logs
+├── .env                  # API credentials
+└── README.md             # Project overview
+```
+
 ## Build & Run Commands
 
-### Setup
+### Rust Implementation
+
 ```bash
-# Install Rust toolchain (if needed)
-# https://rustup.rs/
+cd rust
 
-# Build project
-cargo build
-
-# Build with optimizations
+# Build
 cargo build --release
+
+# Run backtest
+cargo run --release -- backtest --config ../configs/sample_config.json
+
+# Run optimization
+cargo run --release -- optimize --mode quick
 
 # Run tests
 cargo test
+```
 
-# Run specific test
-cargo test test_name
+### Python Implementation
+
+```bash
+cd py
+
+# Setup (using UV)
+uv venv
+.venv\Scripts\activate  # Windows
+uv pip install -e .
+
+# Run backtest
+uv run backtest --config ../configs/sample_config.json
+
+# Run optimization
+uv run optimize --strategy volatility_regime --mode quick
 ```
 
 ### Environment Configuration
 ```bash
-# Create .env from template
+# Create .env from template (in repo root)
 copy .env.example .env  # Windows
 # cp .env.example .env  # Linux/Mac
 
@@ -39,105 +84,59 @@ COINDCX_API_KEY=your_api_key_here
 COINDCX_API_SECRET=your_api_secret_here
 ```
 
-### Running Commands
+## High-Level Architecture (Rust)
 
-**Backtesting:**
-```bash
-# Run with default config
-cargo run --release -- backtest
-
-# With specific config
-cargo run --release -- backtest --config configs/sample_config.json
-
-# Override parameters
-cargo run --release -- backtest --capital 100000 --start 2023-01-01 --end 2024-01-01
-
-# Verbose output
-cargo run --release -- backtest -v
-```
-
-**Optimization:**
-```bash
-# Quick optimization (fewer parameter combinations)
-cargo run --release -- optimize --mode quick
-
-# Full optimization (comprehensive grid search)
-cargo run --release -- optimize --mode full
-
-# Sort by different metrics
-cargo run --release -- optimize --mode quick --sort-by calmar  # return/drawdown
-cargo run --release -- optimize --mode quick --sort-by return  # raw return
-
-# Show top N results
-cargo run --release -- optimize --mode quick --top 20
-```
-
-**Live Trading:**
-```bash
-# Paper trading (safe, simulated)
-cargo run --release -- live --paper
-
-# With verbose logging
-cargo run --release -- live --paper -v
-
-# Custom cycle interval (seconds)
-cargo run --release -- live --paper --interval 300
-
-# Live trading with real money (CAUTION!)
-cargo run --release -- live --live
-```
-
-## High-Level Architecture
+All Rust source files are in `rust/src/`.
 
 ### Three Execution Modes
 
-1. **Backtest** (`main_backtest_cmd.rs`) - Historical P&L simulation
+1. **Backtest** (`rust/src/commands/backtest.rs`) - Historical P&L simulation
    - Loads OHLCV data → Runs event-driven simulation → Outputs performance metrics
 
-2. **Optimize** (`main_optimize_cmd.rs`) - Parameter grid search
+2. **Optimize** (`rust/src/commands/optimize.rs`) - Parameter grid search
    - Generates parameter combinations → Runs parallel backtests → Ranks by Sharpe/Calmar/etc.
 
-3. **Live** (`main_live_cmd.rs`) - Real-time trading
+3. **Live** (`rust/src/commands/live.rs`) - Real-time trading
    - Paper or live mode → State persistence → Crash recovery
 
 ### Core Components
 
-**Strategy Framework** (`strategies/`)
+**Strategy Framework** (`rust/src/strategies/`)
 - Trait-based plugin architecture: `Strategy` trait defines signal generation interface
 - Current implementation: `volatility_regime/` - Exploits GARCH clustering via regime classification
 - Easy to add new strategies by implementing the `Strategy` trait
 
-**Risk Management** (`risk.rs`)
+**Risk Management** (`rust/src/risk.rs`)
 - Multi-layer protection: position sizing, portfolio heat limits, drawdown-based de-risking
 - Consecutive loss protection: reduces size after 3 losses
 - Hard halt at 20% drawdown
 
-**Backtesting Engine** (`backtest.rs`)
+**Backtesting Engine** (`rust/src/backtest.rs`)
 - Event-driven simulation processing each candle chronologically
 - Multi-symbol support with automatic data alignment
 - Handles stop loss, take profit, and trailing stops
 - Calculates comprehensive metrics: Sharpe, Calmar, max drawdown, win rate, profit factor
 
-**Exchange Client** (`exchange.rs`)
+**Exchange Client** (`rust/src/exchange.rs`)
 - Production-ready CoinDCX API wrapper with:
   - Circuit breaker pattern (fails fast after consecutive errors)
   - Exponential backoff retries (3 retries with jitter)
   - Rate limiting (token bucket algorithm via Semaphore)
   - HMAC-SHA256 request signing
 
-**State Persistence** (`state_manager.rs`)
+**State Persistence** (`rust/src/state_manager.rs`)
 - SQLite-based persistence with auto JSON backup
 - Stores: open positions, portfolio checkpoints, trade history
 - Enables crash recovery and maintains audit trail
 
-**Data Management** (`data.rs`)
-- CSV-based OHLCV loading using Polars
+**Data Management** (`rust/src/data.rs`)
+- CSV-based OHLCV loading
 - Multi-symbol alignment (finds common date range)
 - Expected format: `datetime,open,high,low,close,volume`
 
 ### Key Architectural Patterns
 
-**Type-Driven Design** (`types.rs`)
+**Type-Driven Design** (`rust/src/types.rs`)
 - Core domain model: `Candle` → `Signal` → `Position` → `Trade` → `PerformanceMetrics`
 - All types are serializable for persistence
 - Strong type safety prevents data corruption
@@ -159,7 +158,7 @@ pub trait Strategy: Send + Sync {
 - Before any trade entry, validates: trading not halted, within position limits, portfolio heat OK
 - Returns position size adjusted for current drawdown and losing streaks
 
-**Configuration Hierarchy** (`config.rs`)
+**Configuration Hierarchy** (`rust/src/config.rs`)
 - JSON-based config structure:
   - `exchange`: fees, slippage, rate limits
   - `trading`: pairs, capital, risk limits, drawdown thresholds
@@ -219,7 +218,7 @@ pub trait Strategy: Send + Sync {
    - Regime Exit: Immediate close if Extreme regime
    - Trend Exit: Close if price < EMA(21) (only if profitable)
 
-**Configuration** (`strategies/volatility_regime/config.rs`):
+**Configuration** (`rust/src/strategies/volatility_regime/config.rs`):
 - All parameters are configurable via JSON `strategy` section
 - Key params: `atr_period`, `volatility_lookback`, thresholds, EMA/ADX settings
 
@@ -232,9 +231,11 @@ The system includes India's crypto tax regime:
 
 This ensures backtest results reflect post-tax reality. Target is 2:1 reward-risk with >50% win rate to overcome 30% tax drag.
 
-## Project Migration Context
+## Multi-Language Repository Structure
 
-**Python → Rust Rewrite**: This codebase is a complete rewrite from Python (legacy `pyproject.toml` still present).
+This repository contains both Python and Rust implementations:
+- `py/` - Original Python implementation
+- `rust/` - Rust rewrite for performance
 
 **Why Rust:**
 - Type safety eliminates entire categories of bugs
@@ -307,19 +308,18 @@ cargo test -- --nocapture  # Show println! output
 5. Update `main_backtest_cmd.rs` to recognize new strategy name
 6. Add grid params in `grid_params.rs` for optimization
 
-### Modifying Risk Rules
+### Modifying Risk Rules (Rust)
 
-1. Edit `risk.rs::RiskManager`
+1. Edit `rust/src/risk.rs::RiskManager`
 2. Update `calculate_position_size()` or `should_halt_trading()` logic
-3. Ensure config changes reflected in `config.rs::TradingConfig`
-4. Test with: `cargo test risk::`
+3. Ensure config changes reflected in `rust/src/config.rs::TradingConfig`
+4. Test with: `cd rust && cargo test risk::`
 
-### Adding New Indicators
+### Adding New Indicators (Rust)
 
-1. Add function to `indicators.rs`
-2. Use Polars lazy evaluation for efficiency
-3. Return Vec<f64> or single f64 value
-4. Test edge cases (empty data, NaN handling)
+1. Add function to `rust/src/indicators.rs`
+2. Return Vec<f64> or single f64 value
+3. Test edge cases (empty data, NaN handling)
 
 ### Debugging Backtests
 
@@ -355,10 +355,10 @@ cargo test -- --nocapture  # Show println! output
 - Work-stealing scheduler for load balance
 - Integrates with Indicatif for progress bars
 
-## Module Dependency Graph
+## Module Dependency Graph (Rust)
 
 ```
-main.rs (CLI dispatch, logging)
+rust/src/main.rs (CLI dispatch, logging)
   ├─→ main_backtest_cmd.rs
   │     ├─→ config.rs
   │     ├─→ data.rs

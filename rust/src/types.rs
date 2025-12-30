@@ -132,6 +132,7 @@ pub struct Order {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PerformanceMetrics {
     pub total_return: f64,
+    pub post_tax_return: f64,
     pub sharpe_ratio: f64,
     pub calmar_ratio: f64,
     pub max_drawdown: f64,
@@ -144,4 +145,6 @@ pub struct PerformanceMetrics {
     pub avg_loss: f64,
     pub largest_win: f64,
     pub largest_loss: f64,
+    pub total_commission: f64,
+    pub tax_amount: f64,
 }

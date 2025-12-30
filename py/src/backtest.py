@@ -397,10 +397,10 @@ def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description="Run backtest for CoinDCX strategy")
     parser.add_argument("--config", type=str, help="Path to config file")
-    parser.add_argument("--data-dir", type=str, default="data", help="Data directory")
+    parser.add_argument("--data-dir", type=str, default=None, help="Data directory (overrides config)")
     parser.add_argument("--start", type=str, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", type=str, help="End date (YYYY-MM-DD)")
-    parser.add_argument("--capital", type=float, default=100000, help="Initial capital")
+    parser.add_argument("--capital", type=float, default=None, help="Initial capital (overrides config)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     parser.add_argument("--chart", action="store_true", help="Generate trade visualization charts")
     parser.add_argument(
