@@ -214,9 +214,76 @@ impl Backtester {
     }
 
     fn align_data(&self, data: HashMap<Symbol, Vec<Candle>>) -> Vec<(Symbol, Vec<Candle>)> {
-        // For simplicity, just return data as-is
-        // In production, you'd align timestamps across all symbols
-        data.into_iter().collect()
+        use std::collections::HashSet;
+        
+        if data.is_empty() {
+            return Vec::new();
+        }
+        
+        // Collect all unique timestamps across all symbols
+        let mut all_timestamps: HashSet<DateTime<Utc>> = HashSet::new();
+        for candles in data.values() {
+            for candle in candles {
+                all_timestamps.insert(candle.datetime);
+            }
+        }
+        
+        // Sort timestamps chronologically
+        let mut sorted_timestamps: Vec<DateTime<Utc>> = all_timestamps.into_iter().collect();
+        sorted_timestamps.sort();
+        
+        // For each symbol, create aligned candle series
+        // Fill missing timestamps with the previous candle (forward fill)
+        let mut aligned_data = Vec::new();
+        
+        for (symbol, candles) in data {
+            let mut aligned_candles = Vec::new();
+            let mut candle_iter = candles.iter().peekable();
+            let mut last_candle: Option<Candle> = None;
+            
+            for &timestamp in &sorted_timestamps {
+                // Check if we have a candle for this timestamp
+                match candle_iter.peek() {
+                    Some(&candle) if candle.datetime == timestamp => {
+                        aligned_candles.push(candle.clone());
+                        last_candle = Some(candle.clone());
+                        candle_iter.next();
+                    }
+                    Some(&candle) if candle.datetime < timestamp => {
+                        // Skip candles that are earlier than current timestamp
+                        // This shouldn't happen if data is sorted, but handle it
+                        while let Some(&c) = candle_iter.peek() {
+                            if c.datetime < timestamp {
+                                last_candle = Some(c.clone());
+                                candle_iter.next();
+                            } else {
+                                break;
+                            }
+                        }
+                        // Forward fill with last candle
+                        if let Some(ref last) = last_candle {
+                            let mut filled_candle = last.clone();
+                            filled_candle.datetime = timestamp;
+                            aligned_candles.push(filled_candle);
+                        }
+                    }
+                    _ => {
+                        // No candle yet or no more candles - forward fill if we have data
+                        if let Some(ref last) = last_candle {
+                            let mut filled_candle = last.clone();
+                            filled_candle.datetime = timestamp;
+                            aligned_candles.push(filled_candle);
+                        }
+                    }
+                }
+            }
+            
+            if !aligned_candles.is_empty() {
+                aligned_data.push((symbol, aligned_candles));
+            }
+        }
+        
+        aligned_data
     }
 
     fn calculate_metrics(&self, trades: &[Trade], equity_curve: &[(DateTime<Utc>, f64)]) -> PerformanceMetrics {
