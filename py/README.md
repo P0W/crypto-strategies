@@ -151,7 +151,7 @@ To be profitable post-tax/fees in this environment:
 
 ### Trade Visualization
 
-![Trade Summary](results/charts/trade_summary.png)
+![Trade Summary](../results/charts/trade_summary.png)
 
 *Trade summary showing equity curve, drawdown, and trade distribution across all assets (BTC, ETH, SOL, BNB, XRP) from Oct 2022 to Dec 2025.*
 
@@ -160,35 +160,35 @@ To be profitable post-tax/fees in this environment:
 <details>
 <summary>📈 BTC/INR Trades</summary>
 
-![BTCINR Trades](results/charts/BTCINR_1d_trades.png)
+![BTCINR Trades](../results/charts/BTCINR_1d_trades.png)
 
 </details>
 
 <details>
 <summary>📈 ETH/INR Trades</summary>
 
-![ETHINR Trades](results/charts/ETHINR_1d_trades.png)
+![ETHINR Trades](../results/charts/ETHINR_1d_trades.png)
 
 </details>
 
 <details>
 <summary>📈 SOL/INR Trades</summary>
 
-![SOLINR Trades](results/charts/SOLINR_1d_trades.png)
+![SOLINR Trades](../results/charts/SOLINR_1d_trades.png)
 
 </details>
 
 <details>
 <summary>📈 BNB/INR Trades</summary>
 
-![BNBINR Trades](results/charts/BNBINR_1d_trades.png)
+![BNBINR Trades](../results/charts/BNBINR_1d_trades.png)
 
 </details>
 
 <details>
 <summary>📈 XRP/INR Trades</summary>
 
-![XRPINR Trades](results/charts/XRPINR_1d_trades.png)
+![XRPINR Trades](../results/charts/XRPINR_1d_trades.png)
 
 </details>
 
