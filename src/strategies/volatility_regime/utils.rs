@@ -2,31 +2,18 @@
 //!
 //! Helper functions for strategy instantiation and parameter generation.
 
+use anyhow::Result;
 use crate::Config;
 use super::config::VolatilityRegimeConfig;
 use super::grid_params::GridParams;
 use super::strategy::VolatilityRegimeStrategy;
 
 /// Create a Volatility Regime Strategy from global config
-pub fn create_strategy_from_config(config: &Config) -> VolatilityRegimeStrategy {
-    let vr_config = VolatilityRegimeConfig {
-        atr_period: config.strategy.atr_period,
-        volatility_lookback: config.strategy.volatility_lookback,
-        compression_threshold: config.strategy.compression_threshold,
-        expansion_threshold: config.strategy.expansion_threshold,
-        extreme_threshold: config.strategy.extreme_threshold,
-        ema_fast: config.strategy.ema_fast,
-        ema_slow: config.strategy.ema_slow,
-        adx_period: config.strategy.adx_period,
-        adx_threshold: config.strategy.adx_threshold,
-        breakout_atr_multiple: config.strategy.breakout_atr_multiple,
-        stop_atr_multiple: config.strategy.stop_atr_multiple,
-        target_atr_multiple: config.strategy.target_atr_multiple,
-        trailing_activation: config.strategy.trailing_activation,
-        trailing_atr_multiple: config.strategy.trailing_atr_multiple,
-    };
+pub fn create_strategy_from_config(config: &Config) -> Result<VolatilityRegimeStrategy> {
+    let vr_config: VolatilityRegimeConfig = serde_json::from_value(config.strategy.clone())
+        .map_err(|e| anyhow::anyhow!("Failed to parse strategy config: {}", e))?;
     
-    VolatilityRegimeStrategy::new(vr_config)
+    Ok(VolatilityRegimeStrategy::new(vr_config))
 }
 
 /// Generate all parameter combinations from grid params
@@ -47,12 +34,16 @@ pub fn generate_configs(base_config: &Config, grid: &GridParams) -> Vec<Config> 
                             }
 
                             let mut config = base_config.clone();
-                            config.strategy.atr_period = atr;
-                            config.strategy.ema_fast = fast;
-                            config.strategy.ema_slow = slow;
-                            config.strategy.adx_threshold = adx;
-                            config.strategy.stop_atr_multiple = stop;
-                            config.strategy.target_atr_multiple = target;
+                            
+                            // Update strategy parameters in the JSON value
+                            if let Some(obj) = config.strategy.as_object_mut() {
+                                obj.insert("atr_period".to_string(), serde_json::json!(atr));
+                                obj.insert("ema_fast".to_string(), serde_json::json!(fast));
+                                obj.insert("ema_slow".to_string(), serde_json::json!(slow));
+                                obj.insert("adx_threshold".to_string(), serde_json::json!(adx));
+                                obj.insert("stop_atr_multiple".to_string(), serde_json::json!(stop));
+                                obj.insert("target_atr_multiple".to_string(), serde_json::json!(target));
+                            }
 
                             configs.push(config);
                         }

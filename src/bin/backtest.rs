@@ -66,7 +66,7 @@ fn main() -> Result<()> {
     log::info!("Loaded data for {} symbols", data.len());
 
     // Create strategy using the strategy module's utility
-    let strategy = Box::new(volatility_regime::create_strategy_from_config(&config));
+    let strategy = Box::new(volatility_regime::create_strategy_from_config(&config)?);
     let mut backtester = Backtester::new(config.clone(), strategy);
 
     log::info!("Running backtest...");

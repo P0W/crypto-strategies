@@ -63,31 +63,23 @@ fn main() -> Result<()> {
     let optimizer = Optimizer::new(config.clone());
     log::info!("Starting optimization in {} mode...", args.mode);
     
-    let strategy_factory = |cfg: &Config| {
-        Box::new(volatility_regime::create_strategy_from_config(cfg)) as Box<dyn crypto_strategies::Strategy>
+    let strategy_factory = |cfg: &Config| -> Box<dyn crypto_strategies::Strategy> {
+        match volatility_regime::create_strategy_from_config(cfg) {
+            Ok(strategy) => Box::new(strategy),
+            Err(e) => {
+                log::error!("Failed to create strategy: {}", e);
+                panic!("Strategy creation failed");
+            }
+        }
     };
     
     let mut results = optimizer.optimize(data, configs.clone(), strategy_factory);
 
     // Add parameter information to results
     for (i, result) in results.iter_mut().enumerate() {
-        let vr_config = volatility_regime::VolatilityRegimeConfig {
-            atr_period: configs[i].strategy.atr_period,
-            volatility_lookback: configs[i].strategy.volatility_lookback,
-            compression_threshold: configs[i].strategy.compression_threshold,
-            expansion_threshold: configs[i].strategy.expansion_threshold,
-            extreme_threshold: configs[i].strategy.extreme_threshold,
-            ema_fast: configs[i].strategy.ema_fast,
-            ema_slow: configs[i].strategy.ema_slow,
-            adx_period: configs[i].strategy.adx_period,
-            adx_threshold: configs[i].strategy.adx_threshold,
-            breakout_atr_multiple: configs[i].strategy.breakout_atr_multiple,
-            stop_atr_multiple: configs[i].strategy.stop_atr_multiple,
-            target_atr_multiple: configs[i].strategy.target_atr_multiple,
-            trailing_activation: configs[i].strategy.trailing_activation,
-            trailing_atr_multiple: configs[i].strategy.trailing_atr_multiple,
-        };
-        result.params = volatility_regime::config_to_params(&vr_config);
+        if let Ok(vr_config) = serde_json::from_value::<volatility_regime::VolatilityRegimeConfig>(configs[i].strategy.clone()) {
+            result.params = volatility_regime::config_to_params(&vr_config);
+        }
     }
 
     // Sort results
