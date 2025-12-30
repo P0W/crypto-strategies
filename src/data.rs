@@ -111,8 +111,6 @@ pub fn load_multi_symbol(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_load_csv() {
         // This would need actual test data
