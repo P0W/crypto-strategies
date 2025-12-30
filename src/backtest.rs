@@ -9,7 +9,7 @@ use crate::{
     Candle, Config, PerformanceMetrics, Position, Signal, Side, Symbol, Trade,
 };
 use crate::risk::RiskManager;
-use crate::strategy::Strategy;
+use crate::Strategy;
 
 /// Backtest engine
 pub struct Backtester {

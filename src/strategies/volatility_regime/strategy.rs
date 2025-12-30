@@ -1,43 +1,20 @@
-//! Trading strategy framework
+//! Volatility Regime Adaptive Strategy
 //!
-//! Defines the Strategy trait and implements the Volatility Regime strategy.
+//! Strategy implementation for trading based on volatility regime classification.
 
 use crate::{Candle, Position, Signal, Symbol, VolatilityRegime};
-use crate::config::StrategyConfig;
 use crate::indicators::{atr, ema, adx};
+use crate::strategies::Strategy;
 
-/// Trading strategy trait
-pub trait Strategy: Send + Sync {
-    /// Generate trading signal for the given candle data
-    fn generate_signal(
-        &self,
-        symbol: &Symbol,
-        candles: &[Candle],
-        position: Option<&Position>,
-    ) -> Signal;
-
-    /// Calculate stop loss price for entry
-    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64;
-
-    /// Calculate take profit price for entry
-    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64) -> f64;
-
-    /// Update trailing stop if applicable
-    fn update_trailing_stop(
-        &self,
-        position: &Position,
-        current_price: f64,
-        candles: &[Candle],
-    ) -> Option<f64>;
-}
+use super::config::VolatilityRegimeConfig;
 
 /// Volatility Regime Adaptive Strategy
 pub struct VolatilityRegimeStrategy {
-    config: StrategyConfig,
+    config: VolatilityRegimeConfig,
 }
 
 impl VolatilityRegimeStrategy {
-    pub fn new(config: StrategyConfig) -> Self {
+    pub fn new(config: VolatilityRegimeConfig) -> Self {
         VolatilityRegimeStrategy { config }
     }
 

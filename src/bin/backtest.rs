@@ -4,7 +4,8 @@
 
 use anyhow::Result;
 use clap::Parser;
-use crypto_strategies::{Config, data, strategy::VolatilityRegimeStrategy, backtest::Backtester};
+use crypto_strategies::{Config, data, backtest::Backtester};
+use crypto_strategies::strategies::volatility_regime;
 
 #[derive(Parser, Debug)]
 #[command(name = "backtest")]
@@ -64,8 +65,8 @@ fn main() -> Result<()> {
 
     log::info!("Loaded data for {} symbols", data.len());
 
-    // Create strategy and backtester
-    let strategy = Box::new(VolatilityRegimeStrategy::new(config.strategy.clone()));
+    // Create strategy using the strategy module's utility
+    let strategy = Box::new(volatility_regime::create_strategy_from_config(&config));
     let mut backtester = Backtester::new(config.clone(), strategy);
 
     log::info!("Running backtest...");

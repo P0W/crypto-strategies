@@ -4,7 +4,8 @@
 
 use anyhow::Result;
 use clap::Parser;
-use crypto_strategies::{Config, data, optimize::{Optimizer, ParamGrid}};
+use crypto_strategies::{Config, data, optimizer::Optimizer};
+use crypto_strategies::strategies::volatility_regime::{self, GridParams};
 
 #[derive(Parser, Debug)]
 #[command(name = "optimize")]
@@ -18,7 +19,7 @@ struct Args {
     #[arg(short, long, default_value = "quick")]
     mode: String,
 
-    /// Sort results by metric (sharpe, calmar, return, win_rate)
+    /// Sort results by metric (sharpe, calmar, return, win_rate, profit_factor)
     #[arg(long, default_value = "sharpe")]
     sort_by: String,
 
@@ -48,24 +49,49 @@ fn main() -> Result<()> {
     log::info!("Loaded data for {} symbols", data.len());
 
     // Create parameter grid
-    let param_grid = match args.mode.as_str() {
-        "full" => ParamGrid::full(),
-        "quick" | _ => ParamGrid::quick(),
+    let grid_params = match args.mode.as_str() {
+        "full" => GridParams::full(),
+        "quick" | _ => GridParams::quick(),
     };
 
-    // Run optimization
+    log::info!("Grid will test {} combinations", grid_params.total_combinations());
+
+    // Generate all configs from grid
+    let configs = volatility_regime::generate_configs(&config, &grid_params);
+
+    // Run optimization using the generic optimizer
     let optimizer = Optimizer::new(config.clone());
     log::info!("Starting optimization in {} mode...", args.mode);
     
-    let mut results = optimizer.optimize(data, param_grid);
+    let strategy_factory = |cfg: &Config| {
+        Box::new(volatility_regime::create_strategy_from_config(cfg)) as Box<dyn crypto_strategies::Strategy>
+    };
+    
+    let mut results = optimizer.optimize(data, configs.clone(), strategy_factory);
+
+    // Add parameter information to results
+    for (i, result) in results.iter_mut().enumerate() {
+        let vr_config = volatility_regime::VolatilityRegimeConfig {
+            atr_period: configs[i].strategy.atr_period,
+            volatility_lookback: configs[i].strategy.volatility_lookback,
+            compression_threshold: configs[i].strategy.compression_threshold,
+            expansion_threshold: configs[i].strategy.expansion_threshold,
+            extreme_threshold: configs[i].strategy.extreme_threshold,
+            ema_fast: configs[i].strategy.ema_fast,
+            ema_slow: configs[i].strategy.ema_slow,
+            adx_period: configs[i].strategy.adx_period,
+            adx_threshold: configs[i].strategy.adx_threshold,
+            breakout_atr_multiple: configs[i].strategy.breakout_atr_multiple,
+            stop_atr_multiple: configs[i].strategy.stop_atr_multiple,
+            target_atr_multiple: configs[i].strategy.target_atr_multiple,
+            trailing_activation: configs[i].strategy.trailing_activation,
+            trailing_atr_multiple: configs[i].strategy.trailing_atr_multiple,
+        };
+        result.params = volatility_regime::config_to_params(&vr_config);
+    }
 
     // Sort results
-    match args.sort_by.as_str() {
-        "calmar" => results.sort_by(|a, b| b.sharpe_ratio.partial_cmp(&a.sharpe_ratio).unwrap()),
-        "return" => results.sort_by(|a, b| b.total_return.partial_cmp(&a.total_return).unwrap()),
-        "win_rate" => results.sort_by(|a, b| b.win_rate.partial_cmp(&a.win_rate).unwrap()),
-        "sharpe" | _ => results.sort_by(|a, b| b.sharpe_ratio.partial_cmp(&a.sharpe_ratio).unwrap()),
-    }
+    Optimizer::sort_results(&mut results, &args.sort_by);
 
     // Display top results
     println!("\n{}", "=".repeat(100));

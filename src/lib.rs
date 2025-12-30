@@ -7,12 +7,13 @@
 pub mod config;
 pub mod data;
 pub mod exchange;
-pub mod strategy;
+pub mod strategies;
 pub mod risk;
 pub mod backtest;
-pub mod optimize;
+pub mod optimizer;
 pub mod indicators;
 pub mod types;
 
 pub use config::Config;
 pub use types::*;
+pub use strategies::Strategy;
