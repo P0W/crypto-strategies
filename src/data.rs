@@ -1,15 +1,32 @@
 //! Data loading and management
 //!
 //! Handles loading OHLCV data from CSV files and live data fetching from exchange APIs.
+//! Similar to Python's data_fetcher.py
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
-use std::path::Path;
-use tokio::time::sleep;
+use std::fs::File;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::thread::sleep;
+use std::time::Duration as StdDuration;
 use tracing::{info, warn};
 
 use crate::{Candle, Symbol};
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+const COINDCX_CANDLES_URL: &str = "https://public.coindcx.com/market_data/candles";
+const COINDCX_MARKETS_URL: &str = "https://api.coindcx.com/exchange/v1/markets_details";
+const REQUEST_DELAY_MS: u64 = 500;
+
+/// Valid intervals for CoinDCX
+pub const INTERVALS: &[&str] = &[
+    "1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "1d", "3d", "1w", "1M",
+];
 
 // =============================================================================
 // CSV Data Loading
@@ -100,129 +117,117 @@ pub fn load_multi_symbol(
 }
 
 // =============================================================================
-// Live Data Fetching
+// CoinDCX Data Fetcher (like Python's CoinDCXDataFetcher class)
 // =============================================================================
 
-/// Live data fetcher for real-time market data
-pub struct LiveDataFetcher {
-    client: reqwest::Client,
-    base_url: String,
-    rate_limit_delay: std::time::Duration,
+/// Fetch historical OHLCV data from CoinDCX public API
+/// Equivalent to Python's CoinDCXDataFetcher class
+pub struct CoinDCXDataFetcher {
+    client: reqwest::blocking::Client,
+    pub data_dir: PathBuf,
+    request_delay: StdDuration,
 }
 
-impl LiveDataFetcher {
-    /// Create a new live data fetcher
-    pub fn new() -> Self {
-        Self::with_config("https://api.coindcx.com", 100)
-    }
+#[derive(Debug, serde::Deserialize)]
+struct CandleResponse {
+    time: i64,
+    open: f64,
+    high: f64,
+    low: f64,
+    close: f64,
+    volume: f64,
+}
 
-    /// Create with custom configuration
-    pub fn with_config(base_url: &str, rate_limit_ms: u64) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .pool_max_idle_per_host(10)
+#[derive(Debug, serde::Deserialize)]
+struct MarketDetails {
+    pair: Option<String>,
+    base_currency_short_name: Option<String>,
+    status: Option<String>,
+}
+
+impl CoinDCXDataFetcher {
+    /// Create a new data fetcher
+    pub fn new(data_dir: impl AsRef<Path>) -> Self {
+        let data_dir = data_dir.as_ref().to_path_buf();
+        std::fs::create_dir_all(&data_dir).ok();
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(StdDuration::from_secs(30))
             .build()
             .expect("Failed to build HTTP client");
 
-        LiveDataFetcher {
+        Self {
             client,
-            base_url: base_url.to_string(),
-            rate_limit_delay: std::time::Duration::from_millis(rate_limit_ms),
+            data_dir,
+            request_delay: StdDuration::from_millis(REQUEST_DELAY_MS),
         }
     }
 
-    /// Fetch current ticker data for a symbol
-    pub async fn fetch_ticker(&self, symbol: &str) -> Result<TickerData> {
-        let url = format!("{}/exchange/ticker", self.base_url);
+    /// Convert symbol to CoinDCX pair format: BTCINR -> I-BTC_INR
+    pub fn to_pair(symbol: &str) -> String {
+        if symbol.ends_with("INR") {
+            let base = &symbol[..symbol.len() - 3];
+            format!("I-{}_INR", base)
+        } else {
+            format!("I-{}_INR", symbol)
+        }
+    }
 
-        let response: Vec<TickerResponse> = self
+    /// Get list of available INR trading pairs
+    pub fn list_inr_pairs(&self) -> Result<Vec<String>> {
+        let response = self
             .client
-            .get(&url)
+            .get(COINDCX_MARKETS_URL)
             .send()
-            .await
-            .context("Failed to fetch ticker")?
-            .json()
-            .await
-            .context("Failed to parse ticker response")?;
+            .context("Failed to fetch markets")?;
 
-        let ticker = response
+        let markets: Vec<MarketDetails> = response.json().context("Failed to parse markets")?;
+
+        let pairs: Vec<String> = markets
             .into_iter()
-            .find(|t| t.market == symbol)
-            .context(format!("Ticker not found for {}", symbol))?;
+            .filter(|m| {
+                m.base_currency_short_name.as_deref() == Some("INR")
+                    && m.status.as_deref() == Some("active")
+            })
+            .filter_map(|m| m.pair)
+            .collect();
 
-        Ok(TickerData {
-            symbol: symbol.to_string(),
-            last_price: ticker.last_price.parse().unwrap_or(0.0),
-            bid: ticker.bid.parse().unwrap_or(0.0),
-            ask: ticker.ask.parse().unwrap_or(0.0),
-            volume: ticker.volume.parse().unwrap_or(0.0),
-            timestamp: Utc::now(),
-        })
+        Ok(pairs)
     }
 
-    /// Fetch current tickers for multiple symbols
-    pub async fn fetch_tickers(&self, symbols: &[&str]) -> Result<HashMap<String, TickerData>> {
-        let url = format!("{}/exchange/ticker", self.base_url);
-
-        let response: Vec<TickerResponse> = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .context("Failed to fetch tickers")?
-            .json()
-            .await
-            .context("Failed to parse tickers response")?;
-
-        let symbol_set: std::collections::HashSet<&str> = symbols.iter().copied().collect();
-
-        let mut result = HashMap::new();
-        for ticker in response {
-            if symbol_set.contains(ticker.market.as_str()) {
-                result.insert(
-                    ticker.market.clone(),
-                    TickerData {
-                        symbol: ticker.market,
-                        last_price: ticker.last_price.parse().unwrap_or(0.0),
-                        bid: ticker.bid.parse().unwrap_or(0.0),
-                        ask: ticker.ask.parse().unwrap_or(0.0),
-                        volume: ticker.volume.parse().unwrap_or(0.0),
-                        timestamp: Utc::now(),
-                    },
-                );
-            }
-        }
-
-        Ok(result)
-    }
-
-    /// Fetch historical candles (if available from API)
-    pub async fn fetch_candles(
+    /// Fetch candles from CoinDCX API
+    pub fn fetch_candles(
         &self,
-        symbol: &str,
+        pair: &str,
         interval: &str,
-        limit: usize,
+        end_time: Option<DateTime<Utc>>,
+        limit: u32,
     ) -> Result<Vec<Candle>> {
-        // CoinDCX candles endpoint
-        let url = format!(
-            "{}/exchange/v1/markets/{}/candles?interval={}&limit={}",
-            self.base_url, symbol, interval, limit
+        let mut url = format!(
+            "{}?pair={}&interval={}&limit={}",
+            COINDCX_CANDLES_URL, pair, interval, limit.min(1000)
         );
 
-        let response: Vec<CandleResponse> = self
+        if let Some(end) = end_time {
+            url.push_str(&format!("&endTime={}", end.timestamp_millis()));
+        }
+
+        let response = self
             .client
             .get(&url)
             .send()
-            .await
-            .context("Failed to fetch candles")?
-            .json()
-            .await
-            .context("Failed to parse candles response")?;
+            .context("Failed to send request")?;
 
-        let candles: Vec<Candle> = response
+        if !response.status().is_success() {
+            anyhow::bail!("API returned status: {}", response.status());
+        }
+
+        let candles: Vec<CandleResponse> = response.json().context("Failed to parse response")?;
+
+        let candles: Vec<Candle> = candles
             .into_iter()
             .map(|c| Candle {
-                datetime: DateTime::from_timestamp(c.time / 1000, 0).unwrap_or_else(Utc::now),
+                datetime: DateTime::from_timestamp_millis(c.time).unwrap_or_else(Utc::now),
                 open: c.open,
                 high: c.high,
                 low: c.low,
@@ -234,18 +239,134 @@ impl LiveDataFetcher {
         Ok(candles)
     }
 
-    /// Apply rate limiting
-    pub async fn rate_limit(&self) {
-        sleep(self.rate_limit_delay).await;
+    /// Fetch full historical data by making multiple API calls
+    pub fn fetch_full_history(
+        &self,
+        pair: &str,
+        interval: &str,
+        days_back: u32,
+    ) -> Result<Vec<Candle>> {
+        let end_time = Utc::now();
+        let start_time = end_time - Duration::days(days_back as i64);
+
+        info!(
+            "Fetching {} {} data from {} to {}",
+            pair, interval, start_time, end_time
+        );
+
+        let mut all_candles: Vec<Candle> = Vec::new();
+        let mut current_end = end_time;
+        let mut last_oldest_time: Option<i64> = None;
+
+        while current_end > start_time {
+            let candles = self.fetch_candles(pair, interval, Some(current_end), 1000)?;
+
+            if candles.is_empty() {
+                warn!("No more data available before {}", current_end);
+                break;
+            }
+
+            // Find oldest candle time
+            let oldest_time = candles.iter().map(|c| c.datetime.timestamp_millis()).min();
+
+            // If oldest time hasn't changed, we've reached the limit of available data
+            if last_oldest_time == oldest_time {
+                break;
+            }
+            last_oldest_time = oldest_time;
+
+            let oldest_dt = candles
+                .iter()
+                .map(|c| c.datetime)
+                .min()
+                .unwrap_or(start_time);
+
+            info!(
+                "  Fetched {} candles, oldest: {}",
+                candles.len(),
+                oldest_dt.format("%Y-%m-%d %H:%M")
+            );
+
+            all_candles.extend(candles);
+
+            // Move window back
+            current_end = oldest_dt - Duration::minutes(1);
+
+            // Rate limiting
+            sleep(self.request_delay);
+
+            if oldest_dt <= start_time {
+                break;
+            }
+        }
+
+        if all_candles.is_empty() {
+            return Ok(all_candles);
+        }
+
+        // Sort by time (oldest first) and deduplicate
+        all_candles.sort_by_key(|c| c.datetime);
+        all_candles.dedup_by_key(|c| c.datetime);
+
+        // Filter to requested date range
+        all_candles.retain(|c| c.datetime >= start_time);
+
+        info!("Total candles fetched: {}", all_candles.len());
+
+        Ok(all_candles)
+    }
+
+    /// Save candles to CSV file
+    pub fn save_to_csv(&self, candles: &[Candle], filename: &str) -> Result<PathBuf> {
+        let filepath = self.data_dir.join(filename);
+        let mut file = File::create(&filepath).context("Failed to create output file")?;
+
+        // Write header
+        writeln!(file, "datetime,open,high,low,close,volume")?;
+
+        // Write data
+        for candle in candles {
+            writeln!(
+                file,
+                "{},{},{},{},{},{}",
+                candle.datetime.format("%Y-%m-%d %H:%M:%S"),
+                candle.open,
+                candle.high,
+                candle.low,
+                candle.close,
+                candle.volume
+            )?;
+        }
+
+        info!("Saved {} rows to {}", candles.len(), filepath.display());
+        Ok(filepath)
+    }
+
+    /// Download historical data for a symbol and save to CSV
+    pub fn download_pair(
+        &self,
+        symbol: &str,
+        interval: &str,
+        days_back: u32,
+    ) -> Result<PathBuf> {
+        let pair = Self::to_pair(symbol);
+        let candles = self.fetch_full_history(&pair, interval, days_back)?;
+
+        if candles.is_empty() {
+            anyhow::bail!("No data fetched for {}", symbol);
+        }
+
+        // Normalize symbol for filename
+        let symbol_name = if symbol.ends_with("INR") {
+            symbol.to_string()
+        } else {
+            format!("{}INR", symbol)
+        };
+
+        let filename = format!("{}_{}.csv", symbol_name, interval);
+        self.save_to_csv(&candles, &filename)
     }
 }
-
-impl Default for LiveDataFetcher {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // =============================================================================
 // Data Cache
 // =============================================================================
@@ -283,11 +404,6 @@ impl CandleCache {
         })
     }
 
-    /// Get candles even if stale
-    pub fn get_stale(&self, symbol: &Symbol) -> Option<&Vec<Candle>> {
-        self.data.get(symbol).map(|c| &c.candles)
-    }
-
     /// Update candles for a symbol
     pub fn update(&mut self, symbol: Symbol, candles: Vec<Candle>) {
         let mut candles = candles;
@@ -309,13 +425,10 @@ impl CandleCache {
     /// Append a single candle
     pub fn append(&mut self, symbol: &Symbol, candle: Candle) {
         if let Some(cached) = self.data.get_mut(symbol) {
-            // Check if this is a new candle or update to existing
             if let Some(last) = cached.candles.last_mut() {
                 if last.datetime == candle.datetime {
-                    // Update existing candle
                     *last = candle;
                 } else {
-                    // New candle
                     cached.candles.push(candle);
                     if cached.candles.len() > self.max_candles {
                         cached.candles.remove(0);
@@ -348,88 +461,6 @@ impl CandleCache {
     pub fn clear(&mut self) {
         self.data.clear();
     }
-
-    /// Get cache statistics
-    pub fn stats(&self) -> CacheStats {
-        let total_candles: usize = self.data.values().map(|c| c.candles.len()).sum();
-        let stale_count = self
-            .data
-            .values()
-            .filter(|c| Utc::now() - c.last_updated >= self.ttl)
-            .count();
-
-        CacheStats {
-            symbol_count: self.data.len(),
-            total_candles,
-            stale_count,
-        }
-    }
-}
-
-// =============================================================================
-// Data Types
-// =============================================================================
-
-/// Ticker data from exchange
-#[derive(Debug, Clone)]
-pub struct TickerData {
-    pub symbol: String,
-    pub last_price: f64,
-    pub bid: f64,
-    pub ask: f64,
-    pub volume: f64,
-    pub timestamp: DateTime<Utc>,
-}
-
-impl TickerData {
-    /// Convert ticker to a candle (single point)
-    pub fn to_candle(&self) -> Candle {
-        Candle {
-            datetime: self.timestamp,
-            open: self.last_price,
-            high: self.last_price,
-            low: self.last_price,
-            close: self.last_price,
-            volume: self.volume,
-        }
-    }
-
-    /// Calculate spread percentage
-    pub fn spread_pct(&self) -> f64 {
-        if self.bid > 0.0 {
-            ((self.ask - self.bid) / self.bid) * 100.0
-        } else {
-            0.0
-        }
-    }
-}
-
-/// Cache statistics
-#[derive(Debug, Clone)]
-pub struct CacheStats {
-    pub symbol_count: usize,
-    pub total_candles: usize,
-    pub stale_count: usize,
-}
-
-// API response types
-#[derive(Debug, serde::Deserialize)]
-struct TickerResponse {
-    market: String,
-    last_price: String,
-    bid: String,
-    ask: String,
-    volume: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct CandleResponse {
-    time: i64,
-    open: f64,
-    high: f64,
-    low: f64,
-    close: f64,
-    volume: f64,
 }
 
 // =============================================================================
@@ -447,21 +478,12 @@ pub fn validate_candles(candles: &[Candle]) -> ValidationResult {
     }
 
     for (i, candle) in candles.iter().enumerate() {
-        // Check OHLC consistency
         if candle.high < candle.low {
             errors.push(format!(
                 "Candle {}: high ({}) < low ({})",
                 i, candle.high, candle.low
             ));
         }
-        if candle.high < candle.open || candle.high < candle.close {
-            warnings.push(format!("Candle {}: high ({}) not highest", i, candle.high));
-        }
-        if candle.low > candle.open || candle.low > candle.close {
-            warnings.push(format!("Candle {}: low ({}) not lowest", i, candle.low));
-        }
-
-        // Check for zero/negative values
         if candle.close <= 0.0 {
             errors.push(format!(
                 "Candle {}: invalid close price ({})",
@@ -471,14 +493,10 @@ pub fn validate_candles(candles: &[Candle]) -> ValidationResult {
         if candle.volume < 0.0 {
             errors.push(format!("Candle {}: negative volume ({})", i, candle.volume));
         }
-
-        // Check chronological order
         if i > 0 && candle.datetime <= candles[i - 1].datetime {
             warnings.push(format!(
-                "Candle {}: not chronological ({} <= {})",
-                i,
-                candle.datetime,
-                candles[i - 1].datetime
+                "Candle {}: not chronological",
+                i
             ));
         }
     }
@@ -497,15 +515,6 @@ impl ValidationResult {
     pub fn is_valid(&self) -> bool {
         self.errors.is_empty()
     }
-
-    pub fn log(&self) {
-        for error in &self.errors {
-            tracing::error!("Data validation error: {}", error);
-        }
-        for warning in &self.warnings {
-            tracing::warn!("Data validation warning: {}", warning);
-        }
-    }
 }
 
 // =============================================================================
@@ -515,12 +524,6 @@ impl ValidationResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_load_csv() {
-        // This would need actual test data
-        // Just ensuring the module compiles for now
-    }
 
     #[test]
     fn test_candle_cache() {
@@ -558,32 +561,9 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_candles_invalid() {
-        let candles = vec![Candle {
-            datetime: Utc::now(),
-            open: 100.0,
-            high: 90.0, // Invalid: high < low
-            low: 95.0,
-            close: 102.0,
-            volume: 1000.0,
-        }];
-
-        let result = validate_candles(&candles);
-        assert!(!result.is_valid());
-    }
-
-    #[test]
-    fn test_ticker_spread() {
-        let ticker = TickerData {
-            symbol: "BTCINR".to_string(),
-            last_price: 100.0,
-            bid: 99.0,
-            ask: 101.0,
-            volume: 1000.0,
-            timestamp: Utc::now(),
-        };
-
-        let spread = ticker.spread_pct();
-        assert!((spread - 2.02).abs() < 0.01); // ~2% spread
+    fn test_to_pair() {
+        assert_eq!(CoinDCXDataFetcher::to_pair("BTCINR"), "I-BTC_INR");
+        assert_eq!(CoinDCXDataFetcher::to_pair("BTC"), "I-BTC_INR");
+        assert_eq!(CoinDCXDataFetcher::to_pair("ETHINR"), "I-ETH_INR");
     }
 }

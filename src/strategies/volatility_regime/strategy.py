@@ -513,9 +513,11 @@ class CoinDCXStrategy(bt.Strategy):
             self.log(f"STOP LOSS triggered for {name}")
             return True
 
-        # Target check - PRIORITY 2
-        if current_price >= self.target_prices.get(name, float("inf")):
-            self.log(f"TARGET hit for {name}")
+        # Target check - PRIORITY 2 (check against HIGH for production correctness)
+        # Targets should trigger if intraday high reaches target, not just close
+        current_high = data.high[0]
+        if current_high >= self.target_prices.get(name, float("inf")):
+            self.log(f"TARGET hit for {name} (high={current_high:.2f})")
             return True
 
         # Regime exit - extreme volatility

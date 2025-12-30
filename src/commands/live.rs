@@ -46,12 +46,9 @@ struct LiveTrader {
 }
 
 impl LiveTrader {
-    /// Create new live trader instance
     async fn new(config: Config, state_db_path: &str, paper_mode: bool) -> Result<Self> {
-        // Create strategy from config
         let strategy = create_strategy_from_config(&config).context("Failed to create strategy")?;
 
-        // Initialize risk manager
         let risk_manager = RiskManager::new(
             config.trading.initial_capital,
             config.trading.risk_per_trade,
@@ -67,19 +64,17 @@ impl LiveTrader {
             config.trading.consecutive_loss_multiplier,
         );
 
-        // Initialize exchange client
         let api_key = config.exchange.api_key.clone().unwrap_or_default();
         let api_secret = config.exchange.api_secret.clone().unwrap_or_default();
 
         let exchange = RobustCoinDCXClient::with_config(
             api_key,
             api_secret,
-            3, // max retries
+            3,
             config.exchange.rate_limit as usize,
             Duration::from_secs(30),
         );
 
-        // Initialize state manager
         let state_dir = std::path::Path::new(state_db_path)
             .parent()
             .unwrap_or(std::path::Path::new("."));
@@ -96,15 +91,13 @@ impl LiveTrader {
             candle_cache: HashMap::new(),
             paper_mode,
             cycle_count: 0,
-            paper_cash: 0.0, // Will be set during recovery
+            paper_cash: 0.0,
         })
     }
 
-    /// Recover state from previous session
     async fn recover_state(&mut self) -> Result<()> {
         info!("Recovering state from previous session...");
 
-        // Load last checkpoint
         if let Some(checkpoint) = self.state_manager.load_checkpoint()? {
             info!(
                 "Found checkpoint: cycle={}, portfolio_value={:.2}, positions={}",
@@ -114,15 +107,11 @@ impl LiveTrader {
             self.cycle_count = checkpoint.cycle_count as u32;
             self.paper_cash = checkpoint.cash;
 
-            // Warn if config changed
             let current_hash = self.config_hash();
             if !checkpoint.config_hash.is_empty() && checkpoint.config_hash != current_hash {
                 warn!("⚠️  Config has changed since last run!");
-                warn!("Previous hash: {}", checkpoint.config_hash);
-                warn!("Current hash: {}", current_hash);
             }
 
-            // Restore risk manager state
             self.risk_manager.consecutive_losses = checkpoint.consecutive_losses as usize;
             self.risk_manager.update_capital(checkpoint.portfolio_value);
         } else {
@@ -130,7 +119,6 @@ impl LiveTrader {
             self.paper_cash = self.config.trading.initial_capital;
         }
 
-        // Load open positions
         let state_positions = self.state_manager.load_positions(Some("open"))?;
         for sp in state_positions {
             let symbol = Symbol::new(&sp.symbol);
@@ -163,7 +151,6 @@ impl LiveTrader {
         Ok(())
     }
 
-    /// Calculate config hash for change detection
     fn config_hash(&self) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -175,25 +162,19 @@ impl LiveTrader {
         format!("{:x}", hasher.finish())
     }
 
-    /// Fetch latest candles for all symbols
     async fn fetch_candles(&mut self) -> Result<()> {
         for pair in &self.config.trading.pairs {
             let symbol = Symbol::new(pair);
 
-            // In paper mode or if we can't fetch, use cached data
             if self.paper_mode {
-                // For paper mode, we'd typically load from CSV or use mock data
-                // Here we'll just log that we need real data integration
                 debug!("Paper mode: would fetch candles for {}", symbol);
                 continue;
             }
 
-            // Fetch ticker for current price (real mode)
             match self.exchange.get_ticker(pair).await {
                 Ok(ticker) => {
                     let price: f64 = ticker.last_price.parse().unwrap_or(0.0);
                     if price > 0.0 {
-                        // Create a candle from ticker data
                         let candle = Candle {
                             datetime: Utc::now(),
                             open: price,
@@ -206,7 +187,6 @@ impl LiveTrader {
                         let cache = self.candle_cache.entry(symbol.clone()).or_default();
                         cache.push(candle);
 
-                        // Keep only last 100 candles
                         if cache.len() > 100 {
                             cache.remove(0);
                         }
@@ -221,23 +201,19 @@ impl LiveTrader {
         Ok(())
     }
 
-    /// Run one trading cycle
     async fn run_cycle(&mut self) -> Result<()> {
         self.cycle_count += 1;
         info!("━━━ Trading cycle {} ━━━", self.cycle_count);
 
-        // Fetch latest market data
         self.fetch_candles().await?;
 
         let mut total_value = self.paper_cash;
 
-        // Process each symbol
         for pair in self.config.trading.pairs.clone() {
             let symbol = Symbol::new(&pair);
 
-            // Get candles for this symbol
             let candles = match self.candle_cache.get(&symbol) {
-                Some(c) if c.len() >= 21 => c.clone(), // Need at least EMA slow period
+                Some(c) if c.len() >= 21 => c.clone(),
                 _ => {
                     debug!("Insufficient candle data for {}", symbol);
                     continue;
@@ -246,38 +222,23 @@ impl LiveTrader {
 
             let current_price = candles.last().unwrap().close;
 
-            // Check existing position
             if let Some(pos) = self.positions.get(&symbol).cloned() {
                 total_value += pos.quantity * current_price;
 
-                // Check stop loss
                 let stop_price = pos.trailing_stop.unwrap_or(pos.stop_price);
                 if current_price <= stop_price {
-                    info!(
-                        "🛑 Stop loss triggered for {} @ {:.2}",
-                        symbol, current_price
-                    );
-                    self.close_position(&symbol, current_price, "Stop Loss")
-                        .await?;
+                    info!("🛑 Stop loss triggered for {} @ {:.2}", symbol, current_price);
+                    self.close_position(&symbol, current_price, "Stop Loss").await?;
                     continue;
                 }
 
-                // Check take profit
                 if current_price >= pos.target_price {
-                    info!(
-                        "🎯 Take profit triggered for {} @ {:.2}",
-                        symbol, current_price
-                    );
-                    self.close_position(&symbol, current_price, "Take Profit")
-                        .await?;
+                    info!("🎯 Take profit triggered for {} @ {:.2}", symbol, current_price);
+                    self.close_position(&symbol, current_price, "Take Profit").await?;
                     continue;
                 }
 
-                // Update trailing stop
-                if let Some(new_stop) =
-                    self.strategy
-                        .update_trailing_stop(&pos, current_price, &candles)
-                {
+                if let Some(new_stop) = self.strategy.update_trailing_stop(&pos, current_price, &candles) {
                     if let Some(pos_mut) = self.positions.get_mut(&symbol) {
                         if new_stop > pos_mut.trailing_stop.unwrap_or(0.0) {
                             info!(
@@ -292,24 +253,17 @@ impl LiveTrader {
                 }
             }
 
-            // Generate signal
             let position_ref = self.positions.get(&symbol);
-            let signal = self
-                .strategy
-                .generate_signal(&symbol, &candles, position_ref);
+            let signal = self.strategy.generate_signal(&symbol, &candles, position_ref);
 
             match signal {
                 Signal::Long if !self.positions.contains_key(&symbol) => {
-                    // Try to open position
-                    let current_positions: Vec<Position> =
-                        self.positions.values().cloned().collect();
+                    let current_positions: Vec<Position> = self.positions.values().cloned().collect();
 
                     if self.risk_manager.can_open_position(&current_positions) {
-                        let entry_price =
-                            current_price * (1.0 + self.config.exchange.assumed_slippage);
+                        let entry_price = current_price * (1.0 + self.config.exchange.assumed_slippage);
                         let stop_price = self.strategy.calculate_stop_loss(&candles, entry_price);
-                        let target_price =
-                            self.strategy.calculate_take_profit(&candles, entry_price);
+                        let target_price = self.strategy.calculate_take_profit(&candles, entry_price);
 
                         let quantity = self.risk_manager.calculate_position_size(
                             entry_price,
@@ -329,44 +283,26 @@ impl LiveTrader {
                                     stop_price,
                                     target_price,
                                     commission,
-                                )
-                                .await?;
-                            } else {
-                                debug!(
-                                    "Insufficient cash for {}: need {:.2}, have {:.2}",
-                                    symbol,
-                                    position_value + commission,
-                                    self.paper_cash
-                                );
+                                ).await?;
                             }
                         }
-                    } else {
-                        debug!("Risk manager blocked position for {}", symbol);
                     }
                 }
                 Signal::Flat if self.positions.contains_key(&symbol) => {
                     info!("📊 Exit signal for {}", symbol);
-                    self.close_position(&symbol, current_price, "Signal")
-                        .await?;
+                    self.close_position(&symbol, current_price, "Signal").await?;
                 }
                 _ => {}
             }
         }
 
-        // Update risk manager
         self.risk_manager.update_capital(total_value);
-
-        // Save checkpoint
         self.save_checkpoint(total_value).await?;
 
-        // Log summary
         let drawdown = self.risk_manager.current_drawdown() * 100.0;
         info!(
             "Cycle {} complete: value={:.2}, positions={}, drawdown={:.2}%",
-            self.cycle_count,
-            total_value,
-            self.positions.len(),
-            drawdown
+            self.cycle_count, total_value, self.positions.len(), drawdown
         );
 
         if self.risk_manager.should_halt_trading() {
@@ -376,7 +312,6 @@ impl LiveTrader {
         Ok(())
     }
 
-    /// Open a new position
     async fn open_position(
         &mut self,
         symbol: &Symbol,
@@ -389,15 +324,12 @@ impl LiveTrader {
         let position_value = quantity * entry_price;
 
         if self.paper_mode {
-            // Paper trading - just update internal state
             self.paper_cash -= position_value + commission;
-
             info!(
                 "📈 [PAPER] LONG {} qty={:.6} @ {:.2} | SL={:.2} TP={:.2}",
                 symbol, quantity, entry_price, stop_price, target_price
             );
         } else {
-            // Live trading - place real order
             let order_request = crypto_strategies::exchange::OrderRequest {
                 side: "buy".to_string(),
                 order_type: "market_order".to_string(),
@@ -421,7 +353,6 @@ impl LiveTrader {
             }
         }
 
-        // Create position
         let position = Position {
             symbol: symbol.clone(),
             entry_price,
@@ -433,7 +364,6 @@ impl LiveTrader {
             risk_amount: (entry_price - stop_price).abs() * quantity,
         };
 
-        // Save to state
         let state_pos = StatePosition {
             symbol: symbol.as_str().to_string(),
             side: "buy".to_string(),
@@ -451,10 +381,8 @@ impl LiveTrader {
         };
         self.state_manager.save_position(&state_pos)?;
 
-        // Store in memory
         self.positions.insert(symbol.clone(), position.clone());
 
-        // Notify strategy
         let order = Order {
             symbol: symbol.clone(),
             side: Side::Buy,
@@ -475,13 +403,7 @@ impl LiveTrader {
         Ok(())
     }
 
-    /// Close an existing position
-    async fn close_position(
-        &mut self,
-        symbol: &Symbol,
-        exit_price: f64,
-        reason: &str,
-    ) -> Result<()> {
+    async fn close_position(&mut self, symbol: &Symbol, exit_price: f64, reason: &str) -> Result<()> {
         let position = match self.positions.remove(symbol) {
             Some(p) => p,
             None => return Ok(()),
@@ -495,16 +417,13 @@ impl LiveTrader {
         let net_pnl = pnl - commission;
 
         if self.paper_mode {
-            // Paper trading
             self.paper_cash += position.quantity * exit_price_adj - commission;
-
             let emoji = if net_pnl > 0.0 { "✅" } else { "❌" };
             info!(
                 "{} [PAPER] CLOSE {} qty={:.6} @ {:.2} | PnL={:+.2} | {}",
                 emoji, symbol, position.quantity, exit_price_adj, net_pnl, reason
             );
         } else {
-            // Live trading
             let order_request = crypto_strategies::exchange::OrderRequest {
                 side: "sell".to_string(),
                 order_type: "market_order".to_string(),
@@ -524,21 +443,18 @@ impl LiveTrader {
                 }
                 Err(e) => {
                     error!("Failed to close position for {}: {}", symbol, e);
-                    // Re-add position on failure
                     self.positions.insert(symbol.clone(), position);
                     return Err(e);
                 }
             }
         }
 
-        // Update risk manager
         if net_pnl > 0.0 {
             self.risk_manager.record_win();
         } else {
             self.risk_manager.record_loss();
         }
 
-        // Create trade record
         let trade = Trade {
             symbol: symbol.clone(),
             side: Side::Buy,
@@ -552,13 +468,9 @@ impl LiveTrader {
             net_pnl,
         };
 
-        // Notify strategy
         self.strategy.notify_trade(&trade);
-
-        // Save to state manager
         self.state_manager.save_trade_async(&trade).await?;
 
-        // Update position status in state
         let state_pos = StatePosition {
             symbol: symbol.as_str().to_string(),
             side: "buy".to_string(),
@@ -579,7 +491,6 @@ impl LiveTrader {
         Ok(())
     }
 
-    /// Save current state checkpoint
     async fn save_checkpoint(&self, portfolio_value: f64) -> Result<()> {
         let checkpoint = Checkpoint {
             timestamp: Utc::now().to_rfc3339(),
@@ -600,35 +511,27 @@ impl LiveTrader {
         Ok(())
     }
 
-    /// Graceful shutdown - close all positions
     async fn shutdown(&mut self) -> Result<()> {
         info!("Initiating graceful shutdown...");
 
-        // Close all open positions
         let symbols: Vec<Symbol> = self.positions.keys().cloned().collect();
         for symbol in symbols {
             if let Some(candles) = self.candle_cache.get(&symbol) {
                 if let Some(last_candle) = candles.last() {
                     warn!("Closing position {} due to shutdown", symbol);
-                    self.close_position(&symbol, last_candle.close, "Shutdown")
-                        .await?;
+                    self.close_position(&symbol, last_candle.close, "Shutdown").await?;
                 }
             }
         }
 
-        // Final checkpoint
         let total_value = self.paper_cash;
         self.save_checkpoint(total_value).await?;
 
-        info!(
-            "Shutdown complete. Final portfolio value: {:.2}",
-            total_value
-        );
+        info!("Shutdown complete. Final portfolio value: {:.2}", total_value);
         Ok(())
     }
 }
 
-/// Main entry point for live trading
 pub fn run(
     config_path: String,
     paper: bool,
@@ -644,53 +547,40 @@ pub fn run(
         anyhow::bail!("Cannot specify both --paper and --live modes");
     }
 
-    // Load environment variables
     dotenv::dotenv().ok();
 
-    // Build async runtime
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("Failed to build tokio runtime")?;
 
-    // Run async main
     runtime.block_on(run_async(config_path, paper, interval, state_db))
 }
 
-/// Async main loop
 async fn run_async(
     config_path: String,
     paper_mode: bool,
     interval_secs: u64,
     state_db: String,
 ) -> Result<()> {
-    // Load config
     let config = Config::from_file(&config_path)
         .context(format!("Failed to load config from {}", config_path))?;
 
     let mode_str = if paper_mode { "PAPER" } else { "LIVE" };
 
     info!("╔══════════════════════════════════════════════════════════════╗");
-    info!(
-        "║          CRYPTO TRADING SYSTEM - {} MODE                ║",
-        mode_str
-    );
+    info!("║          CRYPTO TRADING SYSTEM - {} MODE                ║", mode_str);
     info!("╠══════════════════════════════════════════════════════════════╣");
     info!("║ Strategy: {:<50} ║", config.strategy_name);
     info!("║ Pairs: {:<53} ║", config.trading.pairs.join(", "));
     info!("║ Timeframe: {:<49} ║", config.trading.timeframe);
-    info!(
-        "║ Initial Capital: Rs {:<39.2} ║",
-        config.trading.initial_capital
-    );
+    info!("║ Initial Capital: Rs {:<39.2} ║", config.trading.initial_capital);
     info!("║ Cycle Interval: {} seconds{:<35} ║", interval_secs, "");
     info!("╚══════════════════════════════════════════════════════════════╝");
 
     if !paper_mode {
-        warn!("⚠️  ════════════════════════════════════════════════════════ ⚠️");
-        warn!("⚠️  LIVE TRADING MODE - REAL MONEY AT RISK!                  ⚠️");
-        warn!("⚠️  Press Ctrl+C within 10 seconds to abort...               ⚠️");
-        warn!("⚠️  ════════════════════════════════════════════════════════ ⚠️");
+        warn!("⚠️  LIVE TRADING MODE - REAL MONEY AT RISK!");
+        warn!("⚠️  Press Ctrl+C within 10 seconds to abort...");
 
         for i in (1..=10).rev() {
             info!("Starting in {} seconds...", i);
@@ -698,23 +588,15 @@ async fn run_async(
         }
     }
 
-    // Initialize trader
     let mut trader = LiveTrader::new(config, &state_db, paper_mode).await?;
-
-    // Initialize strategy
     trader.strategy.init();
-
-    // Recover state from previous session
     trader.recover_state().await?;
 
-    // Setup shutdown signal handling
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let shutdown_flag_clone = shutdown_flag.clone();
 
-    // Channel for shutdown coordination
     let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
-    // Spawn signal handler task
     tokio::spawn(async move {
         match tokio::signal::ctrl_c().await {
             Ok(()) => {
@@ -728,7 +610,6 @@ async fn run_async(
         }
     });
 
-    // Main trading loop
     let mut cycle_interval = interval(Duration::from_secs(interval_secs));
 
     info!("Starting trading loop...");
@@ -741,14 +622,13 @@ async fn run_async(
                 }
 
                 if trader.risk_manager.should_halt_trading() {
-                    warn!("Trading halted due to max drawdown. Waiting for manual intervention.");
+                    warn!("Trading halted due to max drawdown.");
                     sleep(Duration::from_secs(60)).await;
                     continue;
                 }
 
                 if let Err(e) = trader.run_cycle().await {
                     error!("Trading cycle error: {}", e);
-                    // Continue on error - don't crash the whole system
                 }
             }
             _ = shutdown_rx.recv() => {
@@ -758,9 +638,7 @@ async fn run_async(
         }
     }
 
-    // Graceful shutdown
     trader.shutdown().await?;
-
     info!("Live trading session ended.");
     Ok(())
 }

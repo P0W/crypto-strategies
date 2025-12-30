@@ -200,8 +200,9 @@ impl Backtester {
                         continue;
                     }
 
-                    // Check take profit - place close order (T+1 execution)
-                    if current_price >= pos.target_price {
+                    // Check take profit against HIGH price (production correctness)
+                    // Targets should trigger if intraday high reaches target, not just close
+                    if current_candle.high >= pos.target_price {
                         pending_closes.insert(symbol.clone(), "Take Profit".to_string());
                         continue;
                     }
@@ -487,8 +488,22 @@ impl Backtester {
             0.0
         };
 
-        let calmar_ratio = if max_dd > 0.0 {
-            (total_return / 100.0) / max_dd
+        // Calculate Calmar ratio (annualized return / max drawdown)
+        // First, calculate duration in years from equity curve
+        let calmar_ratio = if max_dd > 0.0 && equity_curve.len() >= 2 {
+            let start_date = equity_curve.first().unwrap().0;
+            let end_date = equity_curve.last().unwrap().0;
+            let duration_days = (end_date - start_date).num_days() as f64;
+            
+            if duration_days > 0.0 {
+                let duration_years = duration_days / 365.0;
+                // Annualized return: (1 + total_return)^(1/years) - 1
+                let total_return_decimal = total_return / 100.0;
+                let annualized_return = (1.0 + total_return_decimal).powf(1.0 / duration_years) - 1.0;
+                annualized_return / max_dd
+            } else {
+                0.0
+            }
         } else {
             0.0
         };

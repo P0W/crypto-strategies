@@ -113,6 +113,43 @@ impl Optimizer {
         results
     }
 
+    /// Run optimization sequentially (no parallelism)
+    /// Useful for debugging or when parallel execution causes issues
+    pub fn optimize_sequential<F>(
+        &self,
+        data: HashMap<Symbol, Vec<Candle>>,
+        configs: Vec<Config>,
+        strategy_factory: &F,
+    ) -> Vec<OptimizationResult>
+    where
+        F: Fn(&Config) -> Box<dyn Strategy>,
+    {
+        tracing::info!(
+            "Testing {} parameter combinations sequentially",
+            configs.len()
+        );
+
+        configs
+            .iter()
+            .map(|config| {
+                let strategy = strategy_factory(config);
+                let mut backtester = Backtester::new(config.clone(), strategy);
+                let result = backtester.run(data.clone());
+
+                OptimizationResult {
+                    params: HashMap::new(),
+                    sharpe_ratio: result.metrics.sharpe_ratio,
+                    total_return: result.metrics.total_return,
+                    max_drawdown: result.metrics.max_drawdown,
+                    win_rate: result.metrics.win_rate,
+                    total_trades: result.metrics.total_trades,
+                    calmar_ratio: result.metrics.calmar_ratio,
+                    profit_factor: result.metrics.profit_factor,
+                }
+            })
+            .collect()
+    }
+
     /// Sort optimization results by specified metric
     pub fn sort_results(results: &mut [OptimizationResult], sort_by: &str) {
         match sort_by {
