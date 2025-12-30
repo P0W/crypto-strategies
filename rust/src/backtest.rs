@@ -81,16 +81,20 @@ impl Backtester {
         // Maximum lookback window for indicator calculation
         // Strategies don't need full history - just enough for the longest indicator period
         // This reduces O(n²) to O(n*k) where k is the lookback window
+        // 300 bars covers: ADX (14*3=42), ATR (14), EMA slow (34), volatility lookback (20)
+        // with plenty of buffer for warmup periods
         const MAX_LOOKBACK: usize = 300;
 
         for (i, current_date) in dates.iter().take(min_len).enumerate() {
+            // Calculate windowed start index once per bar (used by both phases)
+            let start_idx = i.saturating_sub(MAX_LOOKBACK - 1);
+
             // ============================================================
             // PHASE 1: Execute pending orders from previous bar (T+1 execution)
             // Orders execute at the OPEN of the current bar (matching Backtrader)
             // ============================================================
             for (symbol, candles) in &aligned_data {
                 // Use windowed slice for performance - strategies only need recent history
-                let start_idx = i.saturating_sub(MAX_LOOKBACK - 1);
                 let current_candles = &candles[start_idx..=i];
                 let current_candle = current_candles.last().unwrap();
                 let candle_dt = current_candle.datetime;
@@ -167,7 +171,6 @@ impl Backtester {
 
             for (symbol, candles) in &aligned_data {
                 // Use windowed slice for performance - strategies only need recent history
-                let start_idx = i.saturating_sub(MAX_LOOKBACK - 1);
                 let current_candles = &candles[start_idx..=i];
                 let current_candle = current_candles.last().unwrap();
                 let candle_dt = current_candle.datetime;
