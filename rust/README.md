@@ -184,6 +184,33 @@ All must be true:
 - 15% drawdown: Reduce position sizes by 75%
 - 20% drawdown: Halt all trading
 
+## Performance Results
+
+**Winning Config:** `configs/btc_eth_sol_bnb_xrp_1d.json`
+
+Backtest Period: April 2023 - December 2025 (1000 candles)
+
+| Metric | Value |
+|--------|-------|
+| Total Return | 65.99% |
+| Post-Tax Return | 46.19% |
+| Sharpe Ratio | 1.48 |
+| Calmar Ratio | 1.67 |
+| Max Drawdown | 12.22% |
+| Win Rate | 65.52% |
+| Profit Factor | 2.95 |
+| Total Trades | 29 |
+| Winning Trades | 19 |
+| Losing Trades | 10 |
+| Average Win | ₹5,318.79 |
+| Average Loss | ₹3,425.32 |
+
+**Fee & Tax Impact:**
+- Total Commission: ₹1,699.83
+- Tax (30%): ₹19,796.47
+
+**Assets:** BTC, ETH, SOL, BNB, XRP on 1D timeframe
+
 ## State Persistence
 
 SQLite-based with automatic JSON backup:
