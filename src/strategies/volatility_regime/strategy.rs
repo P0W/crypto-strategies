@@ -2,9 +2,9 @@
 //!
 //! Strategy implementation for trading based on volatility regime classification.
 
-use crate::{Candle, Position, Signal, Symbol};
-use crate::indicators::{atr, ema, adx};
+use crate::indicators::{adx, atr, ema};
 use crate::strategies::Strategy;
+use crate::{Candle, Position, Signal, Symbol};
 
 use super::config::VolatilityRegimeConfig;
 use super::VolatilityRegime;
@@ -30,12 +30,14 @@ impl VolatilityRegimeStrategy {
         let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
 
         let atr_values = atr(&high, &low, &close, self.config.atr_period);
-        
+
         // Get current ATR - properly handle nested Option
         let current_atr = atr_values.last().and_then(|&x| x)?;
-        
+
         // Calculate ATR percentile over lookback period
-        let lookback_start = candles.len().saturating_sub(self.config.volatility_lookback);
+        let lookback_start = candles
+            .len()
+            .saturating_sub(self.config.volatility_lookback);
         let lookback_atrs: Vec<f64> = atr_values[lookback_start..]
             .iter()
             .filter_map(|&x| x)
@@ -45,17 +47,14 @@ impl VolatilityRegimeStrategy {
             return None;
         }
 
-        let mut sorted_atrs = lookback_atrs.clone();
-        // Use unwrap_or for safety with NaN handling
-        sorted_atrs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        
-        let median_atr = sorted_atrs[sorted_atrs.len() / 2];
-        
-        if median_atr == 0.0 {
+        // Calculate mean ATR (same as Python implementation)
+        let atr_mean: f64 = lookback_atrs.iter().sum::<f64>() / lookback_atrs.len() as f64;
+
+        if atr_mean == 0.0 {
             return Some(VolatilityRegime::Normal);
         }
 
-        let atr_ratio = current_atr / median_atr;
+        let atr_ratio = current_atr / atr_mean;
 
         if atr_ratio >= self.config.extreme_threshold {
             Some(VolatilityRegime::Extreme)
@@ -91,7 +90,7 @@ impl VolatilityRegimeStrategy {
 
     /// Check for breakout
     fn is_breakout(&self, candles: &[Candle]) -> bool {
-        if candles.len() < 2 {
+        if candles.len() < self.config.volatility_lookback + 1 {
             return false;
         }
 
@@ -102,16 +101,22 @@ impl VolatilityRegimeStrategy {
         let atr_values = atr(&high, &low, &close, self.config.atr_period);
         let current_atr = atr_values.last().and_then(|&x| x).unwrap_or(0.0);
 
-        // Find recent high
-        let lookback = 10.min(candles.len());
-        let recent_high = candles[candles.len() - lookback..]
+        // Find recent high using volatility_lookback (same as Python)
+        // Python's ind["highest"][-1] is the Highest indicator value at the PREVIOUS bar
+        // That value represents the highest high over the `lookback` bars ending at the previous bar
+        // So for bar T, we want max(high[T-lookback], high[T-lookback+1], ..., high[T-1])
+        let n = candles.len();
+        let lookback = self.config.volatility_lookback;
+        let start = n.saturating_sub(lookback + 1);  // n - lookback - 1
+        let end = n - 1;  // n - 1 (exclusive of current bar)
+        let recent_high = candles[start..end]
             .iter()
             .map(|c| c.high)
             .fold(f64::MIN, f64::max);
 
         let breakout_level = recent_high - self.config.breakout_atr_multiple * current_atr;
         let current_close = candles.last().unwrap().close;
-        let prev_close = candles[candles.len() - 2].close;
+        let prev_close = candles[n - 2].close;
 
         current_close > breakout_level && prev_close <= breakout_level
     }
@@ -124,15 +129,23 @@ impl Strategy for VolatilityRegimeStrategy {
         candles: &[Candle],
         position: Option<&Position>,
     ) -> Signal {
-        // Don't generate signals if insufficient data
-        if candles.len() < self.config.ema_slow {
+        // Calculate minimum warmup period for all indicators
+        // ADX needs: atr_period + 2*adx_period for proper smoothing
+        // Volatility regime needs: atr_period + volatility_lookback
+        // EMA needs: ema_slow period
+        let min_warmup = (self.config.atr_period + 2 * self.config.adx_period)
+            .max(self.config.atr_period + self.config.volatility_lookback)
+            .max(self.config.ema_slow);
+        
+        // Don't generate signals if insufficient data for all indicators
+        if candles.len() < min_warmup {
             return Signal::Flat;
         }
 
         // If we have a position, check exit conditions
         if let Some(pos) = position {
             let current_price = candles.last().unwrap().close;
-            
+
             // Exit on regime shift to extreme
             if let Some(regime) = self.classify_regime(candles) {
                 if regime == VolatilityRegime::Extreme {
@@ -171,7 +184,9 @@ impl Strategy for VolatilityRegimeStrategy {
         }
 
         // Check for breakout
-        if self.is_breakout(candles) {
+        let breakout = self.is_breakout(candles);
+        
+        if breakout {
             Signal::Long
         } else {
             Signal::Flat
@@ -212,14 +227,10 @@ impl Strategy for VolatilityRegimeStrategy {
         current_price: f64,
         candles: &[Candle],
     ) -> Option<f64> {
-        let unrealized_pnl = position.unrealized_pnl(current_price);
-        let target_pnl = (position.target_price - position.entry_price) * position.quantity;
-
-        // Activate trailing stop at specified percentage of target
-        if unrealized_pnl < target_pnl * self.config.trailing_activation {
-            return None;
-        }
-
+        // Production behavior: Trailing stop activates AND updates immediately
+        // This provides immediate downside protection once profit threshold is reached
+        // HFTs and professional systems don't wait until next bar to protect profits
+        
         let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
         let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
         let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
@@ -230,19 +241,49 @@ impl Strategy for VolatilityRegimeStrategy {
             .and_then(|&x| x)
             .unwrap_or(current_price * 0.05);
 
-        let new_stop = current_price - self.config.trailing_atr_multiple * current_atr;
+        // Calculate profit in ATR terms
+        let profit_atr = if current_atr > 0.0 {
+            (current_price - position.entry_price) / current_atr
+        } else {
+            0.0
+        };
 
-        // Only update if it's higher than current stop
-        if let Some(current_stop) = position.trailing_stop {
+        // Get current stop level (trailing stop if active, else initial stop)
+        let current_stop = position.trailing_stop.unwrap_or(position.stop_price);
+
+        // Check if profit threshold is met for trailing activation
+        if profit_atr >= self.config.trailing_activation {
+            // Calculate new trailing stop level
+            let new_stop = current_price - self.config.trailing_atr_multiple * current_atr;
+            
+            // Only update if new stop is higher (ratchet up only)
             if new_stop > current_stop {
                 Some(new_stop)
             } else {
-                Some(current_stop)
+                Some(current_stop)  // Keep existing stop
             }
-        } else if new_stop > position.stop_price {
-            Some(new_stop)
+        } else if position.trailing_stop.is_some() {
+            // Trailing was active but profit dropped - keep existing stop
+            Some(current_stop)
         } else {
+            // Not activated yet
             None
+        }
+    }
+
+    /// Get regime score for position sizing
+    /// Matches Python implementation:
+    /// - Compression: 1.5 (higher conviction for breakouts)
+    /// - Normal: 1.0 (standard sizing)
+    /// - Expansion: 0.8 (slightly reduced)
+    /// - Extreme: 0.5 (minimal exposure)
+    fn get_regime_score(&self, candles: &[Candle]) -> f64 {
+        match self.classify_regime(candles) {
+            Some(VolatilityRegime::Compression) => 1.5,
+            Some(VolatilityRegime::Normal) => 1.0,
+            Some(VolatilityRegime::Expansion) => 0.8,
+            Some(VolatilityRegime::Extreme) => 0.5,
+            None => 1.0,
         }
     }
 }

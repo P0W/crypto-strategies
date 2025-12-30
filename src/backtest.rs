@@ -1,15 +1,25 @@
 //! Backtesting engine
 //!
 //! Event-driven backtest framework with commission and slippage modeling.
+//! Uses T+1 execution (orders placed on day T are executed on day T+1).
 
-use std::collections::HashMap;
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 
-use crate::{
-    Candle, Config, PerformanceMetrics, Position, Signal, Side, Symbol, Trade,
-};
 use crate::risk::RiskManager;
 use crate::Strategy;
+use crate::{Candle, Config, PerformanceMetrics, Position, Side, Signal, Symbol, Trade};
+
+/// Pending order for T+1 execution
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct PendingOrder {
+    symbol: Symbol,
+    quantity: f64,
+    entry_price: f64,
+    stop_price: f64,
+    target_price: f64,
+}
 
 /// Backtest engine
 pub struct Backtester {
@@ -47,6 +57,8 @@ impl Backtester {
         let mut equity_curve = Vec::new();
         let mut trades = Vec::new();
         let mut positions: HashMap<Symbol, Position> = HashMap::new();
+        let mut pending_orders: HashMap<Symbol, PendingOrder> = HashMap::new();
+        let mut pending_closes: HashMap<Symbol, String> = HashMap::new(); // reason for close
         let mut cash = self.config.trading.initial_capital;
 
         // Find the common date range and align all symbols
@@ -56,113 +68,211 @@ impl Backtester {
             return BacktestResult::default();
         }
 
-        let dates = aligned_data[0].1.iter().map(|c| c.datetime).collect::<Vec<_>>();
+        let dates = aligned_data[0]
+            .1
+            .iter()
+            .map(|c| c.datetime)
+            .collect::<Vec<_>>();
 
-        for (i, current_date) in dates.iter().enumerate() {
-            let mut total_value = cash;
+        // Find the minimum length across all aligned data to avoid index out of bounds
+        let min_len = aligned_data
+            .iter()
+            .map(|(_, candles)| candles.len())
+            .min()
+            .unwrap_or(0);
 
-            // Process each symbol
+        for (i, current_date) in dates.iter().take(min_len).enumerate() {
+
+            // ============================================================
+            // PHASE 1: Execute pending orders from previous bar (T+1 execution)
+            // Orders execute at the OPEN of the current bar (matching Backtrader)
+            // ============================================================
             for (symbol, candles) in &aligned_data {
                 let current_candles = &candles[..=i];
-                let current_price = current_candles.last().unwrap().close;
+                let current_candle = current_candles.last().unwrap();
+                let candle_dt = current_candle.datetime;
+                let _current_price = current_candle.close;  // Kept for potential future use
+                let open_price = current_candle.open;  // Use open for order execution
 
-                // Check if we have a position and handle exits first
-                if let Some(pos) = positions.get(symbol).cloned() {
-                    total_value += pos.quantity * current_price;
+                // Execute pending buy order at OPEN price with slippage
+                // Professional systems apply slippage to account for market impact
+                if let Some(order) = pending_orders.remove(symbol) {
+                    let entry_price = open_price * (1.0 + self.config.exchange.assumed_slippage);
+                    let position_value = order.quantity * entry_price;
+                    let commission = position_value * self.config.exchange.taker_fee;
 
-                    // Check stop loss
-                    let stop_price = pos.trailing_stop.unwrap_or(pos.stop_price);
-                    if current_price <= stop_price {
-                        let trade = self.close_position(&pos, current_price, *current_date, "Stop Loss");
-                        cash += pos.quantity * current_price - trade.commission;
-                        
+                    if cash >= position_value + commission {
+                        cash -= position_value + commission;
+
+                        let pos = Position {
+                            symbol: symbol.clone(),
+                            entry_price,
+                            quantity: order.quantity,
+                            stop_price: order.stop_price,
+                            target_price: order.target_price,
+                            trailing_stop: None,
+                            entry_time: candle_dt,  // Use actual candle datetime
+                            risk_amount: (entry_price - order.stop_price).abs() * order.quantity,
+                        };
+
+                        tracing::info!(
+                            "{} BUY EXECUTED for {}: Price={:.2}, Qty={:.4}",
+                            candle_dt.format("%Y-%m-%d"),  // Use actual candle datetime
+                            symbol,
+                            entry_price,
+                            order.quantity
+                        );
+
+                        positions.insert(symbol.clone(), pos);
+                    }
+                }
+
+                // Execute pending close order at OPEN price with slippage
+                // Slippage works against us: we get slightly worse price on exit
+                if let Some(reason) = pending_closes.remove(symbol) {
+                    if let Some(pos) = positions.remove(symbol) {
+                        let exit_price = open_price * (1.0 - self.config.exchange.assumed_slippage);
+                        let trade = self.close_position(&pos, exit_price, candle_dt, &reason);  // Use candle_dt
+                        cash += pos.quantity * exit_price - trade.commission;
+
+                        tracing::info!(
+                            "{} SELL EXECUTED for {}: Price={:.2}, Reason={}, PnL={:.2}",
+                            candle_dt.format("%Y-%m-%d"),  // Use actual candle datetime
+                            symbol,
+                            exit_price,
+                            reason,
+                            trade.net_pnl
+                        );
+
                         if trade.net_pnl > 0.0 {
                             self.risk_manager.record_win();
                         } else {
                             self.risk_manager.record_loss();
                         }
-                        
-                        trades.push(trade);
-                        positions.remove(symbol);
-                        continue;
-                    }
 
-                    // Check take profit
-                    if current_price >= pos.target_price {
-                        let trade = self.close_position(&pos, current_price, *current_date, "Take Profit");
-                        cash += pos.quantity * current_price - trade.commission;
-                        
-                        self.risk_manager.record_win();
                         trades.push(trade);
-                        positions.remove(symbol);
-                        continue;
                     }
+                }
+            }
 
-                    // Update trailing stop
-                    if let Some(new_stop) = self.strategy.update_trailing_stop(&pos, current_price, current_candles) {
+            // ============================================================
+            // PHASE 2: Check exits and generate new signals
+            // ============================================================
+            
+            // Recalculate total_value from current cash (after Phase 1 updates)
+            let mut total_value = cash;
+            
+            for (symbol, candles) in &aligned_data {
+                let current_candles = &candles[..=i];
+                let current_candle = current_candles.last().unwrap();
+                let candle_dt = current_candle.datetime;
+                let current_price = current_candle.close;
+
+                // Skip if we have a pending close already
+                if pending_closes.contains_key(symbol) {
+                    if let Some(pos) = positions.get(symbol) {
+                        total_value += pos.quantity * current_price;
+                    }
+                    continue;
+                }
+
+                // Check if we have a position and handle exits
+                if let Some(pos) = positions.get(symbol).cloned() {
+                    total_value += pos.quantity * current_price;
+
+                    // Update trailing stop FIRST (before checking stop loss)
+                    // This matches Python behavior where trailing stop is updated before checking exits
+                    let current_stop = if let Some(new_stop) =
+                        self.strategy
+                            .update_trailing_stop(&pos, current_price, current_candles)
+                    {
                         if let Some(pos_mut) = positions.get_mut(symbol) {
                             pos_mut.trailing_stop = Some(new_stop);
                         }
+                        new_stop
+                    } else {
+                        pos.trailing_stop.unwrap_or(pos.stop_price)
+                    };
+
+                    // Check stop loss - place close order (T+1 execution)
+                    if current_price <= current_stop {
+                        pending_closes.insert(symbol.clone(), "Stop Loss".to_string());
+                        continue;
+                    }
+
+                    // Check take profit - place close order (T+1 execution)
+                    if current_price >= pos.target_price {
+                        pending_closes.insert(symbol.clone(), "Take Profit".to_string());
+                        continue;
                     }
                 }
 
                 // Generate signal
                 let position_ref = positions.get(symbol);
-                let signal = self.strategy.generate_signal(symbol, current_candles, position_ref);
+                let signal = self
+                    .strategy
+                    .generate_signal(symbol, current_candles, position_ref);
 
                 match signal {
-                    Signal::Long if !positions.contains_key(symbol) => {
-                        // Try to open position
-                        if self.risk_manager.can_open_position(&positions.values().cloned().collect::<Vec<_>>()) {
-                            let entry_price = current_price * (1.0 + self.config.exchange.assumed_slippage);
-                            let stop_price = self.strategy.calculate_stop_loss(current_candles, entry_price);
-                            let target_price = self.strategy.calculate_take_profit(current_candles, entry_price);
+                    Signal::Long if !positions.contains_key(symbol) && !pending_orders.contains_key(symbol) => {
+                        // Place pending order (will execute next bar)
+                        let can_open = self
+                            .risk_manager
+                            .can_open_position(&positions.values().cloned().collect::<Vec<_>>());
+                        
+                        if !can_open {
+                            let dd = self.risk_manager.current_drawdown();
+                            if dd >= 0.20 {
+                                tracing::warn!(
+                                    "{} HALTED - Drawdown {:.2}% exceeds max 20%",
+                                    candle_dt.format("%Y-%m-%d"),
+                                    dd * 100.0
+                                );
+                            }
+                        }
+                        
+                        if can_open {
+                            // Match Python/Backtrader: Calculate stops/targets from signal close price
+                            // The order will execute at next bar's open, but stops/targets are based
+                            // on the close price when signal was generated (standard backtest convention)
+                            let stop_price = self
+                                .strategy
+                                .calculate_stop_loss(current_candles, current_price);
+                            let target_price = self
+                                .strategy
+                                .calculate_take_profit(current_candles, current_price);
 
-                            let current_positions: Vec<Position> = positions.values().cloned().collect();
-                            let quantity = self.risk_manager.calculate_position_size(
-                                entry_price,
+                            let current_positions: Vec<Position> =
+                                positions.values().cloned().collect();
+                            
+                            // Get regime score for position sizing adjustment
+                            let regime_score = self.strategy.get_regime_score(current_candles);
+                            
+                            // Position sizing based on close price (matching Python)
+                            let quantity = self.risk_manager.calculate_position_size_with_regime(
+                                current_price,
                                 stop_price,
                                 &current_positions,
+                                regime_score,
                             );
 
                             if quantity > 0.0 {
-                                let position_value = quantity * entry_price;
-                                let commission = position_value * self.config.exchange.taker_fee;
-
-                                if cash >= position_value + commission {
-                                    cash -= position_value + commission;
-
-                                    let pos = Position {
+                                pending_orders.insert(
+                                    symbol.clone(),
+                                    PendingOrder {
                                         symbol: symbol.clone(),
-                                        entry_price,
                                         quantity,
+                                        entry_price: current_price,  // Store signal price
                                         stop_price,
                                         target_price,
-                                        trailing_stop: None,
-                                        entry_time: *current_date,
-                                        risk_amount: (entry_price - stop_price).abs() * quantity,
-                                    };
-
-                                    positions.insert(symbol.clone(), pos);
-                                }
+                                    },
+                                );
                             }
                         }
                     }
-                    Signal::Flat if positions.contains_key(symbol) => {
-                        // Close position
-                        let pos = positions.get(symbol).unwrap();
-                        let exit_price = current_price * (1.0 - self.config.exchange.assumed_slippage);
-                        let trade = self.close_position(pos, exit_price, *current_date, "Signal");
-                        cash += pos.quantity * exit_price - trade.commission;
-
-                        if trade.net_pnl > 0.0 {
-                            self.risk_manager.record_win();
-                        } else {
-                            self.risk_manager.record_loss();
-                        }
-
-                        trades.push(trade);
-                        positions.remove(symbol);
+                    Signal::Flat if positions.contains_key(symbol) && !pending_closes.contains_key(symbol) => {
+                        // Place pending close order (will execute next bar)
+                        pending_closes.insert(symbol.clone(), "Signal".to_string());
                     }
                     _ => {}
                 }
@@ -193,8 +303,15 @@ impl Backtester {
         }
     }
 
-    fn close_position(&self, pos: &Position, exit_price: f64, exit_time: DateTime<Utc>, _reason: &str) -> Trade {
+    fn close_position(
+        &self,
+        pos: &Position,
+        exit_price: f64,
+        exit_time: DateTime<Utc>,
+        _reason: &str,
+    ) -> Trade {
         let pnl = (exit_price - pos.entry_price) * pos.quantity;
+        // Commission: taker fee on both entry and exit (round-trip cost)
         let commission = (pos.quantity * pos.entry_price * self.config.exchange.taker_fee)
             + (pos.quantity * exit_price * self.config.exchange.taker_fee);
         let net_pnl = pnl - commission;
@@ -215,11 +332,11 @@ impl Backtester {
 
     fn align_data(&self, data: HashMap<Symbol, Vec<Candle>>) -> Vec<(Symbol, Vec<Candle>)> {
         use std::collections::HashSet;
-        
+
         if data.is_empty() {
             return Vec::new();
         }
-        
+
         // Collect all unique timestamps across all symbols
         let mut all_timestamps: HashSet<DateTime<Utc>> = HashSet::new();
         for candles in data.values() {
@@ -227,20 +344,20 @@ impl Backtester {
                 all_timestamps.insert(candle.datetime);
             }
         }
-        
+
         // Sort timestamps chronologically
         let mut sorted_timestamps: Vec<DateTime<Utc>> = all_timestamps.into_iter().collect();
         sorted_timestamps.sort();
-        
+
         // For each symbol, create aligned candle series
         // Fill missing timestamps with the previous candle (forward fill)
         let mut aligned_data = Vec::new();
-        
+
         for (symbol, candles) in data {
             let mut aligned_candles = Vec::new();
             let mut candle_iter = candles.iter().peekable();
             let mut last_candle: Option<Candle> = None;
-            
+
             for &timestamp in &sorted_timestamps {
                 // Check if we have a candle for this timestamp
                 match candle_iter.peek() {
@@ -277,16 +394,20 @@ impl Backtester {
                     }
                 }
             }
-            
+
             if !aligned_candles.is_empty() {
                 aligned_data.push((symbol, aligned_candles));
             }
         }
-        
+
         aligned_data
     }
 
-    fn calculate_metrics(&self, trades: &[Trade], equity_curve: &[(DateTime<Utc>, f64)]) -> PerformanceMetrics {
+    fn calculate_metrics(
+        &self,
+        trades: &[Trade],
+        equity_curve: &[(DateTime<Utc>, f64)],
+    ) -> PerformanceMetrics {
         if trades.is_empty() || equity_curve.is_empty() {
             return PerformanceMetrics::default();
         }
@@ -353,7 +474,11 @@ impl Backtester {
             .collect();
 
         let mean_return = returns.iter().sum::<f64>() / returns.len() as f64;
-        let variance = returns.iter().map(|r| (r - mean_return).powi(2)).sum::<f64>() / returns.len() as f64;
+        let variance = returns
+            .iter()
+            .map(|r| (r - mean_return).powi(2))
+            .sum::<f64>()
+            / returns.len() as f64;
         let std_dev = variance.sqrt();
 
         let sharpe_ratio = if std_dev > 0.0 {

@@ -12,8 +12,8 @@ use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 mod main_backtest_cmd;
-mod main_optimize_cmd;
 mod main_live_cmd;
+mod main_optimize_cmd;
 
 #[derive(Parser, Debug)]
 #[command(name = "crypto-strategies")]
@@ -110,7 +110,7 @@ fn setup_logging(verbose: bool, command_name: &str) -> Result<()> {
 
     // File appender
     let file_appender = tracing_appender::rolling::never("logs", log_filename);
-    
+
     // Console layer with custom format matching Python:
     // %(asctime)s %(levelname)-8s [%(funcName)s:%(lineno)d] %(message)s
     let console_layer = tracing_subscriber::fmt::layer()
@@ -131,8 +131,7 @@ fn setup_logging(verbose: bool, command_name: &str) -> Result<()> {
 
     // Set log level
     let level = if verbose { "debug" } else { "info" };
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(level));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
 
     // Initialize subscriber
     tracing_subscriber::registry()
@@ -169,14 +168,14 @@ fn main() -> Result<()> {
             start,
             end,
         } => main_backtest_cmd::run(config, strategy, capital, start, end),
-        
+
         Commands::Optimize {
             config,
             mode,
             sort_by,
             top,
         } => main_optimize_cmd::run(config, mode, sort_by, top),
-        
+
         Commands::Live {
             config,
             paper,

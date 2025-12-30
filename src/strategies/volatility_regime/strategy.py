@@ -496,16 +496,17 @@ class CoinDCXStrategy(bt.Strategy):
         current_price = data.close[0]
         atr = ind["atr"][0]
 
-        # Update trailing stop if activated
-        if name in self.trailing_active and self.trailing_active[name]:
-            new_stop = current_price - atr * self.p.trailing_atr_multiple
-            if new_stop > self.stop_prices.get(name, 0):
-                self.stop_prices[name] = new_stop
-
-        # Check trailing activation
+        # Calculate profit in ATR terms
         profit_atr = (current_price - entry_price) / atr if atr > 0 else 0
+        
+        # Production behavior: Activate AND update trailing stop immediately
+        # This provides real-time downside protection once profit threshold is reached
         if profit_atr >= self.p.trailing_activation:
             self.trailing_active[name] = True
+            new_stop = current_price - atr * self.p.trailing_atr_multiple
+            # Ratchet up only - never lower the stop
+            if new_stop > self.stop_prices.get(name, 0):
+                self.stop_prices[name] = new_stop
 
         # Stop loss check - PRIORITY 1
         if current_price <= self.stop_prices.get(name, 0):

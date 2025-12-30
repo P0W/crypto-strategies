@@ -20,13 +20,13 @@ use tracing::{debug, info};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Position {
     pub symbol: String,
-    pub side: String,  // "buy" or "sell"
+    pub side: String, // "buy" or "sell"
     pub quantity: f64,
     pub entry_price: f64,
     pub entry_time: Option<String>,
     pub stop_loss: f64,
     pub take_profit: f64,
-    pub status: String,  // "pending", "open", "closing", "closed"
+    pub status: String, // "pending", "open", "closing", "closed"
     pub order_id: Option<String>,
     pub pnl: f64,
     pub exit_price: f64,
@@ -36,10 +36,7 @@ pub struct Position {
 
 impl Position {
     pub fn is_open(&self) -> bool {
-        matches!(
-            self.status.as_str(),
-            "open" | "pending" | "closing"
-        )
+        matches!(self.status.as_str(), "open" | "pending" | "closing")
     }
 }
 
@@ -101,13 +98,9 @@ pub struct SqliteStateManager {
 }
 
 impl SqliteStateManager {
-    pub fn new<P: AsRef<Path>>(
-        db_path: P,
-        json_backup_path: P,
-        auto_backup: bool,
-    ) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(db_path: P, json_backup_path: P, auto_backup: bool) -> Result<Self> {
         let db_path_ref = db_path.as_ref();
-        
+
         // Create parent directories
         if let Some(parent) = db_path_ref.parent() {
             std::fs::create_dir_all(parent)?;
@@ -132,7 +125,7 @@ impl SqliteStateManager {
 
         manager.create_tables()?;
         info!("SQLite state manager initialized");
-        
+
         Ok(manager)
     }
 
@@ -266,7 +259,7 @@ impl SqliteStateManager {
 
     pub fn load_positions(&self, status_filter: Option<&str>) -> Result<Vec<Position>> {
         let conn = self.conn.lock().unwrap();
-        
+
         let query = if let Some(status) = status_filter {
             format!("SELECT * FROM positions WHERE status = '{}'", status)
         } else {
@@ -305,7 +298,7 @@ impl SqliteStateManager {
     pub fn get_position(&self, symbol: &str) -> Result<Option<Position>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT * FROM positions WHERE symbol = ?1")?;
-        
+
         let pos = stmt.query_row(params![symbol], |row| {
             Ok(Position {
                 symbol: row.get(0)?,
@@ -383,7 +376,8 @@ impl SqliteStateManager {
                 cash: row.get(4)?,
                 positions_value: row.get(5)?,
                 open_positions: row.get(6)?,
-                last_processed_symbols: serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or_default(),
+                last_processed_symbols: serde_json::from_str(&row.get::<_, String>(7)?)
+                    .unwrap_or_default(),
                 drawdown_pct: row.get::<_, Option<f64>>(8)?.unwrap_or(0.0),
                 consecutive_losses: row.get::<_, Option<i32>>(9)?.unwrap_or(0),
                 paper_mode: row.get::<_, i32>(10)? != 0,
@@ -472,18 +466,25 @@ impl SqliteStateManager {
             "checkpoint": checkpoint,
         });
 
-        std::fs::write(&self.json_backup_path, serde_json::to_string_pretty(&state)?)?;
+        std::fs::write(
+            &self.json_backup_path,
+            serde_json::to_string_pretty(&state)?,
+        )?;
         debug!("State exported to: {}", self.json_backup_path.display());
         Ok(())
     }
 
     // Async wrappers for use in async contexts (like live trading)
-    pub async fn save_checkpoint_async(&self, portfolio_value: f64, position_count: u32) -> Result<()> {
+    pub async fn save_checkpoint_async(
+        &self,
+        portfolio_value: f64,
+        position_count: u32,
+    ) -> Result<()> {
         let checkpoint = Checkpoint {
             timestamp: Utc::now().to_rfc3339(),
-            cycle_count: 0,  // Would increment in production
+            cycle_count: 0, // Would increment in production
             portfolio_value,
-            cash: portfolio_value,  // Simplified - in production, calculate actual cash
+            cash: portfolio_value, // Simplified - in production, calculate actual cash
             positions_value: 0.0,
             open_positions: position_count as i32,
             last_processed_symbols: vec![],
@@ -494,15 +495,13 @@ impl SqliteStateManager {
             metadata: HashMap::new(),
         };
         let state_manager = self.clone_for_async();
-        tokio::task::spawn_blocking(move || {
-            state_manager.save_checkpoint(&checkpoint)
-        }).await?
+        tokio::task::spawn_blocking(move || state_manager.save_checkpoint(&checkpoint)).await?
     }
 
     pub async fn save_trade_async(&self, trade: &crate::Trade) -> Result<()> {
         // Convert from simple Trade to full TradeRecord
         let trade_record = TradeRecord {
-            id: None,  // Auto-assigned by database
+            id: None, // Auto-assigned by database
             symbol: trade.symbol.as_str().to_string(),
             side: format!("{:?}", trade.side).to_lowercase(),
             quantity: trade.quantity,
@@ -512,7 +511,11 @@ impl SqliteStateManager {
             exit_time: trade.exit_time.to_rfc3339(),
             gross_pnl: trade.pnl,
             fees: trade.commission,
-            tax: if trade.net_pnl > 0.0 { trade.net_pnl * 0.3 } else { 0.0 },
+            tax: if trade.net_pnl > 0.0 {
+                trade.net_pnl * 0.3
+            } else {
+                0.0
+            },
             net_pnl: trade.net_pnl,
             pnl_pct: ((trade.exit_price - trade.entry_price) / trade.entry_price) * 100.0,
             status: "closed".to_string(),
@@ -526,11 +529,9 @@ impl SqliteStateManager {
             risk_reward_actual: 0.0,
             metadata: HashMap::new(),
         };
-        
+
         let state_manager = self.clone_for_async();
-        tokio::task::spawn_blocking(move || {
-            state_manager.record_trade(&trade_record)
-        }).await?
+        tokio::task::spawn_blocking(move || state_manager.record_trade(&trade_record)).await?
     }
 
     fn clone_for_async(&self) -> Self {
@@ -539,7 +540,8 @@ impl SqliteStateManager {
             self.db_path.clone(),
             self.json_backup_path.clone(),
             false, // Don't auto-export for clones
-        ).expect("Failed to clone state manager")
+        )
+        .expect("Failed to clone state manager")
     }
 }
 

@@ -29,10 +29,9 @@ fn default_strategy_name() -> String {
 impl Config {
     /// Load configuration from JSON file
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
-        let contents = fs::read_to_string(path.as_ref())
-            .context("Failed to read config file")?;
-        let mut config: Config = serde_json::from_str(&contents)
-            .context("Failed to parse config JSON")?;
+        let contents = fs::read_to_string(path.as_ref()).context("Failed to read config file")?;
+        let mut config: Config =
+            serde_json::from_str(&contents).context("Failed to parse config JSON")?;
 
         // Load API credentials from environment if not set
         if let Ok(api_key) = std::env::var("COINDCX_API_KEY") {
@@ -44,9 +43,10 @@ impl Config {
 
         Ok(config)
     }
+}
 
-    /// Get default configuration
-    pub fn default() -> Self {
+impl Default for Config {
+    fn default() -> Self {
         Config {
             exchange: ExchangeConfig::default(),
             trading: TradingConfig::default(),
@@ -76,8 +76,8 @@ impl Default for ExchangeConfig {
         ExchangeConfig {
             api_key: None,
             api_secret: None,
-            maker_fee: 0.001,  // 0.1%
-            taker_fee: 0.001,  // 0.1%
+            maker_fee: 0.001, // 0.1%
+            taker_fee: 0.001, // 0.1%
             assumed_slippage: 0.001,
             rate_limit: 10,
         }
@@ -147,8 +147,8 @@ pub struct TaxConfig {
 impl Default for TaxConfig {
     fn default() -> Self {
         TaxConfig {
-            tax_rate: 0.30,  // 30% flat tax in India
-            tds_rate: 0.01,  // 1% TDS
+            tax_rate: 0.30, // 30% flat tax in India
+            tds_rate: 0.01, // 1% TDS
             loss_offset_allowed: false,
         }
     }

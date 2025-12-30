@@ -2,13 +2,13 @@
 //!
 //! Provides abstractions for parallel grid search optimization across any strategy.
 
+use indicatif::ProgressBar;
 use rayon::prelude::*;
 use std::collections::HashMap;
-use indicatif::ProgressBar;
 
-use crate::{Candle, Config, Symbol};
 use crate::backtest::Backtester;
 use crate::Strategy;
+use crate::{Candle, Config, Symbol};
 
 /// Optimization result for a single parameter combination
 #[derive(Debug, Clone)]
@@ -83,7 +83,10 @@ impl Optimizer {
     where
         F: Fn(&Config) -> Box<dyn Strategy> + Send + Sync,
     {
-        tracing::info!("Testing {} parameter combinations with progress tracking", configs.len());
+        tracing::info!(
+            "Testing {} parameter combinations with progress tracking",
+            configs.len()
+        );
 
         let results: Vec<OptimizationResult> = configs
             .par_iter()
@@ -111,13 +114,33 @@ impl Optimizer {
     }
 
     /// Sort optimization results by specified metric
-    pub fn sort_results(results: &mut Vec<OptimizationResult>, sort_by: &str) {
+    pub fn sort_results(results: &mut [OptimizationResult], sort_by: &str) {
         match sort_by {
-            "calmar" => results.sort_by(|a, b| b.calmar_ratio.partial_cmp(&a.calmar_ratio).unwrap_or(std::cmp::Ordering::Equal)),
-            "return" => results.sort_by(|a, b| b.total_return.partial_cmp(&a.total_return).unwrap_or(std::cmp::Ordering::Equal)),
-            "win_rate" => results.sort_by(|a, b| b.win_rate.partial_cmp(&a.win_rate).unwrap_or(std::cmp::Ordering::Equal)),
-            "profit_factor" => results.sort_by(|a, b| b.profit_factor.partial_cmp(&a.profit_factor).unwrap_or(std::cmp::Ordering::Equal)),
-            "sharpe" | _ => results.sort_by(|a, b| b.sharpe_ratio.partial_cmp(&a.sharpe_ratio).unwrap_or(std::cmp::Ordering::Equal)),
+            "calmar" => results.sort_by(|a, b| {
+                b.calmar_ratio
+                    .partial_cmp(&a.calmar_ratio)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            "return" => results.sort_by(|a, b| {
+                b.total_return
+                    .partial_cmp(&a.total_return)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            "win_rate" => results.sort_by(|a, b| {
+                b.win_rate
+                    .partial_cmp(&a.win_rate)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            "profit_factor" => results.sort_by(|a, b| {
+                b.profit_factor
+                    .partial_cmp(&a.profit_factor)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            _ => results.sort_by(|a, b| {
+                b.sharpe_ratio
+                    .partial_cmp(&a.sharpe_ratio)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }),
         }
     }
 }

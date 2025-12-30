@@ -1,9 +1,9 @@
 //! Backtest command implementation
 
 use anyhow::Result;
-use tracing::{info, debug};
-use crypto_strategies::{Config, data, backtest::Backtester, Strategy};
 use crypto_strategies::strategies::volatility_regime;
+use crypto_strategies::{backtest::Backtester, data, Config, Strategy};
+use tracing::{debug, info};
 
 pub fn run(
     config_path: String,
@@ -13,7 +13,7 @@ pub fn run(
     end_override: Option<String>,
 ) -> Result<()> {
     info!("Starting backtest");
-    
+
     // Load configuration
     let mut config = Config::from_file(&config_path)?;
     info!("Loaded configuration from: {}", config_path);
@@ -43,7 +43,7 @@ pub fn run(
     info!("Loading data from: {}", config.backtest.data_dir);
     let symbols = config.trading.symbols();
     debug!("Symbols: {:?}", symbols);
-    
+
     let data = data::load_multi_symbol(
         &config.backtest.data_dir,
         &symbols,
@@ -55,14 +55,15 @@ pub fn run(
     // Create strategy based on config
     info!("Creating strategy: {}", config.strategy_name);
     let strategy: Box<dyn Strategy> = match config.strategy_name.as_str() {
-        "volatility_regime" => {
-            Box::new(volatility_regime::create_strategy_from_config(&config)?)
-        }
+        "volatility_regime" => Box::new(volatility_regime::create_strategy_from_config(&config)?),
         other => {
-            anyhow::bail!("Unknown strategy: {}. Available strategies: volatility_regime", other)
+            anyhow::bail!(
+                "Unknown strategy: {}. Available strategies: volatility_regime",
+                other
+            )
         }
     };
-    
+
     let mut backtester = Backtester::new(config.clone(), strategy);
 
     info!("Running backtest...");

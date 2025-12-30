@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rustc:*)",
+      "Bash(cargo tree:*)",
+      "Bash(rustup update:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(rustup component:*)",
+      "Bash(dir:*)",
+      "Bash(ls:*)"
+    ]
+  }
+}

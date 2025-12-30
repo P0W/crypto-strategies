@@ -26,10 +26,12 @@ class TaxAwareCommission(bt.CommInfoBase):
 
     - 0.1% fee per trade (maker/taker)
     - 30% tax on profits (applied at portfolio level, not per-trade)
+    
+    NOTE: Backtrader divides COMM_PERC by 100, so we use 0.1 to get 0.1%
     """
 
     params = (
-        ("commission", 0.001),  # 0.1% per trade
+        ("commission", 0.1),  # 0.1% per trade (Backtrader divides by 100)
         ("stocklike", True),
         ("commtype", bt.CommInfoBase.COMM_PERC),
     )
@@ -235,6 +237,16 @@ def run_backtest(
 
     # Set commission
     cerebro.broker.addcommissioninfo(TaxAwareCommission())
+    
+    # Set slippage (0.1% assumed slippage on each trade)
+    # This models realistic market impact and execution costs
+    cerebro.broker.set_slippage_perc(
+        perc=config.exchange.assumed_slippage,
+        slip_open=True,   # Apply to market orders at open
+        slip_limit=False,  # Don't apply to limit orders
+        slip_match=True,   # Apply when price matches
+        slip_out=True      # Apply on exit orders
+    )
 
     # Add strategy with params from unified config
     strategy_params = config.get_strategy_params()

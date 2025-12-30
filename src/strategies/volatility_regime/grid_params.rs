@@ -2,8 +2,8 @@
 //!
 //! Defines parameter ranges for optimization and grid generation using itertools.
 
-use serde::{Deserialize, Serialize};
 use crate::Config;
+use serde::{Deserialize, Serialize};
 
 /// Grid search parameters for optimization
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,7 +64,7 @@ impl GridParams {
     pub fn generate_configs(&self, base_config: &Config) -> Vec<Config> {
         // Use itertools iproduct! macro for clean cartesian product
         use itertools::iproduct;
-        
+
         iproduct!(
             &self.atr_periods,
             &self.ema_fast_periods,
@@ -80,7 +80,7 @@ impl GridParams {
             }
 
             let mut config = base_config.clone();
-            
+
             // Update strategy parameters in the JSON value
             if let Some(obj) = config.strategy.as_object_mut() {
                 obj.insert("atr_period".to_string(), serde_json::json!(atr));
@@ -99,7 +99,7 @@ impl GridParams {
     /// Get total number of parameter combinations
     pub fn total_combinations(&self) -> usize {
         use itertools::iproduct;
-        
+
         iproduct!(
             &self.atr_periods,
             &self.ema_fast_periods,
@@ -108,9 +108,7 @@ impl GridParams {
             &self.stop_atr_multiples,
             &self.target_atr_multiples
         )
-        .filter(|(_, fast, slow, _, stop, target)| {
-            fast < slow && target > stop
-        })
+        .filter(|(_, fast, slow, _, stop, target)| fast < slow && target > stop)
         .count()
     }
 }

@@ -28,9 +28,9 @@ const DEFAULT_RATE_LIMIT_PER_SECOND: usize = 10;
 /// Circuit breaker states
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum CircuitState {
-    Closed,       // Normal operation
-    Open,         // Failing, reject requests
-    HalfOpen,     // Testing if service recovered
+    Closed,   // Normal operation
+    Open,     // Failing, reject requests
+    HalfOpen, // Testing if service recovered
 }
 
 /// Circuit breaker for managing API failures
@@ -49,7 +49,7 @@ impl CircuitBreaker {
             state: CircuitState::Closed,
             failure_count: 0,
             failure_threshold,
-            success_threshold: 2,  // Need 2 successes in HalfOpen to close
+            success_threshold: 2, // Need 2 successes in HalfOpen to close
             last_failure_time: None,
             timeout,
         }
@@ -96,7 +96,7 @@ impl CircuitBreaker {
 
     fn record_failure(&mut self) {
         self.last_failure_time = Some(Instant::now());
-        
+
         match self.state {
             CircuitState::Closed => {
                 self.failure_count += 1;
@@ -138,7 +138,9 @@ impl RateLimiter {
             let elapsed = last_refill.elapsed();
             if elapsed >= Duration::from_secs(1) {
                 // Add available permits (up to max)
-                let to_add = self.refill_rate.saturating_sub(self.permits.available_permits());
+                let to_add = self
+                    .refill_rate
+                    .saturating_sub(self.permits.available_permits());
                 if to_add > 0 {
                     self.permits.add_permits(to_add);
                 }
@@ -192,14 +194,16 @@ impl RobustCoinDCXClient {
             api_secret,
             client,
             circuit_breaker: Arc::new(Mutex::new(CircuitBreaker::new(
-                5,  // Open circuit after 5 failures
-                Duration::from_secs(60),  // Stay open for 60 seconds
+                5,                       // Open circuit after 5 failures
+                Duration::from_secs(60), // Stay open for 60 seconds
             ))),
             rate_limiter: Arc::new(RateLimiter::new(rate_limit_per_second)),
             max_retries,
         }
     }
 
+    /// Generate HMAC-SHA256 signature for authenticated API requests
+    #[allow(dead_code)]
     fn generate_signature(&self, payload: &str) -> String {
         let mut mac = HmacSha256::new_from_slice(self.api_secret.as_bytes())
             .expect("HMAC can take key of any size");
@@ -224,7 +228,7 @@ impl RobustCoinDCXClient {
         self.rate_limiter.acquire().await;
 
         let mut last_error = None;
-        
+
         for attempt in 0..=self.max_retries {
             if attempt > 0 {
                 // Exponential backoff: 1s, 2s, 4s, 8s...
@@ -241,7 +245,12 @@ impl RobustCoinDCXClient {
                     return Ok(result);
                 }
                 Err(e) => {
-                    tracing::warn!("Request failed (attempt {}/{}): {}", attempt + 1, self.max_retries + 1, e);
+                    tracing::warn!(
+                        "Request failed (attempt {}/{}): {}",
+                        attempt + 1,
+                        self.max_retries + 1,
+                        e
+                    );
                     last_error = Some(e);
                 }
             }
@@ -262,7 +271,7 @@ impl RobustCoinDCXClient {
             let url = format!("{}/exchange/ticker", API_BASE_URL);
             let client = self.client.clone();
             let symbol = symbol.clone();
-            
+
             async move {
                 let response = client
                     .get(&url)
@@ -270,11 +279,9 @@ impl RobustCoinDCXClient {
                     .await
                     .context("Failed to fetch ticker")?;
 
-                let tickers: Vec<Ticker> = response
-                    .json()
-                    .await
-                    .context("Failed to parse ticker")?;
-                
+                let tickers: Vec<Ticker> =
+                    response.json().await.context("Failed to parse ticker")?;
+
                 tickers
                     .into_iter()
                     .find(|t| t.market == symbol)
@@ -288,14 +295,14 @@ impl RobustCoinDCXClient {
         let order = order.clone();
         let api_key = self.api_key.clone();
         let api_secret = self.api_secret.clone();
-        
+
         self.execute_with_retry(|| {
             let url = format!("{}/exchange/v1/orders/create", API_BASE_URL);
             let client = self.client.clone();
             let order = order.clone();
             let api_key = api_key.clone();
             let api_secret = api_secret.clone();
-            
+
             async move {
                 let body = serde_json::to_string(&order)?;
                 let mut mac = HmacSha256::new_from_slice(api_secret.as_bytes())
@@ -312,7 +319,10 @@ impl RobustCoinDCXClient {
                     .await
                     .context("Failed to place order")?;
 
-                response.json().await.context("Failed to parse order response")
+                response
+                    .json()
+                    .await
+                    .context("Failed to parse order response")
             }
         })
         .await
@@ -322,14 +332,14 @@ impl RobustCoinDCXClient {
         let order_id = order_id.to_string();
         let api_key = self.api_key.clone();
         let api_secret = self.api_secret.clone();
-        
+
         self.execute_with_retry(|| {
             let url = format!("{}/exchange/v1/orders/cancel", API_BASE_URL);
             let client = self.client.clone();
             let order_id = order_id.clone();
             let api_key = api_key.clone();
             let api_secret = api_secret.clone();
-            
+
             async move {
                 let request = CancelOrderRequest {
                     id: order_id.clone(),
@@ -359,13 +369,13 @@ impl RobustCoinDCXClient {
     pub async fn get_balances(&self) -> Result<Vec<Balance>> {
         let api_key = self.api_key.clone();
         let api_secret = self.api_secret.clone();
-        
+
         self.execute_with_retry(|| {
             let url = format!("{}/exchange/v1/users/balances", API_BASE_URL);
             let client = self.client.clone();
             let api_key = api_key.clone();
             let api_secret = api_secret.clone();
-            
+
             async move {
                 let timestamp = Utc::now().timestamp_millis();
                 let payload = format!("{{\"timestamp\":{}}}", timestamp);
@@ -402,8 +412,8 @@ pub struct Ticker {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderRequest {
-    pub side: String,          // "buy" or "sell"
-    pub order_type: String,    // "limit_order" or "market_order"
+    pub side: String,       // "buy" or "sell"
+    pub order_type: String, // "limit_order" or "market_order"
     pub market: String,
     pub price_per_unit: Option<f64>,
     pub total_quantity: f64,
@@ -435,18 +445,18 @@ mod tests {
     #[test]
     fn test_circuit_breaker_transitions() {
         let mut cb = CircuitBreaker::new(3, Duration::from_secs(5));
-        
+
         // Start in Closed state
         assert_eq!(cb.state, CircuitState::Closed);
         assert!(cb.can_attempt());
-        
+
         // Record failures
         cb.record_failure();
         cb.record_failure();
         assert_eq!(cb.state, CircuitState::Closed);
-        
+
         cb.record_failure();
-        assert_eq!(cb.state, CircuitState::Open);  // Should open after 3 failures
-        assert!(!cb.can_attempt());  // Immediately after opening, should reject
+        assert_eq!(cb.state, CircuitState::Open); // Should open after 3 failures
+        assert!(!cb.can_attempt()); // Immediately after opening, should reject
     }
 }

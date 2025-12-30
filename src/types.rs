@@ -122,7 +122,7 @@ pub struct Order {
     pub side: Side,
     pub status: OrderStatus,
     pub size: f64,
-    pub price: Option<f64>,  // None for market orders
+    pub price: Option<f64>, // None for market orders
     pub executed: Option<OrderExecution>,
     pub created_time: DateTime<Utc>,
     pub updated_time: DateTime<Utc>,

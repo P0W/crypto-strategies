@@ -33,6 +33,17 @@ pub trait Strategy: Send + Sync {
         candles: &[Candle],
     ) -> Option<f64>;
 
+    /// Get regime score for position sizing (default: 1.0)
+    ///
+    /// Returns a multiplier for position sizing based on market regime:
+    /// - Compression: 1.5 (higher conviction for breakouts)
+    /// - Normal: 1.0 (standard sizing)
+    /// - Expansion: 0.8 (reduced size)
+    /// - Extreme: 0.5 (minimal exposure)
+    fn get_regime_score(&self, _candles: &[Candle]) -> f64 {
+        1.0 // Default implementation returns 1.0
+    }
+
     /// Notification when an order state changes
     ///
     /// Called when:
@@ -59,7 +70,9 @@ pub trait Strategy: Send + Sync {
                     );
                 }
             }
-            crate::OrderStatus::Canceled | crate::OrderStatus::Margin | crate::OrderStatus::Rejected => {
+            crate::OrderStatus::Canceled
+            | crate::OrderStatus::Margin
+            | crate::OrderStatus::Rejected => {
                 tracing::warn!(
                     symbol = %order.symbol,
                     status = ?order.status,
@@ -78,7 +91,7 @@ pub trait Strategy: Send + Sync {
         // Default implementation: log trade results
         let return_pct = trade.return_pct();
         let net_pnl_post_tax = if trade.net_pnl > 0.0 {
-            trade.net_pnl * 0.7  // 30% tax on profits
+            trade.net_pnl * 0.7 // 30% tax on profits
         } else {
             trade.net_pnl
         };
@@ -96,7 +109,7 @@ pub trait Strategy: Send + Sync {
             "Trade closed"
         );
     }
-    
+
     /// Initialize strategy (called once before trading starts)
     ///
     /// Use this to set up any internal state, load models, etc.
