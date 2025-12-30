@@ -12,11 +12,8 @@ use crate::{Candle, Config, PerformanceMetrics, Position, Side, Signal, Symbol, 
 
 /// Pending order for T+1 execution
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct PendingOrder {
-    symbol: Symbol,
     quantity: f64,
-    entry_price: f64,
     stop_price: f64,
     target_price: f64,
 }
@@ -263,9 +260,7 @@ impl Backtester {
                                 pending_orders.insert(
                                     symbol.clone(),
                                     PendingOrder {
-                                        symbol: symbol.clone(),
                                         quantity,
-                                        entry_price: current_price, // Store signal price
                                         stop_price,
                                         target_price,
                                     },

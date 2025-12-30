@@ -25,13 +25,14 @@ pub struct OptimizationResult {
 
 /// Generic optimizer that works with any strategy
 pub struct Optimizer {
-    #[allow(dead_code)]
-    base_config: Config,
+    _base_config: Config,
 }
 
 impl Optimizer {
     pub fn new(base_config: Config) -> Self {
-        Optimizer { base_config }
+        Optimizer {
+            _base_config: base_config,
+        }
     }
 
     /// Run optimization with a custom strategy factory function

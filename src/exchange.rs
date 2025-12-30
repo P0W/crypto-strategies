@@ -202,15 +202,6 @@ impl RobustCoinDCXClient {
         }
     }
 
-    /// Generate HMAC-SHA256 signature for authenticated API requests
-    #[allow(dead_code)]
-    fn generate_signature(&self, payload: &str) -> String {
-        let mut mac = HmacSha256::new_from_slice(self.api_secret.as_bytes())
-            .expect("HMAC can take key of any size");
-        mac.update(payload.as_bytes());
-        hex::encode(mac.finalize().into_bytes())
-    }
-
     async fn execute_with_retry<F, Fut, T>(&self, operation: F) -> Result<T>
     where
         F: Fn() -> Fut,

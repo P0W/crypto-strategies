@@ -171,7 +171,7 @@ pub fn run(
             .map(|s| s.replace("INR", ""))
             .collect::<Vec<_>>()
             .join("+");
-        symbol_groups_flat.push(group_name.clone());
+        symbol_groups_flat.push(group_name);
 
         let mut task_config = config.clone();
         task_config.trading.pairs = symbols_vec.clone();
@@ -187,7 +187,6 @@ pub fn run(
                 if !data.is_empty() {
                     tasks.push(OptTask {
                         group_idx,
-                        group_name: group_name.clone(),
                         symbols_vec: symbols_vec.clone(),
                         timeframe: timeframe.clone(),
                         config: task_config.clone(),
@@ -360,8 +359,6 @@ pub fn run(
 #[derive(Clone)]
 struct OptTask {
     group_idx: usize,
-    #[allow(dead_code)]
-    group_name: String,
     symbols_vec: Vec<String>,
     timeframe: String,
     config: Config,
