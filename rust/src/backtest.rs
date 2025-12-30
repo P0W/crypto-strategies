@@ -78,13 +78,20 @@ impl Backtester {
             .min()
             .unwrap_or(0);
 
+        // Maximum lookback window for indicator calculation
+        // Strategies don't need full history - just enough for the longest indicator period
+        // This reduces O(n²) to O(n*k) where k is the lookback window
+        const MAX_LOOKBACK: usize = 300;
+
         for (i, current_date) in dates.iter().take(min_len).enumerate() {
             // ============================================================
             // PHASE 1: Execute pending orders from previous bar (T+1 execution)
             // Orders execute at the OPEN of the current bar (matching Backtrader)
             // ============================================================
             for (symbol, candles) in &aligned_data {
-                let current_candles = &candles[..=i];
+                // Use windowed slice for performance - strategies only need recent history
+                let start_idx = i.saturating_sub(MAX_LOOKBACK - 1);
+                let current_candles = &candles[start_idx..=i];
                 let current_candle = current_candles.last().unwrap();
                 let candle_dt = current_candle.datetime;
                 let _current_price = current_candle.close; // Kept for potential future use
@@ -159,7 +166,9 @@ impl Backtester {
             let mut total_value = cash;
 
             for (symbol, candles) in &aligned_data {
-                let current_candles = &candles[..=i];
+                // Use windowed slice for performance - strategies only need recent history
+                let start_idx = i.saturating_sub(MAX_LOOKBACK - 1);
+                let current_candles = &candles[start_idx..=i];
                 let current_candle = current_candles.last().unwrap();
                 let candle_dt = current_candle.datetime;
                 let current_price = current_candle.close;
