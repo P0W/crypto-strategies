@@ -13,6 +13,7 @@ pub mod backtest;
 pub mod optimizer;
 pub mod indicators;
 pub mod types;
+pub mod state_manager;
 
 pub use config::Config;
 pub use types::*;
