@@ -1,21 +1,21 @@
-//! Live trading command implementation
+//! Live trading command - Implementation in progress
 //!
-//! Production-ready live trading framework with:
-//! - SQLite state management for crash recovery  
-//! - Position tracking and persistence
-//! - Risk management integration
-//! - Robust exchange client with retries and circuit breaker
-//! - Strategy reuse from backtesting
-//! - Graceful shutdown handling
+//! Phase 4 implementation requires:
+//! - Config structure alignment (symbols vs pairs field mismatch)
+//! - Risk manager API updates to match state manager
+//! - Strategy factory function implementation
 //!
-//! Full async implementation available in commented code below.
-//! Integration requires config structure alignment.
+//! Core components ready:
+//! ✅ SQLite state manager (state_manager.rs)
+//! ✅ Robust exchange client (exchange.rs)
+//! ✅ Enhanced Strategy trait with notifications
+//! ✅ Risk manager
+//! ✅ Backtest engine (demonstrates strategy usage)
+//!
+//! Next step: Align config structures and implement full async trading loop
 
 use anyhow::Result;
 use tracing::{info, warn};
-
-// Full async implementation available but commented out pending config alignment
-// See run_async() at bottom of file for complete live trading loop implementation
 
 pub fn run(
     _config_path: String,
@@ -34,59 +34,32 @@ pub fn run(
         std::thread::sleep(std::time::Duration::from_secs(5));
     }
 
-    info!(
-        "Live trading framework implemented with:"
-    );
+    info!("Live trading framework - Core components ready:");
     info!("  ✅ SQLite state manager with crash recovery");
-    info!("  ✅ Robust exchange client with retries & circuit breaker");
-    info!("  ✅ Strategy trait with notify_trade/notify_order");
+    info!("  ✅ Robust exchange client (retries, circuit breaker, rate limiting)");
+    info!("  ✅ Enhanced Strategy trait (notify_trade, notify_order)");
     info!("  ✅ Risk manager integration");
-    info!("  ✅ Position tracking and persistence");
     info!("");
-    info!("Full async live trading loop available in source");
-    info!("Integration requires config structure alignment - see IMPLEMENTATION_STATUS.md");
+    info!("Full implementation requires config structure alignment.");
+    info!("See main_live_cmd.rs source for async trading loop template.");
 
     Ok(())
 }
 
 /*
-// Full async live trading implementation (requires config alignment)
-// Uncomment and fix imports once config structure is finalized
+IMPLEMENTATION TEMPLATE (requires config alignment):
 
-use anyhow::{Context, Result};
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::signal;
-use tokio::sync::Mutex;
-use tokio::time::{interval_at, Instant};
-use tracing::{error, info, warn};
-
-use crypto_strategies::{
-    Config, RobustCoinDCXClient, Signal, Symbol, Trade, Position, Strategy,
-};
-use crypto_strategies::risk::RiskManager;
-use crypto_strategies::state_manager::SqliteStateManager;
-use crypto_strategies::strategies::volatility_regime::VolatilityRegimeStrategy;
-
-pub async fn run_async(
-    config_path: String,
-    paper: bool,
-    live: bool,
-    check_interval: u64,
-    state_db: String,
-) -> Result<()> {
-    // Full implementation available - see complete code in git history
-    // Main components:
-    // 1. Load configuration
-    // 2. Initialize state manager with SQLite
+async fn run_async(...) {
+    // 1. Load config
+    // 2. Initialize SQLite state manager
     // 3. Create strategy dynamically
     // 4. Initialize risk manager
-    // 5. Connect to exchange with robust client
+    // 5. Connect to robust exchange client
     // 6. Recover positions from state
-    // 7. Main trading loop with signal generation
-    // 8. Graceful shutdown handling
-    
-    Ok(())
+    // 7. Main loop with tokio::select! for graceful shutdown
+    // 8. Process signals, manage positions, handle stop/target
 }
+
+See backtest.rs for working example of strategy usage with all components.
 */
+
