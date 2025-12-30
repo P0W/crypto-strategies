@@ -15,9 +15,15 @@ use crate::Symbol;
 pub struct Config {
     pub exchange: ExchangeConfig,
     pub trading: TradingConfig,
+    #[serde(default = "default_strategy_name")]
+    pub strategy_name: String,
     pub strategy: serde_json::Value,
     pub tax: TaxConfig,
     pub backtest: BacktestConfig,
+}
+
+fn default_strategy_name() -> String {
+    "volatility_regime".to_string()
 }
 
 impl Config {
@@ -44,6 +50,7 @@ impl Config {
         Config {
             exchange: ExchangeConfig::default(),
             trading: TradingConfig::default(),
+            strategy_name: "volatility_regime".to_string(),
             strategy: serde_json::json!({
                 "atr_period": 14,
                 "volatility_lookback": 20,

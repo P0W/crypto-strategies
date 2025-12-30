@@ -15,6 +15,10 @@ struct Args {
     #[arg(short, long, default_value = "configs/btc_eth_sol_bnb_xrp_1d.json")]
     config: String,
 
+    /// Strategy name (overrides config file)
+    #[arg(short, long)]
+    strategy: Option<String>,
+
     /// Initial capital
     #[arg(long)]
     capital: Option<f64>,
@@ -43,6 +47,11 @@ fn main() -> Result<()> {
     // Load configuration
     let mut config = Config::from_file(&args.config)?;
 
+    // Override strategy if provided via CLI
+    if let Some(strategy) = &args.strategy {
+        config.strategy_name = strategy.clone();
+    }
+
     if let Some(capital) = args.capital {
         config.trading.initial_capital = capital;
     }
@@ -65,8 +74,16 @@ fn main() -> Result<()> {
 
     log::info!("Loaded data for {} symbols", data.len());
 
-    // Create strategy using the strategy module's utility
-    let strategy = Box::new(volatility_regime::create_strategy_from_config(&config)?);
+    // Create strategy based on config
+    let strategy: Box<dyn crypto_strategies::Strategy> = match config.strategy_name.as_str() {
+        "volatility_regime" => {
+            Box::new(volatility_regime::create_strategy_from_config(&config)?)
+        }
+        other => {
+            anyhow::bail!("Unknown strategy: {}. Available strategies: volatility_regime", other)
+        }
+    };
+    
     let mut backtester = Backtester::new(config.clone(), strategy);
 
     log::info!("Running backtest...");

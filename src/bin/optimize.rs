@@ -48,38 +48,55 @@ fn main() -> Result<()> {
 
     log::info!("Loaded data for {} symbols", data.len());
 
-    // Create parameter grid
-    let grid_params = match args.mode.as_str() {
-        "full" => GridParams::full(),
-        "quick" | _ => GridParams::quick(),
-    };
+    // Determine strategy and create appropriate parameter grid
+    let (configs, strategy_factory): (Vec<Config>, Box<dyn Fn(&Config) -> Box<dyn crypto_strategies::Strategy> + Send + Sync>) = 
+        match config.strategy_name.as_str() {
+            "volatility_regime" => {
+                // Create parameter grid
+                let grid_params = match args.mode.as_str() {
+                    "full" => GridParams::full(),
+                    "quick" | _ => GridParams::quick(),
+                };
 
-    log::info!("Grid will test {} combinations", grid_params.total_combinations());
+                log::info!("Grid will test {} combinations", grid_params.total_combinations());
 
-    // Generate all configs from grid
-    let configs = volatility_regime::generate_configs(&config, &grid_params);
+                // Generate all configs from grid
+                let configs = volatility_regime::generate_configs(&config, &grid_params);
+                
+                let factory: Box<dyn Fn(&Config) -> Box<dyn crypto_strategies::Strategy> + Send + Sync> = 
+                    Box::new(|cfg: &Config| -> Box<dyn crypto_strategies::Strategy> {
+                        match volatility_regime::create_strategy_from_config(cfg) {
+                            Ok(strategy) => Box::new(strategy),
+                            Err(e) => {
+                                log::error!("Failed to create strategy: {}", e);
+                                panic!("Strategy creation failed");
+                            }
+                        }
+                    });
+                
+                (configs, factory)
+            }
+            other => {
+                anyhow::bail!("Unknown strategy: {}. Available strategies: volatility_regime", other);
+            }
+        };
 
     // Run optimization using the generic optimizer
     let optimizer = Optimizer::new(config.clone());
     log::info!("Starting optimization in {} mode...", args.mode);
     
-    let strategy_factory = |cfg: &Config| -> Box<dyn crypto_strategies::Strategy> {
-        match volatility_regime::create_strategy_from_config(cfg) {
-            Ok(strategy) => Box::new(strategy),
-            Err(e) => {
-                log::error!("Failed to create strategy: {}", e);
-                panic!("Strategy creation failed");
-            }
-        }
-    };
-    
     let mut results = optimizer.optimize(data, configs.clone(), strategy_factory);
 
-    // Add parameter information to results
-    for (i, result) in results.iter_mut().enumerate() {
-        if let Ok(vr_config) = serde_json::from_value::<volatility_regime::VolatilityRegimeConfig>(configs[i].strategy.clone()) {
-            result.params = volatility_regime::config_to_params(&vr_config);
+    // Add parameter information to results based on strategy
+    match config.strategy_name.as_str() {
+        "volatility_regime" => {
+            for (i, result) in results.iter_mut().enumerate() {
+                if let Ok(vr_config) = serde_json::from_value::<volatility_regime::VolatilityRegimeConfig>(configs[i].strategy.clone()) {
+                    result.params = volatility_regime::config_to_params(&vr_config);
+                }
+            }
         }
+        _ => {}
     }
 
     // Sort results
