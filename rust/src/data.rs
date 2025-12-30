@@ -1,7 +1,8 @@
 //! Data loading and management
 //!
 //! Handles loading OHLCV data from CSV files and live data fetching from exchange APIs.
-//! Similar to Python's data_fetcher.py
+//! Supports both Binance (default) and CoinDCX data sources.
+//! Similar to Python's data_fetcher.py and download_binance_data.py
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
@@ -11,6 +12,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
+use crate::binance::{self, BinanceClient};
 use crate::coindcx::{self, CoinDCXClient};
 use crate::{Candle, Symbol};
 
@@ -18,10 +20,39 @@ use crate::{Candle, Symbol};
 // Constants
 // =============================================================================
 
-/// Valid intervals for CoinDCX
+/// Valid intervals (compatible with both Binance and CoinDCX)
 pub const INTERVALS: &[&str] = &[
     "1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "1d", "3d", "1w", "1M",
 ];
+
+/// Data source enum for selecting exchange
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DataSource {
+    #[default]
+    Binance,
+    CoinDCX,
+}
+
+impl std::str::FromStr for DataSource {
+    type Err = String;
+    
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "binance" => Ok(DataSource::Binance),
+            "coindcx" => Ok(DataSource::CoinDCX),
+            _ => Err(format!("Unknown data source: {}. Use 'binance' or 'coindcx'", s)),
+        }
+    }
+}
+
+impl std::fmt::Display for DataSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DataSource::Binance => write!(f, "binance"),
+            DataSource::CoinDCX => write!(f, "coindcx"),
+        }
+    }
+}
 
 // =============================================================================
 // Candle Conversion
@@ -37,6 +68,20 @@ impl From<coindcx::types::Candle> for Candle {
             low: c.low,
             close: c.close,
             volume: c.volume,
+        }
+    }
+}
+
+/// Convert from Binance kline to internal Candle type
+impl From<binance::BinanceKline> for Candle {
+    fn from(k: binance::BinanceKline) -> Self {
+        Candle {
+            datetime: DateTime::from_timestamp_millis(k.open_time).unwrap_or_else(Utc::now),
+            open: k.open,
+            high: k.high,
+            low: k.low,
+            close: k.close,
+            volume: k.volume,
         }
     }
 }
@@ -131,6 +176,80 @@ pub fn load_multi_symbol(
     }
 
     Ok(data)
+}
+
+/// Check which data files are missing for given symbols and timeframes
+pub fn find_missing_data(
+    data_dir: impl AsRef<Path>,
+    symbols: &[Symbol],
+    timeframes: &[String],
+) -> Vec<(Symbol, String)> {
+    let mut missing = Vec::new();
+    let data_dir = data_dir.as_ref();
+
+    for symbol in symbols {
+        for timeframe in timeframes {
+            let filename = format!("{}_{}.csv", symbol.as_str(), timeframe);
+            let path = data_dir.join(&filename);
+
+            if !path.exists() {
+                missing.push((symbol.clone(), timeframe.clone()));
+            }
+        }
+    }
+
+    missing
+}
+
+/// Ensure data exists for all symbols and timeframes, fetching missing data if needed
+/// Returns list of symbols/timeframes that couldn't be fetched
+pub async fn ensure_data_available(
+    data_dir: impl AsRef<Path>,
+    symbols: &[Symbol],
+    timeframes: &[String],
+    days_back: u32,
+) -> Result<Vec<(Symbol, String)>> {
+    let data_dir = data_dir.as_ref();
+    let missing = find_missing_data(data_dir, symbols, timeframes);
+    
+    if missing.is_empty() {
+        info!("All data files present");
+        return Ok(Vec::new());
+    }
+
+    info!(
+        "Found {} missing data files, fetching from CoinDCX...",
+        missing.len()
+    );
+
+    let fetcher = CoinDCXDataFetcher::new(data_dir);
+    let mut failed = Vec::new();
+
+    for (symbol, timeframe) in &missing {
+        info!("Fetching {} {}...", symbol.as_str(), timeframe);
+        match fetcher.download_pair(symbol.as_str(), timeframe, days_back).await {
+            Ok(path) => {
+                info!("  ✓ Downloaded to {}", path.display());
+            }
+            Err(e) => {
+                warn!("  ✗ Failed to fetch {} {}: {}", symbol.as_str(), timeframe, e);
+                failed.push((symbol.clone(), timeframe.clone()));
+            }
+        }
+    }
+
+    Ok(failed)
+}
+
+/// Synchronous wrapper for ensure_data_available
+pub fn ensure_data_available_sync(
+    data_dir: impl AsRef<Path>,
+    symbols: &[Symbol],
+    timeframes: &[String],
+    days_back: u32,
+) -> Result<Vec<(Symbol, String)>> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(ensure_data_available(data_dir, symbols, timeframes, days_back))
 }
 
 // =============================================================================
@@ -298,6 +417,128 @@ impl CoinDCXDataFetcher {
 
         let filename = format!("{}_{}.csv", symbol_name, interval);
         self.save_to_csv(&candles, &filename)
+    }
+}
+
+// =============================================================================
+// Binance Data Fetcher (default, no API key required)
+// =============================================================================
+
+/// Fetch historical OHLCV data from Binance API
+///
+/// This fetcher uses the public Binance API which doesn't require authentication.
+/// Data is downloaded in USDT pairs and saved with INR suffix to maintain
+/// compatibility with the existing file naming convention.
+pub struct BinanceDataFetcher {
+    client: BinanceClient,
+    pub data_dir: PathBuf,
+}
+
+impl BinanceDataFetcher {
+    /// Create a new Binance data fetcher
+    pub fn new(data_dir: impl AsRef<Path>) -> Self {
+        let data_dir = data_dir.as_ref().to_path_buf();
+        std::fs::create_dir_all(&data_dir).ok();
+
+        BinanceDataFetcher {
+            client: BinanceClient::new(),
+            data_dir,
+        }
+    }
+
+    /// Convert symbol to Binance pair format
+    /// E.g., "BTC" or "BTCINR" -> "BTCUSDT"
+    pub fn to_pair(&self, symbol: &str) -> String {
+        self.client.to_binance_pair(symbol)
+    }
+
+    /// Fetch candles from Binance
+    pub async fn fetch_candles(
+        &self,
+        symbol: &str,
+        interval: &str,
+        limit: Option<u32>,
+    ) -> Result<Vec<Candle>> {
+        let binance_pair = self.to_pair(symbol);
+        let klines = self.client.get_klines(&binance_pair, interval, None, None, limit).await?;
+        Ok(klines.into_iter().map(Candle::from).collect())
+    }
+
+    /// Fetch full historical data
+    pub async fn fetch_full_history(
+        &self,
+        symbol: &str,
+        interval: &str,
+        days_back: u32,
+    ) -> Result<Vec<Candle>> {
+        let klines = self.client.fetch_full_history(symbol, interval, days_back).await?;
+        Ok(klines.into_iter().map(Candle::from).collect())
+    }
+
+    /// Save candles to CSV file
+    pub fn save_to_csv(&self, candles: &[Candle], filename: &str) -> Result<PathBuf> {
+        let filepath = self.data_dir.join(filename);
+        let mut file = File::create(&filepath).context("Failed to create output file")?;
+
+        writeln!(file, "datetime,open,high,low,close,volume")?;
+
+        for candle in candles {
+            writeln!(
+                file,
+                "{},{},{},{},{},{}",
+                candle.datetime.format("%Y-%m-%d %H:%M:%S"),
+                candle.open,
+                candle.high,
+                candle.low,
+                candle.close,
+                candle.volume
+            )?;
+        }
+
+        info!("Saved {} rows to {}", candles.len(), filepath.display());
+        Ok(filepath)
+    }
+
+    /// Download historical data for a symbol and save to CSV
+    /// Uses INR suffix in filename to maintain compatibility with existing data files
+    pub async fn download_pair(
+        &self,
+        symbol: &str,
+        interval: &str,
+        days_back: u32,
+    ) -> Result<PathBuf> {
+        let candles = self.fetch_full_history(symbol, interval, days_back).await?;
+
+        if candles.is_empty() {
+            anyhow::bail!("No data fetched for {}", symbol);
+        }
+
+        // Extract base symbol and add INR suffix for filename compatibility
+        let base = symbol
+            .trim()
+            .to_uppercase()
+            .replace("INR", "")
+            .replace("USDT", "");
+        let symbol_name = format!("{}INR", base);
+
+        let filename = format!("{}_{}.csv", symbol_name, interval);
+        self.save_to_csv(&candles, &filename)
+    }
+
+    /// Download multiple timeframes for a symbol
+    pub async fn download_symbol(
+        &self,
+        symbol: &str,
+        timeframes: &[&str],
+        days_back: u32,
+    ) -> Vec<Result<PathBuf>> {
+        let mut results = Vec::new();
+        
+        for tf in timeframes {
+            results.push(self.download_pair(symbol, tf, days_back).await);
+        }
+        
+        results
     }
 }
 

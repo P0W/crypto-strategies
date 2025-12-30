@@ -12,7 +12,7 @@ pub mod utils;
 pub use config::VolatilityRegimeConfig;
 pub use grid_params::GridParams;
 pub use strategy::VolatilityRegimeStrategy;
-pub use utils::{config_to_params, create_strategy_from_config};
+pub use utils::{config_to_params, create_strategy_from_config, format_params};
 
 /// Market volatility regime
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -4,7 +4,7 @@
 //! - backtest: Run strategy backtests
 //! - optimize: Run parameter optimization
 //! - live: Run live trading (paper or real)
-//! - download: Download historical data from CoinDCX
+//! - download: Download historical data from Binance (default) or CoinDCX
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -149,23 +149,27 @@ enum Commands {
         state_db: String,
     },
 
-    /// Download historical data from CoinDCX
+    /// Download historical data from Binance (default) or CoinDCX
     Download {
-        /// Trading pairs to download (comma-separated). E.g., "BTCINR,ETHINR,SOLINR"
-        #[arg(short, long, default_value = "BTCINR,ETHINR,SOLINR,BNBINR,XRPINR")]
-        pairs: String,
+        /// Symbols to download (comma-separated). E.g., "BTC,ETH,SOL,BNB,XRP"
+        #[arg(short, long, default_value = "BTC,ETH,SOL,BNB,XRP")]
+        symbols: String,
 
-        /// Timeframe interval. E.g., "1h", "4h", "1d"
-        #[arg(short, long, default_value = "1d")]
-        interval: String,
+        /// Timeframe intervals (comma-separated). E.g., "1h,4h,1d"
+        #[arg(short, long, default_value = "5m,15m,1h,4h,1d")]
+        timeframes: String,
 
         /// Number of days of history to fetch
-        #[arg(short, long, default_value = "1000")]
+        #[arg(short, long, default_value = "180")]
         days: u32,
 
         /// Output directory
         #[arg(short, long, default_value = "data")]
         output: String,
+
+        /// Data source: "binance" (default) or "coindcx"
+        #[arg(long, default_value = "binance")]
+        source: String,
     },
 }
 
@@ -310,10 +314,17 @@ fn main() -> Result<()> {
         } => commands::live::run(config, paper, live, interval, state_db),
 
         Commands::Download {
-            pairs,
-            interval,
+            symbols,
+            timeframes,
             days,
             output,
-        } => commands::download::run(pairs, interval, days, output),
+            source,
+        } => {
+            let data_source = source.parse().unwrap_or_else(|e| {
+                eprintln!("Warning: {}, using binance", e);
+                crypto_strategies::data::DataSource::Binance
+            });
+            commands::download::run(symbols, timeframes, days, output, data_source)
+        }
     }
 }

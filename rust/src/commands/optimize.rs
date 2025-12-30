@@ -1,12 +1,12 @@
 //! Optimize command implementation with progress tracking and custom parameter support
 
 use anyhow::Result;
-use crypto_strategies::strategies::volatility_regime::{self, GridParams};
-use crypto_strategies::{data, optimizer::OptimizationResult, Config, Strategy, Symbol};
+use crypto_strategies::strategies::{self, volatility_regime::GridParams};
+use crypto_strategies::{data, optimizer::OptimizationResult, Config, Symbol};
 use indicatif::{ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tracing::info;
@@ -133,6 +133,52 @@ pub fn run(
     info!("Timeframes to test: {:?}", timeframes_to_test);
     info!("Strategy: {}", config.strategy_name);
 
+    // Collect all unique symbols across all groups
+    let all_symbols: Vec<Symbol> = symbol_groups
+        .iter()
+        .flatten()
+        .map(|s| Symbol(s.clone()))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    // Check for missing data and fetch if needed
+    info!("Checking for missing data files...");
+    let missing = data::find_missing_data(&config.backtest.data_dir, &all_symbols, &timeframes_to_test);
+    
+    if !missing.is_empty() {
+        println!("\n{}", "=".repeat(60));
+        println!("FETCHING MISSING DATA");
+        println!("{}", "=".repeat(60));
+        println!("  Missing files: {}", missing.len());
+        for (sym, tf) in &missing {
+            println!("    - {}_{}.csv", sym.as_str(), tf);
+        }
+        println!("{}\n", "=".repeat(60));
+
+        // Fetch missing data (default 365 days)
+        match data::ensure_data_available_sync(
+            &config.backtest.data_dir,
+            &all_symbols,
+            &timeframes_to_test,
+            365,
+        ) {
+            Ok(failed) => {
+                if !failed.is_empty() {
+                    println!("  ⚠ Could not fetch {} files:", failed.len());
+                    for (sym, tf) in &failed {
+                        println!("    - {}_{}.csv", sym.as_str(), tf);
+                    }
+                } else {
+                    println!("  ✓ All missing data fetched successfully\n");
+                }
+            }
+            Err(e) => {
+                println!("  ⚠ Error fetching data: {}\n", e);
+            }
+        }
+    }
+
     // Check if any custom params were provided
     let has_custom = adx_parsed.is_some()
         || stop_atr_parsed.is_some()
@@ -142,22 +188,27 @@ pub fn run(
         || atr_period_parsed.is_some();
 
     // Build grid params based on mode and CLI overrides
-    let grid_params = if mode == "custom" || has_custom {
-        GridParams::custom(
+    // For volatility_regime with custom params, use custom grid
+    // For other strategies or no custom params, use generic grid generation
+    let use_custom_vr_grid = has_custom && config.strategy_name == "volatility_regime";
+    let vr_grid_params = if use_custom_vr_grid {
+        Some(GridParams::custom(
             atr_period_parsed.unwrap_or_else(|| vec![14]),
             ema_fast_parsed.unwrap_or_else(|| vec![8, 13]),
             ema_slow_parsed.unwrap_or_else(|| vec![21, 34]),
             adx_parsed.unwrap_or_else(|| vec![25.0, 30.0]),
             stop_atr_parsed.unwrap_or_else(|| vec![2.0, 2.5]),
             target_atr_parsed.unwrap_or_else(|| vec![4.0, 5.0]),
-        )
-    } else if mode == "full" {
-        GridParams::full()
+        ))
     } else {
-        GridParams::quick()
+        None
     };
 
-    let total_param_combinations = grid_params.total_combinations();
+    let total_param_combinations = if let Some(ref grid) = vr_grid_params {
+        grid.total_combinations()
+    } else {
+        strategies::get_grid_combinations(&config.strategy_name, &mode)
+    };
     info!("Optimization mode: {}", mode);
     info!("Parameter combinations: {}", total_param_combinations);
 
@@ -199,7 +250,11 @@ pub fn run(
     // Generate all (task, param_config) combinations
     let mut all_runs: Vec<(OptTask, Config)> = Vec::new();
     for task in &tasks {
-        let configs = grid_params.generate_configs(&task.config);
+        let configs = if let Some(ref grid) = vr_grid_params {
+            grid.generate_configs(&task.config)
+        } else {
+            strategies::generate_grid_configs(&task.config, &mode)
+        };
         for cfg in configs {
             all_runs.push((task.clone(), cfg));
         }
@@ -238,11 +293,16 @@ pub fn run(
     pb.set_style(
         ProgressStyle::default_bar()
             .template(
-                "⚡ {percent:>3}%|{bar:40}| {pos}/{len} [{elapsed}<{eta}, {per_sec:.2}] ✓ {msg}",
+                "⚡ {percent:>3}%|{bar:40}| {pos}/{len} [{elapsed}<{eta}, {per_sec}] ✓ {msg}",
             )
             .unwrap()
             .progress_chars("█░ "),
     );
+    // Force initial draw so user sees progress immediately
+    pb.set_message("starting...");
+    pb.tick();
+
+    println!("Running backtests (this may take a while for large datasets)...\n");
 
     let valid_count = Arc::new(AtomicUsize::new(0));
     let valid_count_clone = valid_count.clone();
@@ -319,22 +379,22 @@ pub fn run(
             "N/A"
         };
 
-        let tf = match *result.params.get("_timeframe").unwrap_or(&0.0) as i32 {
-            1 => "1h",
-            4 => "4h",
-            24 => "1d",
-            _ => "?",
+        let tf_val = *result.params.get("_timeframe").unwrap_or(&0.0);
+        let tf = if (tf_val - 0.083).abs() < 0.01 {
+            "5m"
+        } else if (tf_val - 0.25).abs() < 0.01 {
+            "15m"
+        } else if (tf_val - 1.0).abs() < 0.01 {
+            "1h"
+        } else if (tf_val - 4.0).abs() < 0.01 {
+            "4h"
+        } else if (tf_val - 24.0).abs() < 0.01 {
+            "1d"
+        } else {
+            "?"
         };
 
-        let params_str = format!(
-            "ATR:{} EMA:{}/{} ADX:{} Stop:{:.1} Tgt:{:.1}",
-            *result.params.get("atr_period").unwrap_or(&0.0) as usize,
-            *result.params.get("ema_fast").unwrap_or(&0.0) as usize,
-            *result.params.get("ema_slow").unwrap_or(&0.0) as usize,
-            result.params.get("adx_threshold").unwrap_or(&0.0),
-            result.params.get("stop_atr_multiple").unwrap_or(&0.0),
-            result.params.get("target_atr_multiple").unwrap_or(&0.0),
-        );
+        let params_str = strategies::format_params(&result.params, &config.strategy_name);
 
         println!(
             "{:<4} {:>7.2} {:>9.2} {:>8.2} {:>8.2} {:>6} | {:<15} {:>3} | {}",
@@ -381,22 +441,23 @@ fn run_single_backtest(
         _ => return None,
     };
 
-    let strategy: Box<dyn Strategy> = match param_config.strategy_name.as_str() {
-        "volatility_regime" => match volatility_regime::create_strategy_from_config(param_config) {
-            Ok(s) => Box::new(s),
-            Err(_) => return None,
-        },
-        _ => return None,
+    // Use generic strategy factory
+    let strategy = match strategies::create_strategy(param_config) {
+        Ok(s) => s,
+        Err(_) => return None,
     };
 
     let mut backtester = Backtester::new(param_config.clone(), strategy);
     let result = backtester.run(data);
 
+    // Build params with metadata and strategy-specific params
     let mut params: HashMap<String, f64> = HashMap::new();
     params.insert("_group_idx".to_string(), task.group_idx as f64);
     params.insert(
         "_timeframe".to_string(),
         match task.timeframe.as_str() {
+            "5m" => 0.083,
+            "15m" => 0.25,
             "1h" => 1.0,
             "4h" => 4.0,
             "1d" => 24.0,
@@ -404,12 +465,9 @@ fn run_single_backtest(
         },
     );
 
-    if let Ok(vr_config) = serde_json::from_value::<volatility_regime::VolatilityRegimeConfig>(
-        param_config.strategy.clone(),
-    ) {
-        for (k, v) in volatility_regime::config_to_params(&vr_config) {
-            params.insert(k, v);
-        }
+    // Use generic param extraction
+    for (k, v) in strategies::extract_params(param_config) {
+        params.insert(k, v);
     }
 
     Some(OptimizationResult {

@@ -1,8 +1,8 @@
 //! Backtest command implementation
 
 use anyhow::Result;
-use crypto_strategies::strategies::volatility_regime;
-use crypto_strategies::{backtest::Backtester, data, Config, Strategy};
+use crypto_strategies::strategies;
+use crypto_strategies::{backtest::Backtester, data, Config};
 use tracing::{debug, info};
 
 pub fn run(
@@ -44,6 +44,44 @@ pub fn run(
     let symbols = config.trading.symbols();
     debug!("Symbols: {:?}", symbols);
 
+    // Check for missing data and fetch if needed
+    let timeframes = vec![config.trading.timeframe.clone()];
+    let missing = data::find_missing_data(&config.backtest.data_dir, &symbols, &timeframes);
+    
+    if !missing.is_empty() {
+        println!("\n{}", "=".repeat(60));
+        println!("FETCHING MISSING DATA");
+        println!("{}", "=".repeat(60));
+        println!("  Missing files: {}", missing.len());
+        for (sym, tf) in &missing {
+            println!("    - {}_{}.csv", sym.as_str(), tf);
+        }
+        println!("{}\n", "-".repeat(60));
+
+        // Fetch missing data (default 365 days)
+        match data::ensure_data_available_sync(
+            &config.backtest.data_dir,
+            &symbols,
+            &timeframes,
+            365,
+        ) {
+            Ok(failed) => {
+                if !failed.is_empty() {
+                    println!("  ⚠ Could not fetch {} files:", failed.len());
+                    for (sym, tf) in &failed {
+                        println!("    - {}_{}.csv", sym.as_str(), tf);
+                    }
+                } else {
+                    println!("  ✓ All missing data fetched successfully");
+                }
+            }
+            Err(e) => {
+                println!("  ⚠ Error fetching data: {}", e);
+            }
+        }
+        println!("{}\n", "=".repeat(60));
+    }
+
     let data = data::load_multi_symbol(
         &config.backtest.data_dir,
         &symbols,
@@ -54,15 +92,7 @@ pub fn run(
 
     // Create strategy based on config
     info!("Creating strategy: {}", config.strategy_name);
-    let strategy: Box<dyn Strategy> = match config.strategy_name.as_str() {
-        "volatility_regime" => Box::new(volatility_regime::create_strategy_from_config(&config)?),
-        other => {
-            anyhow::bail!(
-                "Unknown strategy: {}. Available strategies: volatility_regime",
-                other
-            )
-        }
-    };
+    let strategy = strategies::create_strategy(&config)?;
 
     let mut backtester = Backtester::new(config.clone(), strategy);
 

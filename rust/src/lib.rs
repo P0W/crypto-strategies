@@ -4,11 +4,26 @@
 //! featuring volatility-based strategies, comprehensive backtesting, and
 //! parameter optimization.
 //!
-//! # CoinDCX API Library
+//! # Exchange API Libraries
 //!
-//! This crate includes a standalone, production-grade CoinDCX API client
-//! with circuit breaker, rate limiting, and retry logic.
+//! This crate includes standalone API clients for:
+//! - **Binance** (default): Public market data, no API key required
+//! - **CoinDCX**: Full trading support with circuit breaker and rate limiting
 //!
+//! ## Binance Example (Market Data)
+//! ```no_run
+//! use crypto_strategies::binance::BinanceClient;
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     let client = BinanceClient::new();
+//!     let klines = client.get_klines("BTCUSDT", "1h", None, None, Some(100)).await?;
+//!     println!("Fetched {} klines", klines.len());
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## CoinDCX Example (Trading)
 //! ```no_run
 //! use crypto_strategies::coindcx::{CoinDCXClient, OrderRequest, OrderSide};
 //!
@@ -22,6 +37,7 @@
 //! ```
 
 pub mod backtest;
+pub mod binance;
 pub mod coindcx;
 pub mod config;
 pub mod data;
@@ -36,5 +52,6 @@ pub use config::Config;
 pub use strategies::Strategy;
 pub use types::*;
 
-// Re-export CoinDCX client for convenience
+// Re-export exchange clients for convenience
+pub use binance::BinanceClient;
 pub use coindcx::{ClientConfig, CoinDCXClient};
