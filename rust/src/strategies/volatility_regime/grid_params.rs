@@ -18,14 +18,15 @@ pub struct GridParams {
 
 impl GridParams {
     /// Quick grid for faster optimization
+    /// Tests indicator periods + risk params (more comprehensive than Python)
     pub fn quick() -> Self {
         GridParams {
             atr_periods: vec![14],
             ema_fast_periods: vec![8, 13],
             ema_slow_periods: vec![21, 34],
-            adx_thresholds: vec![25.0, 30.0],
-            stop_atr_multiples: vec![2.0, 2.5],
-            target_atr_multiples: vec![4.0, 5.0],
+            adx_thresholds: vec![20.0, 25.0, 30.0],
+            stop_atr_multiples: vec![2.0, 2.5, 3.0],
+            target_atr_multiples: vec![4.0, 5.0, 6.0],
         }
     }
 

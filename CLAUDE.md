@@ -38,19 +38,29 @@ crypto-strategies/
 
 ## Build & Run Commands
 
+### Development Preferences
+
+**IMPORTANT**: During development, use **debug builds** (no `--release` flag) for faster compilation. Only use `--release` when explicitly asked or for final performance testing.
+
 ### Rust Implementation
 
 ```bash
 cd rust
 
-# Build
+# Build (debug - default for development)
+cargo build
+
+# Build (release - only when explicitly requested)
 cargo build --release
 
-# Run backtest
+# Run backtest (debug - use during development)
+cargo run -- backtest --config ../configs/sample_config.json
+
+# Run backtest (release - only for performance testing)
 cargo run --release -- backtest --config ../configs/sample_config.json
 
-# Run optimization
-cargo run --release -- optimize --mode quick
+# Run optimization (debug)
+cargo run -- optimize --mode quick
 
 # Run tests
 cargo test
@@ -116,6 +126,15 @@ All Rust source files are in `rust/src/`.
 - Multi-symbol support with automatic data alignment
 - Handles stop loss, take profit, and trailing stops
 - Calculates comprehensive metrics: Sharpe, Calmar, max drawdown, win rate, profit factor
+- T+1 execution model: orders placed on day T execute at day T+1's open price
+- Sharpe uses 365 trading days (crypto markets), 5% risk-free rate, sample std dev (n-1)
+
+**Python vs Rust Differences**
+Both implementations produce similar results but may differ slightly due to:
+- Execution timing: Backtrader vs custom Rust engine handle T+1 execution differently
+- Position sizing: Minor differences in equity calculations at order time
+- Order execution: Slippage application and price rounding
+Trade count and direction should match; PnL may vary ~10-30% between implementations.
 
 **Exchange Client** (`rust/src/exchange.rs`)
 - Production-ready CoinDCX API wrapper with:
