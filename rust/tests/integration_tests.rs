@@ -1062,3 +1062,121 @@ fn test_download_and_analyze() {
     println!("OBV: {:.0}", obv.last().unwrap());
     // Cleanup handled by TempDirGuard
 }
+
+/// Integration test: Verify Sharpe ratio calculation uses active returns only
+/// This test ensures we don't regress to including zero-return cash days in volatility,
+/// which would artificially inflate Sharpe by deflating std_dev.
+#[test]
+fn test_sharpe_ratio_excludes_zero_return_days() {
+    use crypto_strategies::backtest::Backtester;
+    use crypto_strategies::config::Config;
+    use crypto_strategies::data::CoinDCXDataFetcher;
+    use crypto_strategies::strategies::volatility_regime::{
+        VolatilityRegimeConfig, VolatilityRegimeStrategy,
+    };
+    use std::collections::HashMap;
+    use std::env::temp_dir;
+
+    let temp_data_dir = temp_dir().join("crypto_test_sharpe");
+    let _guard = TempDirGuard(temp_data_dir.clone());
+    let fetcher = CoinDCXDataFetcher::new(&temp_data_dir);
+
+    // Download enough data for meaningful backtest
+    println!("Downloading BTCINR 1d data for Sharpe test...");
+    let result = fetcher.download_pair("BTCINR", "1d", 1000);
+
+    if let Err(e) = &result {
+        println!("Skipping test - download failed: {}", e);
+        return;
+    }
+
+    let filepath = result.unwrap();
+    let candles = crypto_strategies::data::load_csv(&filepath).unwrap();
+    println!("Downloaded {} candles", candles.len());
+
+    if candles.len() < 100 {
+        println!("Skipping test - insufficient data ({} candles)", candles.len());
+        return;
+    }
+
+    // Create config and strategy with less restrictive params to get more trades
+    let mut config = Config::default();
+    config.trading.initial_capital = 100_000.0;
+    config.trading.risk_per_trade = 0.02;
+
+    let strategy_config = VolatilityRegimeConfig {
+        adx_threshold: 15.0,      // Lower threshold = more signals
+        stop_atr_multiple: 1.5,   // Tighter stop
+        target_atr_multiple: 3.0, // Smaller target = faster exits
+        ..Default::default()
+    };
+    let strategy = VolatilityRegimeStrategy::new(strategy_config);
+
+    // Run backtest
+    let mut backtester = Backtester::new(config, Box::new(strategy));
+    let symbol = Symbol::new("BTCINR");
+    let mut data = HashMap::new();
+    data.insert(symbol.clone(), candles.clone());
+
+    let result = backtester.run(data);
+
+    println!("\n=== Sharpe Ratio Validation ===");
+    println!("Total trades: {}", result.metrics.total_trades);
+    println!("Total return: {:.2}%", result.metrics.total_return);
+    println!("Sharpe ratio: {:.2}", result.metrics.sharpe_ratio);
+    println!("Max drawdown: {:.2}%", result.metrics.max_drawdown);
+
+    // If we have trades, validate Sharpe is realistic
+    if result.metrics.total_trades >= 3 {
+        // For crypto, Sharpe > 3.0 is extremely suspicious
+        // A properly calculated Sharpe using active returns should be realistic
+        assert!(
+            result.metrics.sharpe_ratio < 3.0,
+            "Sharpe ratio {} is suspiciously high! \
+             This may indicate zero-return days are being included in std_dev calculation, \
+             artificially deflating volatility.",
+            result.metrics.sharpe_ratio
+        );
+
+        // Sharpe shouldn't be NaN or infinite
+        assert!(
+            result.metrics.sharpe_ratio.is_finite(),
+            "Sharpe ratio should be finite, got: {}",
+            result.metrics.sharpe_ratio
+        );
+
+        // Calculate equity curve duration in years
+        let duration_days = candles.len() as f64;
+        let duration_years = duration_days / 365.0;
+
+        // Verify we're using a realistic calculation
+        // If Sharpe = (return - rf) / vol, then vol = (return - rf) / sharpe
+        let total_return_decimal = result.metrics.total_return / 100.0;
+        let annualized_return = (1.0 + total_return_decimal).powf(1.0 / duration_years) - 1.0;
+        let risk_free = 0.05; // 5% risk-free rate
+        let excess_return = annualized_return - risk_free;
+
+        println!("Duration: {:.2} years", duration_years);
+        println!("Annualized return: {:.2}%", annualized_return * 100.0);
+        println!("Excess return: {:.2}%", excess_return * 100.0);
+
+        if result.metrics.sharpe_ratio.abs() > 0.1 {
+            let implied_vol = excess_return.abs() / result.metrics.sharpe_ratio.abs();
+            println!("Implied annualized volatility: {:.1}%", implied_vol * 100.0);
+
+            // Crypto volatility should be at least 15% annualized
+            // If implied vol is < 10%, something is wrong with the calculation
+            // (Before the fix, it was showing ~12% which is unrealistic for crypto)
+            assert!(
+                implied_vol > 0.10 || result.metrics.sharpe_ratio.abs() < 0.5,
+                "Implied volatility {:.1}% is too low for crypto. \
+                 This suggests std_dev is being calculated incorrectly (possibly including zero-return days).",
+                implied_vol * 100.0
+            );
+        }
+
+        println!("✓ Sharpe ratio calculation appears correct");
+    } else {
+        println!("Not enough trades ({}) to validate Sharpe ratio", result.metrics.total_trades);
+    }
+}

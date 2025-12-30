@@ -61,6 +61,8 @@ target/
 
 # Data files (add your own data)
 data/*.csv
+py/data/
+rust/data/
 
 # Results
 results/
