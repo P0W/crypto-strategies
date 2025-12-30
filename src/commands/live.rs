@@ -166,11 +166,6 @@ impl LiveTrader {
         for pair in &self.config.trading.pairs {
             let symbol = Symbol::new(pair);
 
-            if self.paper_mode {
-                debug!("Paper mode: would fetch candles for {}", symbol);
-                continue;
-            }
-
             match self.exchange.get_ticker(pair).await {
                 Ok(ticker) => {
                     let price: f64 = ticker.last_price.parse().unwrap_or(0.0);
@@ -183,6 +178,11 @@ impl LiveTrader {
                             close: price,
                             volume: ticker.volume.parse().unwrap_or(0.0),
                         };
+
+                        info!(
+                            "📊 {} price: ₹{:.2} vol: {:.2}",
+                            symbol, price, candle.volume
+                        );
 
                         let cache = self.candle_cache.entry(symbol.clone()).or_default();
                         cache.push(candle);

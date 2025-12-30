@@ -270,8 +270,10 @@ impl RobustCoinDCXClient {
                     .await
                     .context("Failed to fetch ticker")?;
 
+                let text = response.text().await.context("Failed to read response")?;
+
                 let tickers: Vec<Ticker> =
-                    response.json().await.context("Failed to parse ticker")?;
+                    serde_json::from_str(&text).context(format!("Failed to parse ticker JSON"))?;
 
                 tickers
                     .into_iter()
@@ -394,11 +396,83 @@ impl RobustCoinDCXClient {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Ticker {
     pub market: String,
+    #[serde(default, deserialize_with = "deserialize_string_or_number")]
     pub last_price: String,
+    #[serde(default, deserialize_with = "deserialize_string_or_number")]
     pub bid: String,
+    #[serde(default, deserialize_with = "deserialize_string_or_number")]
     pub ask: String,
+    #[serde(default, deserialize_with = "deserialize_string_or_number")]
     pub volume: String,
+    #[serde(default)]
     pub timestamp: i64,
+    #[serde(default)]
+    pub change_24_hour: Option<String>,
+    #[serde(default)]
+    pub high: Option<String>,
+    #[serde(default)]
+    pub low: Option<String>,
+}
+
+fn deserialize_string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct StringOrNumber;
+
+    impl<'de> de::Visitor<'de> for StringOrNumber {
+        type Value = String;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or a number")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(v.to_string())
+        }
+
+        fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(v)
+        }
+
+        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(v.to_string())
+        }
+
+        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(v.to_string())
+        }
+
+        fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(v.to_string())
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            Ok(String::new())
+        }
+    }
+
+    deserializer.deserialize_any(StringOrNumber)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -70,3 +70,4 @@ configs/archive/
 # Added by cargo
 
 /target
+trading_state.*
