@@ -1,3 +1,7 @@
+# ============================================
+# Python
+# ============================================
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -29,6 +33,19 @@ wheels/
 venv/
 ENV/
 env/
+py/.venv/
+
+# ============================================
+# Rust
+# ============================================
+
+# Cargo build output
+rust/target/
+target/
+
+# ============================================
+# Shared / Common
+# ============================================
 
 # Environment variables
 .env
@@ -44,6 +61,8 @@ env/
 
 # Data files (add your own data)
 data/*.csv
+py/data/
+rust/data/
 
 # Results
 results/
@@ -55,6 +74,7 @@ logs/
 # State persistence (SQLite + JSON)
 state/
 *.db
+trading_state.*
 
 # OS
 .DS_Store
@@ -64,4 +84,6 @@ Thumbs.db
 *.pkl
 *.pickle
 
+# Config archives
 configs/archive/
+.claude/

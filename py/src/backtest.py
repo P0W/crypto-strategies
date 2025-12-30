@@ -26,10 +26,12 @@ class TaxAwareCommission(bt.CommInfoBase):
 
     - 0.1% fee per trade (maker/taker)
     - 30% tax on profits (applied at portfolio level, not per-trade)
+    
+    NOTE: Backtrader divides COMM_PERC by 100, so we use 0.1 to get 0.1%
     """
 
     params = (
-        ("commission", 0.001),  # 0.1% per trade
+        ("commission", 0.1),  # 0.1% per trade (Backtrader divides by 100)
         ("stocklike", True),
         ("commtype", bt.CommInfoBase.COMM_PERC),
     )
@@ -235,6 +237,16 @@ def run_backtest(
 
     # Set commission
     cerebro.broker.addcommissioninfo(TaxAwareCommission())
+    
+    # Set slippage (0.1% assumed slippage on each trade)
+    # This models realistic market impact and execution costs
+    cerebro.broker.set_slippage_perc(
+        perc=config.exchange.assumed_slippage,
+        slip_open=True,   # Apply to market orders at open
+        slip_limit=False,  # Don't apply to limit orders
+        slip_match=True,   # Apply when price matches
+        slip_out=True      # Apply on exit orders
+    )
 
     # Add strategy with params from unified config
     strategy_params = config.get_strategy_params()
@@ -385,10 +397,10 @@ def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description="Run backtest for CoinDCX strategy")
     parser.add_argument("--config", type=str, help="Path to config file")
-    parser.add_argument("--data-dir", type=str, default="data", help="Data directory")
+    parser.add_argument("--data-dir", type=str, default=None, help="Data directory (overrides config)")
     parser.add_argument("--start", type=str, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", type=str, help="End date (YYYY-MM-DD)")
-    parser.add_argument("--capital", type=float, default=100000, help="Initial capital")
+    parser.add_argument("--capital", type=float, default=None, help="Initial capital (overrides config)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     parser.add_argument("--chart", action="store_true", help="Generate trade visualization charts")
     parser.add_argument(

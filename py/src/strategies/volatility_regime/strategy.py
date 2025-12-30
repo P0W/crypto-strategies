@@ -275,6 +275,7 @@ class CoinDCXStrategy(bt.Strategy):
         self._validate_params()
 
         self.orders = {}  # Track pending orders per data
+        self.pending_close = {}  # Track pending close orders to prevent duplicates
         self.entry_prices = {}  # Track entry prices
         self.stop_prices = {}  # Track stop prices
         self.target_prices = {}  # Track target prices
@@ -486,8 +487,12 @@ class CoinDCXStrategy(bt.Strategy):
         if self.getposition(data).size == 0:
             return False
 
-        ind = self.indicators[data._name]
+        # Skip if there's already a pending order (prevents duplicate sells)
         name = data._name
+        if name in self.orders and self.orders[name]:
+            return False
+
+        ind = self.indicators[data._name]
 
         if name not in self.entry_prices:
             return False
@@ -496,25 +501,29 @@ class CoinDCXStrategy(bt.Strategy):
         current_price = data.close[0]
         atr = ind["atr"][0]
 
-        # Update trailing stop if activated
-        if name in self.trailing_active and self.trailing_active[name]:
+        # Calculate profit in ATR terms
+        profit_atr = (current_price - entry_price) / atr if atr > 0 else 0
+        
+        # Production behavior: Activate AND update trailing stop immediately
+        # This provides real-time downside protection once profit threshold is reached
+        if profit_atr >= self.p.trailing_activation:
+            self.trailing_active[name] = True
             new_stop = current_price - atr * self.p.trailing_atr_multiple
+            # Ratchet up only - never lower the stop
             if new_stop > self.stop_prices.get(name, 0):
                 self.stop_prices[name] = new_stop
 
-        # Check trailing activation
-        profit_atr = (current_price - entry_price) / atr if atr > 0 else 0
-        if profit_atr >= self.p.trailing_activation:
-            self.trailing_active[name] = True
-
-        # Stop loss check - PRIORITY 1
+        # Stop loss check - PRIORITY 1 (using close price to match Rust behavior)
+        # Note: In production, you'd want to check LOW for more accurate stop loss triggers
         if current_price <= self.stop_prices.get(name, 0):
             self.log(f"STOP LOSS triggered for {name}")
             return True
 
-        # Target check - PRIORITY 2
-        if current_price >= self.target_prices.get(name, float("inf")):
-            self.log(f"TARGET hit for {name}")
+        # Target check - PRIORITY 2 (check against HIGH for production correctness)
+        # Targets should trigger if intraday high reaches target, not just close
+        current_high = data.high[0]
+        if current_high >= self.target_prices.get(name, float("inf")):
+            self.log(f"TARGET hit for {name} (high={current_high:.2f})")
             return True
 
         # Regime exit - extreme volatility
@@ -543,11 +552,13 @@ class CoinDCXStrategy(bt.Strategy):
             if len(data) < self.p.volatility_lookback + self.p.adx_period:
                 continue
 
-            # Check exits first
-            if self.check_exit_conditions(data):
-                self.log(f"CLOSING position for {name} at {data.close[0]:.2f}")
-                self.close(data=data)
-                continue
+            # Check exits first (skip if already pending close)
+            if name not in self.pending_close or not self.pending_close[name]:
+                if self.check_exit_conditions(data):
+                    self.log(f"CLOSING position for {name} at {data.close[0]:.2f}")
+                    self.close(data=data)
+                    self.pending_close[name] = True  # Mark as pending close
+                    continue
 
             # Check entries
             signal = self.check_entry_conditions(data)
@@ -649,6 +660,7 @@ class CoinDCXStrategy(bt.Strategy):
             self.target_prices,
             self.entry_bars,
             self.trailing_active,
+            self.pending_close,  # Clear pending close flag
         ]:
             if data_name in d:
                 del d[data_name]

@@ -21,6 +21,7 @@
         "consecutive_loss_limit": 3,
         "consecutive_loss_multiplier": 0.75
     },
+    "strategy_name": "volatility_regime",
     "strategy": {
         "atr_period": 14,
         "volatility_lookback": 20,
@@ -43,8 +44,8 @@
         "loss_offset_allowed": false
     },
     "backtest": {
-        "data_dir": "data",
-        "results_dir": "results",
+        "data_dir": "../data",
+        "results_dir": "../results",
         "timeframe": "1d",
         "start_date": null,
         "end_date": null,
