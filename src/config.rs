@@ -51,22 +51,7 @@ impl Config {
             exchange: ExchangeConfig::default(),
             trading: TradingConfig::default(),
             strategy_name: "volatility_regime".to_string(),
-            strategy: serde_json::json!({
-                "atr_period": 14,
-                "volatility_lookback": 20,
-                "compression_threshold": 0.6,
-                "expansion_threshold": 1.5,
-                "extreme_threshold": 2.5,
-                "ema_fast": 8,
-                "ema_slow": 21,
-                "adx_period": 14,
-                "adx_threshold": 30.0,
-                "breakout_atr_multiple": 1.5,
-                "stop_atr_multiple": 2.5,
-                "target_atr_multiple": 5.0,
-                "trailing_activation": 0.5,
-                "trailing_atr_multiple": 1.5
-            }),
+            strategy: serde_json::json!({}), // Empty, strategy defaults should come from strategy itself
             tax: TaxConfig::default(),
             backtest: BacktestConfig::default(),
         }

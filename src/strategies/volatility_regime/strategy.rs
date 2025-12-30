@@ -2,11 +2,12 @@
 //!
 //! Strategy implementation for trading based on volatility regime classification.
 
-use crate::{Candle, Position, Signal, Symbol, VolatilityRegime};
+use crate::{Candle, Position, Signal, Symbol};
 use crate::indicators::{atr, ema, adx};
 use crate::strategies::Strategy;
 
 use super::config::VolatilityRegimeConfig;
+use super::VolatilityRegime;
 
 /// Volatility Regime Adaptive Strategy
 pub struct VolatilityRegimeStrategy {

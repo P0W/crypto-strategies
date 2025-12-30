@@ -1,8 +1,9 @@
 //! Grid search parameters for Volatility Regime Strategy
 //!
-//! Defines parameter ranges for optimization.
+//! Defines parameter ranges for optimization and grid generation using itertools.
 
 use serde::{Deserialize, Serialize};
+use crate::Config;
 
 /// Grid search parameters for optimization
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,28 +60,57 @@ impl GridParams {
         }
     }
 
+    /// Generate all parameter combinations using itertools
+    pub fn generate_configs(&self, base_config: &Config) -> Vec<Config> {
+        // Use itertools iproduct! macro for clean cartesian product
+        use itertools::iproduct;
+        
+        iproduct!(
+            &self.atr_periods,
+            &self.ema_fast_periods,
+            &self.ema_slow_periods,
+            &self.adx_thresholds,
+            &self.stop_atr_multiples,
+            &self.target_atr_multiples
+        )
+        .filter_map(|(atr, fast, slow, adx, stop, target)| {
+            // Skip invalid combinations
+            if fast >= slow || target <= stop {
+                return None;
+            }
+
+            let mut config = base_config.clone();
+            
+            // Update strategy parameters in the JSON value
+            if let Some(obj) = config.strategy.as_object_mut() {
+                obj.insert("atr_period".to_string(), serde_json::json!(atr));
+                obj.insert("ema_fast".to_string(), serde_json::json!(fast));
+                obj.insert("ema_slow".to_string(), serde_json::json!(slow));
+                obj.insert("adx_threshold".to_string(), serde_json::json!(adx));
+                obj.insert("stop_atr_multiple".to_string(), serde_json::json!(stop));
+                obj.insert("target_atr_multiple".to_string(), serde_json::json!(target));
+            }
+
+            Some(config)
+        })
+        .collect()
+    }
+
     /// Get total number of parameter combinations
     pub fn total_combinations(&self) -> usize {
-        let mut count = 0;
-        for _ in &self.atr_periods {
-            for &fast in &self.ema_fast_periods {
-                for &slow in &self.ema_slow_periods {
-                    if fast >= slow {
-                        continue; // Skip invalid combinations
-                    }
-                    for _ in &self.adx_thresholds {
-                        for &stop in &self.stop_atr_multiples {
-                            for &target in &self.target_atr_multiples {
-                                if target <= stop {
-                                    continue; // Skip invalid R:R
-                                }
-                                count += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        count
+        use itertools::iproduct;
+        
+        iproduct!(
+            &self.atr_periods,
+            &self.ema_fast_periods,
+            &self.ema_slow_periods,
+            &self.adx_thresholds,
+            &self.stop_atr_multiples,
+            &self.target_atr_multiples
+        )
+        .filter(|(_, fast, slow, _, stop, target)| {
+            fast < slow && target > stop
+        })
+        .count()
     }
 }

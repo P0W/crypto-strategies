@@ -47,7 +47,7 @@ pub fn run(
                 info!("Grid will test {} combinations", total_combinations);
 
                 // Generate all configs from grid
-                let configs = volatility_regime::generate_configs(&config, &grid_params);
+                let configs = grid_params.generate_configs(&config);
                 
                 let factory: Box<dyn Fn(&Config) -> Box<dyn Strategy> + Send + Sync> = 
                     Box::new(|cfg: &Config| -> Box<dyn Strategy> {

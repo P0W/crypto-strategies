@@ -85,15 +85,6 @@ impl Trade {
     }
 }
 
-/// Market volatility regime
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum VolatilityRegime {
-    Compression, // Low volatility, potential breakout
-    Normal,      // Average volatility
-    Expansion,   // High volatility, trending
-    Extreme,     // Very high volatility, risk-off
-}
-
 /// Trading signal
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Signal {
