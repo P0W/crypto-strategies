@@ -107,8 +107,8 @@ impl VolatilityRegimeStrategy {
         // So for bar T, we want max(high[T-lookback], high[T-lookback+1], ..., high[T-1])
         let n = candles.len();
         let lookback = self.config.volatility_lookback;
-        let start = n.saturating_sub(lookback + 1);  // n - lookback - 1
-        let end = n - 1;  // n - 1 (exclusive of current bar)
+        let start = n.saturating_sub(lookback + 1); // n - lookback - 1
+        let end = n - 1; // n - 1 (exclusive of current bar)
         let recent_high = candles[start..end]
             .iter()
             .map(|c| c.high)
@@ -136,7 +136,7 @@ impl Strategy for VolatilityRegimeStrategy {
         let min_warmup = (self.config.atr_period + 2 * self.config.adx_period)
             .max(self.config.atr_period + self.config.volatility_lookback)
             .max(self.config.ema_slow);
-        
+
         // Don't generate signals if insufficient data for all indicators
         if candles.len() < min_warmup {
             return Signal::Flat;
@@ -185,7 +185,7 @@ impl Strategy for VolatilityRegimeStrategy {
 
         // Check for breakout
         let breakout = self.is_breakout(candles);
-        
+
         if breakout {
             Signal::Long
         } else {
@@ -230,7 +230,7 @@ impl Strategy for VolatilityRegimeStrategy {
         // Production behavior: Trailing stop activates AND updates immediately
         // This provides immediate downside protection once profit threshold is reached
         // HFTs and professional systems don't wait until next bar to protect profits
-        
+
         let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
         let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
         let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
@@ -255,12 +255,12 @@ impl Strategy for VolatilityRegimeStrategy {
         if profit_atr >= self.config.trailing_activation {
             // Calculate new trailing stop level
             let new_stop = current_price - self.config.trailing_atr_multiple * current_atr;
-            
+
             // Only update if new stop is higher (ratchet up only)
             if new_stop > current_stop {
                 Some(new_stop)
             } else {
-                Some(current_stop)  // Keep existing stop
+                Some(current_stop) // Keep existing stop
             }
         } else if position.trailing_stop.is_some() {
             // Trailing was active but profit dropped - keep existing stop

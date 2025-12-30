@@ -13,16 +13,12 @@ use tracing::info;
 
 /// Parse comma-separated floats
 fn parse_float_list(s: &str) -> Vec<f64> {
-    s.split(',')
-        .filter_map(|x| x.trim().parse().ok())
-        .collect()
+    s.split(',').filter_map(|x| x.trim().parse().ok()).collect()
 }
 
 /// Parse comma-separated integers
 fn parse_int_list(s: &str) -> Vec<usize> {
-    s.split(',')
-        .filter_map(|x| x.trim().parse().ok())
-        .collect()
+    s.split(',').filter_map(|x| x.trim().parse().ok()).collect()
 }
 
 /// Parse symbol groups (semicolon-separated groups, comma-separated within)
@@ -83,11 +79,9 @@ pub fn run(
     info!("Loaded configuration from: {}", config_path);
 
     // Parse coin list
-    let coins_parsed: Option<Vec<String>> = coins.as_ref().map(|s| {
-        s.split(',')
-            .map(|c| c.trim().to_uppercase())
-            .collect()
-    });
+    let coins_parsed: Option<Vec<String>> = coins
+        .as_ref()
+        .map(|s| s.split(',').map(|c| c.trim().to_uppercase()).collect());
 
     // Parse symbol groups
     let symbols_parsed: Option<Vec<Vec<String>>> = symbols.as_ref().map(|s| parse_symbol_groups(s));
@@ -102,11 +96,9 @@ pub fn run(
     let atr_period_parsed = atr_period.as_ref().map(|s| parse_int_list(s));
 
     // Parse timeframes
-    let timeframes_parsed: Option<Vec<String>> = timeframes.as_ref().map(|s| {
-        s.split(',')
-            .map(|t| t.trim().to_string())
-            .collect()
-    });
+    let timeframes_parsed: Option<Vec<String>> = timeframes
+        .as_ref()
+        .map(|s| s.split(',').map(|t| t.trim().to_string()).collect());
 
     // Determine symbol combinations to test
     let symbol_groups: Vec<Vec<String>> = if let Some(ref coins) = coins_parsed {
@@ -135,8 +127,8 @@ pub fn run(
     };
 
     // Determine timeframes to test
-    let timeframes_to_test: Vec<String> = timeframes_parsed
-        .unwrap_or_else(|| vec![config.trading.timeframe.clone()]);
+    let timeframes_to_test: Vec<String> =
+        timeframes_parsed.unwrap_or_else(|| vec![config.trading.timeframe.clone()]);
 
     info!("Timeframes to test: {:?}", timeframes_to_test);
     info!("Strategy: {}", config.strategy_name);
@@ -189,7 +181,9 @@ pub fn run(
             task_config.backtest.timeframe = timeframe.clone();
 
             let symbol_list: Vec<Symbol> = symbols_vec.iter().map(|s| Symbol(s.clone())).collect();
-            if let Ok(data) = data::load_multi_symbol(&task_config.backtest.data_dir, &symbol_list, timeframe) {
+            if let Ok(data) =
+                data::load_multi_symbol(&task_config.backtest.data_dir, &symbol_list, timeframe)
+            {
                 if !data.is_empty() {
                     tasks.push(OptTask {
                         group_idx,
@@ -234,18 +228,23 @@ pub fn run(
     println!("  Timeframes:    {:?}", timeframes_to_test);
     println!("  Parameters:    {} combinations", total_param_combinations);
     println!("  Total tests:   {}", total_runs);
-    println!("  Mode:          {}", if sequential { "sequential" } else { "parallel" });
+    println!(
+        "  Mode:          {}",
+        if sequential { "sequential" } else { "parallel" }
+    );
     println!("{}\n", "=".repeat(70));
 
     // Create single progress bar (tqdm style)
     let pb = ProgressBar::new(total_runs as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("⚡ {percent:>3}%|{bar:40}| {pos}/{len} [{elapsed}<{eta}, {per_sec:.2}] ✓ {msg}")
+            .template(
+                "⚡ {percent:>3}%|{bar:40}| {pos}/{len} [{elapsed}<{eta}, {per_sec:.2}] ✓ {msg}",
+            )
             .unwrap()
             .progress_chars("█░ "),
     );
-    
+
     let valid_count = Arc::new(AtomicUsize::new(0));
     let valid_count_clone = valid_count.clone();
 
@@ -293,12 +292,19 @@ pub fn run(
     // Sort results
     let mut all_results = all_results;
     sort_results(&mut all_results, &sort_by);
-    info!("Total results: {}, sorted by: {}", all_results.len(), sort_by);
+    info!(
+        "Total results: {}, sorted by: {}",
+        all_results.len(),
+        sort_by
+    );
 
     // Display top results
     let display_count = top.min(all_results.len());
     println!("\n{}", "=".repeat(120));
-    println!("TOP {} OPTIMIZATION RESULTS (sorted by {})", display_count, sort_by);
+    println!(
+        "TOP {} OPTIMIZATION RESULTS (sorted by {})",
+        display_count, sort_by
+    );
     println!("{}", "=".repeat(120));
     println!(
         "{:<4} {:>7} {:>9} {:>8} {:>8} {:>6} | {:<15} {:>3} | Parameters",
@@ -369,18 +375,20 @@ fn run_single_backtest(
     use crypto_strategies::backtest::Backtester;
 
     let symbol_list: Vec<Symbol> = task.symbols_vec.iter().map(|s| Symbol(s.clone())).collect();
-    let data = match data::load_multi_symbol(&task.config.backtest.data_dir, &symbol_list, &task.timeframe) {
+    let data = match data::load_multi_symbol(
+        &task.config.backtest.data_dir,
+        &symbol_list,
+        &task.timeframe,
+    ) {
         Ok(d) if !d.is_empty() => d,
         _ => return None,
     };
 
     let strategy: Box<dyn Strategy> = match param_config.strategy_name.as_str() {
-        "volatility_regime" => {
-            match volatility_regime::create_strategy_from_config(param_config) {
-                Ok(s) => Box::new(s),
-                Err(_) => return None,
-            }
-        }
+        "volatility_regime" => match volatility_regime::create_strategy_from_config(param_config) {
+            Ok(s) => Box::new(s),
+            Err(_) => return None,
+        },
         _ => return None,
     };
 
@@ -437,6 +445,8 @@ fn sort_results(results: &mut [OptimizationResult], sort_by: &str) {
             "profit_factor" => b.profit_factor,
             _ => b.sharpe_ratio,
         };
-        val_b.partial_cmp(&val_a).unwrap_or(std::cmp::Ordering::Equal)
+        val_b
+            .partial_cmp(&val_a)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 }

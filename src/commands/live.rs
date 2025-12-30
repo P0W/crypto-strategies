@@ -227,18 +227,29 @@ impl LiveTrader {
 
                 let stop_price = pos.trailing_stop.unwrap_or(pos.stop_price);
                 if current_price <= stop_price {
-                    info!("🛑 Stop loss triggered for {} @ {:.2}", symbol, current_price);
-                    self.close_position(&symbol, current_price, "Stop Loss").await?;
+                    info!(
+                        "🛑 Stop loss triggered for {} @ {:.2}",
+                        symbol, current_price
+                    );
+                    self.close_position(&symbol, current_price, "Stop Loss")
+                        .await?;
                     continue;
                 }
 
                 if current_price >= pos.target_price {
-                    info!("🎯 Take profit triggered for {} @ {:.2}", symbol, current_price);
-                    self.close_position(&symbol, current_price, "Take Profit").await?;
+                    info!(
+                        "🎯 Take profit triggered for {} @ {:.2}",
+                        symbol, current_price
+                    );
+                    self.close_position(&symbol, current_price, "Take Profit")
+                        .await?;
                     continue;
                 }
 
-                if let Some(new_stop) = self.strategy.update_trailing_stop(&pos, current_price, &candles) {
+                if let Some(new_stop) =
+                    self.strategy
+                        .update_trailing_stop(&pos, current_price, &candles)
+                {
                     if let Some(pos_mut) = self.positions.get_mut(&symbol) {
                         if new_stop > pos_mut.trailing_stop.unwrap_or(0.0) {
                             info!(
@@ -254,16 +265,21 @@ impl LiveTrader {
             }
 
             let position_ref = self.positions.get(&symbol);
-            let signal = self.strategy.generate_signal(&symbol, &candles, position_ref);
+            let signal = self
+                .strategy
+                .generate_signal(&symbol, &candles, position_ref);
 
             match signal {
                 Signal::Long if !self.positions.contains_key(&symbol) => {
-                    let current_positions: Vec<Position> = self.positions.values().cloned().collect();
+                    let current_positions: Vec<Position> =
+                        self.positions.values().cloned().collect();
 
                     if self.risk_manager.can_open_position(&current_positions) {
-                        let entry_price = current_price * (1.0 + self.config.exchange.assumed_slippage);
+                        let entry_price =
+                            current_price * (1.0 + self.config.exchange.assumed_slippage);
                         let stop_price = self.strategy.calculate_stop_loss(&candles, entry_price);
-                        let target_price = self.strategy.calculate_take_profit(&candles, entry_price);
+                        let target_price =
+                            self.strategy.calculate_take_profit(&candles, entry_price);
 
                         let quantity = self.risk_manager.calculate_position_size(
                             entry_price,
@@ -283,14 +299,16 @@ impl LiveTrader {
                                     stop_price,
                                     target_price,
                                     commission,
-                                ).await?;
+                                )
+                                .await?;
                             }
                         }
                     }
                 }
                 Signal::Flat if self.positions.contains_key(&symbol) => {
                     info!("📊 Exit signal for {}", symbol);
-                    self.close_position(&symbol, current_price, "Signal").await?;
+                    self.close_position(&symbol, current_price, "Signal")
+                        .await?;
                 }
                 _ => {}
             }
@@ -302,7 +320,10 @@ impl LiveTrader {
         let drawdown = self.risk_manager.current_drawdown() * 100.0;
         info!(
             "Cycle {} complete: value={:.2}, positions={}, drawdown={:.2}%",
-            self.cycle_count, total_value, self.positions.len(), drawdown
+            self.cycle_count,
+            total_value,
+            self.positions.len(),
+            drawdown
         );
 
         if self.risk_manager.should_halt_trading() {
@@ -403,7 +424,12 @@ impl LiveTrader {
         Ok(())
     }
 
-    async fn close_position(&mut self, symbol: &Symbol, exit_price: f64, reason: &str) -> Result<()> {
+    async fn close_position(
+        &mut self,
+        symbol: &Symbol,
+        exit_price: f64,
+        reason: &str,
+    ) -> Result<()> {
         let position = match self.positions.remove(symbol) {
             Some(p) => p,
             None => return Ok(()),
@@ -519,7 +545,8 @@ impl LiveTrader {
             if let Some(candles) = self.candle_cache.get(&symbol) {
                 if let Some(last_candle) = candles.last() {
                     warn!("Closing position {} due to shutdown", symbol);
-                    self.close_position(&symbol, last_candle.close, "Shutdown").await?;
+                    self.close_position(&symbol, last_candle.close, "Shutdown")
+                        .await?;
                 }
             }
         }
@@ -527,7 +554,10 @@ impl LiveTrader {
         let total_value = self.paper_cash;
         self.save_checkpoint(total_value).await?;
 
-        info!("Shutdown complete. Final portfolio value: {:.2}", total_value);
+        info!(
+            "Shutdown complete. Final portfolio value: {:.2}",
+            total_value
+        );
         Ok(())
     }
 }
@@ -569,12 +599,18 @@ async fn run_async(
     let mode_str = if paper_mode { "PAPER" } else { "LIVE" };
 
     info!("╔══════════════════════════════════════════════════════════════╗");
-    info!("║          CRYPTO TRADING SYSTEM - {} MODE                ║", mode_str);
+    info!(
+        "║          CRYPTO TRADING SYSTEM - {} MODE                ║",
+        mode_str
+    );
     info!("╠══════════════════════════════════════════════════════════════╣");
     info!("║ Strategy: {:<50} ║", config.strategy_name);
     info!("║ Pairs: {:<53} ║", config.trading.pairs.join(", "));
     info!("║ Timeframe: {:<49} ║", config.trading.timeframe);
-    info!("║ Initial Capital: Rs {:<39.2} ║", config.trading.initial_capital);
+    info!(
+        "║ Initial Capital: Rs {:<39.2} ║",
+        config.trading.initial_capital
+    );
     info!("║ Cycle Interval: {} seconds{:<35} ║", interval_secs, "");
     info!("╚══════════════════════════════════════════════════════════════╝");
 

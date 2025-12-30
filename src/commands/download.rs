@@ -32,7 +32,11 @@ pub fn run(pairs: String, interval: String, days: u32, output: String) -> Result
             Ok(filepath) => {
                 if let Ok(candles) = load_csv(&filepath) {
                     total_candles += candles.len();
-                    println!("  ✓ {} candles saved to {}", candles.len(), filepath.display());
+                    println!(
+                        "  ✓ {} candles saved to {}",
+                        candles.len(),
+                        filepath.display()
+                    );
                     success_count += 1;
                 }
             }

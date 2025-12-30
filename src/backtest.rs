@@ -82,7 +82,6 @@ impl Backtester {
             .unwrap_or(0);
 
         for (i, current_date) in dates.iter().take(min_len).enumerate() {
-
             // ============================================================
             // PHASE 1: Execute pending orders from previous bar (T+1 execution)
             // Orders execute at the OPEN of the current bar (matching Backtrader)
@@ -91,8 +90,8 @@ impl Backtester {
                 let current_candles = &candles[..=i];
                 let current_candle = current_candles.last().unwrap();
                 let candle_dt = current_candle.datetime;
-                let _current_price = current_candle.close;  // Kept for potential future use
-                let open_price = current_candle.open;  // Use open for order execution
+                let _current_price = current_candle.close; // Kept for potential future use
+                let open_price = current_candle.open; // Use open for order execution
 
                 // Execute pending buy order at OPEN price with slippage
                 // Professional systems apply slippage to account for market impact
@@ -111,13 +110,13 @@ impl Backtester {
                             stop_price: order.stop_price,
                             target_price: order.target_price,
                             trailing_stop: None,
-                            entry_time: candle_dt,  // Use actual candle datetime
+                            entry_time: candle_dt, // Use actual candle datetime
                             risk_amount: (entry_price - order.stop_price).abs() * order.quantity,
                         };
 
                         tracing::info!(
                             "{} BUY EXECUTED for {}: Price={:.2}, Qty={:.4}",
-                            candle_dt.format("%Y-%m-%d"),  // Use actual candle datetime
+                            candle_dt.format("%Y-%m-%d"), // Use actual candle datetime
                             symbol,
                             entry_price,
                             order.quantity
@@ -132,12 +131,12 @@ impl Backtester {
                 if let Some(reason) = pending_closes.remove(symbol) {
                     if let Some(pos) = positions.remove(symbol) {
                         let exit_price = open_price * (1.0 - self.config.exchange.assumed_slippage);
-                        let trade = self.close_position(&pos, exit_price, candle_dt, &reason);  // Use candle_dt
+                        let trade = self.close_position(&pos, exit_price, candle_dt, &reason); // Use candle_dt
                         cash += pos.quantity * exit_price - trade.commission;
 
                         tracing::info!(
                             "{} SELL EXECUTED for {}: Price={:.2}, Reason={}, PnL={:.2}",
-                            candle_dt.format("%Y-%m-%d"),  // Use actual candle datetime
+                            candle_dt.format("%Y-%m-%d"), // Use actual candle datetime
                             symbol,
                             exit_price,
                             reason,
@@ -158,10 +157,10 @@ impl Backtester {
             // ============================================================
             // PHASE 2: Check exits and generate new signals
             // ============================================================
-            
+
             // Recalculate total_value from current cash (after Phase 1 updates)
             let mut total_value = cash;
-            
+
             for (symbol, candles) in &aligned_data {
                 let current_candles = &candles[..=i];
                 let current_candle = current_candles.last().unwrap();
@@ -215,12 +214,15 @@ impl Backtester {
                     .generate_signal(symbol, current_candles, position_ref);
 
                 match signal {
-                    Signal::Long if !positions.contains_key(symbol) && !pending_orders.contains_key(symbol) => {
+                    Signal::Long
+                        if !positions.contains_key(symbol)
+                            && !pending_orders.contains_key(symbol) =>
+                    {
                         // Place pending order (will execute next bar)
                         let can_open = self
                             .risk_manager
                             .can_open_position(&positions.values().cloned().collect::<Vec<_>>());
-                        
+
                         if !can_open {
                             let dd = self.risk_manager.current_drawdown();
                             if dd >= 0.20 {
@@ -231,7 +233,7 @@ impl Backtester {
                                 );
                             }
                         }
-                        
+
                         if can_open {
                             // Match Python/Backtrader: Calculate stops/targets from signal close price
                             // The order will execute at next bar's open, but stops/targets are based
@@ -245,10 +247,10 @@ impl Backtester {
 
                             let current_positions: Vec<Position> =
                                 positions.values().cloned().collect();
-                            
+
                             // Get regime score for position sizing adjustment
                             let regime_score = self.strategy.get_regime_score(current_candles);
-                            
+
                             // Position sizing based on close price (matching Python)
                             let quantity = self.risk_manager.calculate_position_size_with_regime(
                                 current_price,
@@ -263,7 +265,7 @@ impl Backtester {
                                     PendingOrder {
                                         symbol: symbol.clone(),
                                         quantity,
-                                        entry_price: current_price,  // Store signal price
+                                        entry_price: current_price, // Store signal price
                                         stop_price,
                                         target_price,
                                     },
@@ -271,7 +273,10 @@ impl Backtester {
                             }
                         }
                     }
-                    Signal::Flat if positions.contains_key(symbol) && !pending_closes.contains_key(symbol) => {
+                    Signal::Flat
+                        if positions.contains_key(symbol)
+                            && !pending_closes.contains_key(symbol) =>
+                    {
                         // Place pending close order (will execute next bar)
                         pending_closes.insert(symbol.clone(), "Signal".to_string());
                     }
@@ -494,12 +499,13 @@ impl Backtester {
             let start_date = equity_curve.first().unwrap().0;
             let end_date = equity_curve.last().unwrap().0;
             let duration_days = (end_date - start_date).num_days() as f64;
-            
+
             if duration_days > 0.0 {
                 let duration_years = duration_days / 365.0;
                 // Annualized return: (1 + total_return)^(1/years) - 1
                 let total_return_decimal = total_return / 100.0;
-                let annualized_return = (1.0 + total_return_decimal).powf(1.0 / duration_years) - 1.0;
+                let annualized_return =
+                    (1.0 + total_return_decimal).powf(1.0 / duration_years) - 1.0;
                 annualized_return / max_dd
             } else {
                 0.0

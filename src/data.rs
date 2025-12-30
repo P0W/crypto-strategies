@@ -34,14 +34,13 @@ pub const INTERVALS: &[&str] = &[
 
 /// Load OHLCV data from CSV file
 pub fn load_csv(path: impl AsRef<Path>) -> Result<Vec<Candle>> {
-    let mut reader = csv::Reader::from_path(path.as_ref())
-        .context("Failed to open CSV file")?;
-    
+    let mut reader = csv::Reader::from_path(path.as_ref()).context("Failed to open CSV file")?;
+
     let mut candles = Vec::new();
-    
+
     for (row_idx, result) in reader.records().enumerate() {
         let record = result.context(format!("Failed to read row {}", row_idx + 1))?;
-        
+
         let dt_str = record.get(0).context("Missing datetime column")?;
         let datetime = dt_str
             .parse::<DateTime<Utc>>()
@@ -51,28 +50,33 @@ pub fn load_csv(path: impl AsRef<Path>) -> Result<Vec<Candle>> {
                     .map(|ndt| DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc))
             })
             .context(format!("Failed to parse datetime: {}", dt_str))?;
-        
-        let open: f64 = record.get(1)
+
+        let open: f64 = record
+            .get(1)
             .context("Missing open column")?
             .parse()
             .context("Failed to parse open")?;
-        let high: f64 = record.get(2)
+        let high: f64 = record
+            .get(2)
             .context("Missing high column")?
             .parse()
             .context("Failed to parse high")?;
-        let low: f64 = record.get(3)
+        let low: f64 = record
+            .get(3)
             .context("Missing low column")?
             .parse()
             .context("Failed to parse low")?;
-        let close: f64 = record.get(4)
+        let close: f64 = record
+            .get(4)
             .context("Missing close column")?
             .parse()
             .context("Failed to parse close")?;
-        let volume: f64 = record.get(5)
+        let volume: f64 = record
+            .get(5)
             .context("Missing volume column")?
             .parse()
             .context("Failed to parse volume")?;
-        
+
         candles.push(Candle {
             datetime,
             open,
@@ -82,7 +86,7 @@ pub fn load_csv(path: impl AsRef<Path>) -> Result<Vec<Candle>> {
             volume,
         });
     }
-    
+
     Ok(candles)
 }
 
@@ -165,8 +169,7 @@ impl CoinDCXDataFetcher {
 
     /// Convert symbol to CoinDCX pair format: BTCINR -> I-BTC_INR
     pub fn to_pair(symbol: &str) -> String {
-        if symbol.ends_with("INR") {
-            let base = &symbol[..symbol.len() - 3];
+        if let Some(base) = symbol.strip_suffix("INR") {
             format!("I-{}_INR", base)
         } else {
             format!("I-{}_INR", symbol)
@@ -205,7 +208,10 @@ impl CoinDCXDataFetcher {
     ) -> Result<Vec<Candle>> {
         let mut url = format!(
             "{}?pair={}&interval={}&limit={}",
-            COINDCX_CANDLES_URL, pair, interval, limit.min(1000)
+            COINDCX_CANDLES_URL,
+            pair,
+            interval,
+            limit.min(1000)
         );
 
         if let Some(end) = end_time {
@@ -343,12 +349,7 @@ impl CoinDCXDataFetcher {
     }
 
     /// Download historical data for a symbol and save to CSV
-    pub fn download_pair(
-        &self,
-        symbol: &str,
-        interval: &str,
-        days_back: u32,
-    ) -> Result<PathBuf> {
+    pub fn download_pair(&self, symbol: &str, interval: &str, days_back: u32) -> Result<PathBuf> {
         let pair = Self::to_pair(symbol);
         let candles = self.fetch_full_history(&pair, interval, days_back)?;
 
@@ -494,10 +495,7 @@ pub fn validate_candles(candles: &[Candle]) -> ValidationResult {
             errors.push(format!("Candle {}: negative volume ({})", i, candle.volume));
         }
         if i > 0 && candle.datetime <= candles[i - 1].datetime {
-            warnings.push(format!(
-                "Candle {}: not chronological",
-                i
-            ));
+            warnings.push(format!("Candle {}: not chronological", i));
         }
     }
 

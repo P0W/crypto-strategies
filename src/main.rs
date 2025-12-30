@@ -28,6 +28,7 @@ struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     /// Run strategy backtest
     Backtest {
@@ -186,7 +187,8 @@ fn setup_logging(verbose: bool, command_name: &str, file_only: bool) -> Result<(
         "{},hyper=warn,hyper_util=warn,reqwest=warn,rustls=warn,h2=warn",
         level
     );
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&filter_str));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&filter_str));
 
     // File appender
     let file_appender = tracing_appender::rolling::never("logs", &log_filename);
@@ -243,7 +245,7 @@ fn main() -> Result<()> {
     // Determine command name and whether to use file-only logging
     let (command_name, file_only) = match &cli.command {
         Commands::Backtest { .. } => ("backtest", false),
-        Commands::Optimize { .. } => ("optimize", true),  // File-only for clean progress bar
+        Commands::Optimize { .. } => ("optimize", true), // File-only for clean progress bar
         Commands::Live { .. } => ("live", false),
         Commands::Download { .. } => ("download", false),
     };

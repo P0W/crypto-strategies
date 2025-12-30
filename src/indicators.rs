@@ -12,9 +12,9 @@
 
 use std::collections::HashMap;
 use ta::indicators::{
-    BollingerBands as TaBB, CommodityChannelIndex, ExponentialMovingAverage,
-    FastStochastic, KeltnerChannel, MoneyFlowIndex as TaMFI, MovingAverageConvergenceDivergence,
-    OnBalanceVolume, RelativeStrengthIndex, SimpleMovingAverage,
+    BollingerBands as TaBB, CommodityChannelIndex, ExponentialMovingAverage, FastStochastic,
+    KeltnerChannel, MoneyFlowIndex as TaMFI, MovingAverageConvergenceDivergence, OnBalanceVolume,
+    RelativeStrengthIndex, SimpleMovingAverage,
 };
 use ta::{DataItem, Next};
 
@@ -172,10 +172,10 @@ pub fn true_range(high: &[f64], low: &[f64], close: &[f64]) -> Vec<f64> {
 }
 
 /// Calculate Average True Range (ATR) using Wilder's smoothing
-/// 
+///
 /// This uses Wilder's smoothing method (same as backtrader) where:
 /// ATR = (prev_ATR * (period - 1) + current_TR) / period
-/// 
+///
 /// This is equivalent to EMA with smoothing factor = 1/period instead of 2/(period+1)
 pub fn atr(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<Option<f64>> {
     if high.is_empty() || period == 0 || high.len() != low.len() || high.len() != close.len() {
@@ -187,7 +187,7 @@ pub fn atr(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<Optio
 
     // Wilder's smoothing: ATR = (prev_ATR * (period - 1) + current_TR) / period
     let mut atr_value: Option<f64> = None;
-    
+
     for i in 0..tr.len() {
         if i + 1 < period {
             // Not enough data yet
@@ -544,10 +544,10 @@ fn wilders_smooth(values: &[f64], period: usize) -> Vec<Option<f64>> {
     if values.is_empty() || period == 0 {
         return vec![];
     }
-    
+
     let mut result = Vec::with_capacity(values.len());
     let mut smoothed: Option<f64> = None;
-    
+
     for i in 0..values.len() {
         if i + 1 < period {
             result.push(None);
@@ -556,17 +556,15 @@ fn wilders_smooth(values: &[f64], period: usize) -> Vec<Option<f64>> {
             let sum: f64 = values[0..period].iter().sum();
             smoothed = Some(sum / period as f64);
             result.push(smoothed);
+        } else if let Some(prev) = smoothed {
+            let new_val = (prev * (period - 1) as f64 + values[i]) / period as f64;
+            smoothed = Some(new_val);
+            result.push(smoothed);
         } else {
-            if let Some(prev) = smoothed {
-                let new_val = (prev * (period - 1) as f64 + values[i]) / period as f64;
-                smoothed = Some(new_val);
-                result.push(smoothed);
-            } else {
-                result.push(None);
-            }
+            result.push(None);
         }
     }
-    
+
     result
 }
 
@@ -601,13 +599,17 @@ pub fn dmi(
     let smoothed_plus_dm = wilders_smooth(&plus_dm, period);
     let smoothed_minus_dm = wilders_smooth(&minus_dm, period);
     let atr_values = atr(high, low, close, period);
-    
+
     // Calculate DI as smoothed_DM / ATR * 100
     let mut plus_di = Vec::with_capacity(high.len());
     let mut minus_di = Vec::with_capacity(high.len());
-    
+
     for i in 0..high.len() {
-        match (smoothed_plus_dm.get(i), smoothed_minus_dm.get(i), atr_values.get(i)) {
+        match (
+            smoothed_plus_dm.get(i),
+            smoothed_minus_dm.get(i),
+            atr_values.get(i),
+        ) {
             (Some(Some(pdm)), Some(Some(mdm)), Some(Some(atr_val))) if *atr_val > 0.0 => {
                 plus_di.push(Some(pdm / atr_val * 100.0));
                 minus_di.push(Some(mdm / atr_val * 100.0));
@@ -623,7 +625,7 @@ pub fn dmi(
 }
 
 /// Calculate Average Directional Index (ADX) using Wilder's smoothing
-/// 
+///
 /// ADX requires 2*period - 1 warmup bars:
 /// - First period for DI values to become valid
 /// - Second period for ADX smoothing of DX values
@@ -631,18 +633,21 @@ pub fn adx(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<Optio
     if high.is_empty() || period == 0 {
         return vec![];
     }
-    
+
     let (plus_di, minus_di) = dmi(high, low, close, period);
-    
+
     // DI values become valid at index (period - 1)
     let di_start = period - 1;
-    
+
     let mut result = vec![None; high.len()];
-    
+
     // Calculate DX only where DI is valid
     let mut dx_values: Vec<f64> = Vec::new();
     for i in di_start..high.len() {
-        if let (Some(pdi), Some(mdi)) = (plus_di.get(i).and_then(|x| *x), minus_di.get(i).and_then(|x| *x)) {
+        if let (Some(pdi), Some(mdi)) = (
+            plus_di.get(i).and_then(|x| *x),
+            minus_di.get(i).and_then(|x| *x),
+        ) {
             let sum = pdi + mdi;
             if sum > 0.0 {
                 dx_values.push((pdi - mdi).abs() / sum * 100.0);
@@ -653,15 +658,15 @@ pub fn adx(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<Optio
             dx_values.push(0.0);
         }
     }
-    
+
     // Apply Wilder's smoothing to the DX values
     // ADX first valid at index (period - 1) of DX, which is bar (di_start + period - 1) = (2*period - 2)
     if dx_values.len() >= period {
         let mut adx_value: Option<f64> = None;
-        
+
         for (j, &dx) in dx_values.iter().enumerate() {
             let bar_idx = di_start + j;
-            
+
             if j + 1 < period {
                 // Not enough DX values yet
             } else if j + 1 == period {
@@ -679,7 +684,7 @@ pub fn adx(high: &[f64], low: &[f64], close: &[f64], period: usize) -> Vec<Optio
             }
         }
     }
-    
+
     result
 }
 
