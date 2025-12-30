@@ -18,3 +18,4 @@ pub mod state_manager;
 pub use config::Config;
 pub use types::*;
 pub use strategies::Strategy;
+pub use exchange::RobustCoinDCXClient;

@@ -93,6 +93,41 @@ pub enum Signal {
     Flat,
 }
 
+/// Order status
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OrderStatus {
+    Submitted,
+    Accepted,
+    Partial,
+    Completed,
+    Canceled,
+    Margin,
+    Rejected,
+    Expired,
+}
+
+/// Order execution details
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderExecution {
+    pub price: f64,
+    pub size: f64,
+    pub value: f64,
+    pub commission: f64,
+}
+
+/// Order information
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Order {
+    pub symbol: Symbol,
+    pub side: Side,
+    pub status: OrderStatus,
+    pub size: f64,
+    pub price: Option<f64>,  // None for market orders
+    pub executed: Option<OrderExecution>,
+    pub created_time: DateTime<Utc>,
+    pub updated_time: DateTime<Utc>,
+}
+
 /// Portfolio statistics
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PerformanceMetrics {

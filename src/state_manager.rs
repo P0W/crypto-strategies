@@ -95,6 +95,7 @@ pub struct TradeRecord {
 
 pub struct SqliteStateManager {
     conn: Arc<Mutex<Connection>>,
+    db_path: PathBuf,
     json_backup_path: PathBuf,
     auto_backup: bool,
 }
@@ -105,18 +106,18 @@ impl SqliteStateManager {
         json_backup_path: P,
         auto_backup: bool,
     ) -> Result<Self> {
-        let db_path = db_path.as_ref();
+        let db_path_ref = db_path.as_ref();
         
         // Create parent directories
-        if let Some(parent) = db_path.parent() {
+        if let Some(parent) = db_path_ref.parent() {
             std::fs::create_dir_all(parent)?;
         }
         if let Some(parent) = json_backup_path.as_ref().parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        let conn = Connection::open(db_path)
-            .with_context(|| format!("Failed to open database: {}", db_path.display()))?;
+        let conn = Connection::open(db_path_ref)
+            .with_context(|| format!("Failed to open database: {}", db_path_ref.display()))?;
 
         // Enable WAL mode for better concurrency
         conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -124,6 +125,7 @@ impl SqliteStateManager {
 
         let manager = Self {
             conn: Arc::new(Mutex::new(conn)),
+            db_path: db_path_ref.to_path_buf(),
             json_backup_path: json_backup_path.as_ref().to_path_buf(),
             auto_backup,
         };
@@ -473,6 +475,71 @@ impl SqliteStateManager {
         std::fs::write(&self.json_backup_path, serde_json::to_string_pretty(&state)?)?;
         debug!("State exported to: {}", self.json_backup_path.display());
         Ok(())
+    }
+
+    // Async wrappers for use in async contexts (like live trading)
+    pub async fn save_checkpoint_async(&self, portfolio_value: f64, position_count: u32) -> Result<()> {
+        let checkpoint = Checkpoint {
+            timestamp: Utc::now().to_rfc3339(),
+            cycle_count: 0,  // Would increment in production
+            portfolio_value,
+            cash: portfolio_value,  // Simplified - in production, calculate actual cash
+            positions_value: 0.0,
+            open_positions: position_count as i32,
+            last_processed_symbols: vec![],
+            drawdown_pct: 0.0,
+            consecutive_losses: 0,
+            paper_mode: true,
+            config_hash: String::new(),
+            metadata: HashMap::new(),
+        };
+        let state_manager = self.clone_for_async();
+        tokio::task::spawn_blocking(move || {
+            state_manager.save_checkpoint(&checkpoint)
+        }).await?
+    }
+
+    pub async fn save_trade_async(&self, trade: &crate::Trade) -> Result<()> {
+        // Convert from simple Trade to full TradeRecord
+        let trade_record = TradeRecord {
+            id: None,  // Auto-assigned by database
+            symbol: trade.symbol.as_str().to_string(),
+            side: format!("{:?}", trade.side).to_lowercase(),
+            quantity: trade.quantity,
+            entry_price: trade.entry_price,
+            exit_price: trade.exit_price,
+            entry_time: trade.entry_time.to_rfc3339(),
+            exit_time: trade.exit_time.to_rfc3339(),
+            gross_pnl: trade.pnl,
+            fees: trade.commission,
+            tax: if trade.net_pnl > 0.0 { trade.net_pnl * 0.3 } else { 0.0 },
+            net_pnl: trade.net_pnl,
+            pnl_pct: ((trade.exit_price - trade.entry_price) / trade.entry_price) * 100.0,
+            status: "closed".to_string(),
+            exit_reason: "signal".to_string(),
+            strategy_signal: "flat".to_string(),
+            market_state_entry: "unknown".to_string(),
+            market_state_exit: "unknown".to_string(),
+            atr_at_entry: 0.0,
+            stop_loss: 0.0,
+            take_profit: 0.0,
+            risk_reward_actual: 0.0,
+            metadata: HashMap::new(),
+        };
+        
+        let state_manager = self.clone_for_async();
+        tokio::task::spawn_blocking(move || {
+            state_manager.record_trade(&trade_record)
+        }).await?
+    }
+
+    fn clone_for_async(&self) -> Self {
+        // Create a new state manager with the same paths
+        SqliteStateManager::new(
+            self.db_path.clone(),
+            self.json_backup_path.clone(),
+            false, // Don't auto-export for clones
+        ).expect("Failed to clone state manager")
     }
 }
 
