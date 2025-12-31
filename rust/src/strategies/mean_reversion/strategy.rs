@@ -24,7 +24,7 @@
 
 use crate::indicators::{atr, bollinger_bands, ema, rsi, sma};
 use crate::strategies::Strategy;
-use crate::{Candle, Position, Signal, Symbol};
+use crate::{Candle, Position, Side, Signal, Symbol};
 
 use super::config::MeanReversionConfig;
 use super::{MarketState, VolumeState};
@@ -374,14 +374,6 @@ impl Strategy for MeanReversionStrategy {
             if should_update {
                 Some(new_stop)
             } else {
-                Some(current_stop)
-            }
-        } else if position.trailing_stop.is_some() {
-            Some(current_stop)
-        } else {
-            None
-        }
-    }
                 Some(current_stop)
             }
         } else if position.trailing_stop.is_some() {

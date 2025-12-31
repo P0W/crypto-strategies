@@ -148,6 +148,7 @@ fn test_strategy_trailing_stop_not_active_initially() {
     let candles = generate_mock_candles(50, 100.0, 2.0);
     let position = Position {
         symbol: Symbol::new("BTCINR"),
+        side: Side::Buy,
         entry_price: 100.0,
         quantity: 1.0,
         stop_price: 95.0,
@@ -174,6 +175,7 @@ fn test_strategy_trailing_stop_activates_at_profit() {
     let candles = generate_mock_candles(50, 100.0, 2.0);
     let position = Position {
         symbol: Symbol::new("BTCINR"),
+        side: Side::Buy,
         entry_price: 100.0,
         quantity: 1.0,
         stop_price: 95.0,
@@ -330,6 +332,7 @@ fn test_risk_manager_can_open_position() {
     let full_positions = vec![
         Position {
             symbol: Symbol::new("BTC"),
+            side: Side::Buy,
             entry_price: 100.0,
             quantity: 1.0,
             stop_price: 95.0,
@@ -340,6 +343,7 @@ fn test_risk_manager_can_open_position() {
         },
         Position {
             symbol: Symbol::new("ETH"),
+            side: Side::Buy,
             entry_price: 100.0,
             quantity: 1.0,
             stop_price: 95.0,
@@ -425,6 +429,7 @@ fn test_symbol_creation() {
 fn test_position_unrealized_pnl() {
     let position = Position {
         symbol: Symbol::new("BTCINR"),
+        side: Side::Buy,
         entry_price: 100.0,
         quantity: 10.0,
         stop_price: 95.0,
@@ -437,6 +442,29 @@ fn test_position_unrealized_pnl() {
     // Price increased 5%
     let pnl = position.unrealized_pnl(105.0);
     assert_eq!(pnl, 50.0); // (105 - 100) * 10
+}
+
+#[test]
+fn test_position_unrealized_pnl_short() {
+    let position = Position {
+        symbol: Symbol::new("BTCINR"),
+        side: Side::Sell,
+        entry_price: 100.0,
+        quantity: 10.0,
+        stop_price: 105.0,  // Stop is above entry for short
+        target_price: 90.0,  // Target is below entry for short
+        trailing_stop: None,
+        entry_time: Utc::now(),
+        risk_amount: 50.0,
+    };
+
+    // Price decreased 5% - profit for short
+    let pnl_profit = position.unrealized_pnl(95.0);
+    assert_eq!(pnl_profit, 50.0); // (100 - 95) * 10
+
+    // Price increased 5% - loss for short
+    let pnl_loss = position.unrealized_pnl(105.0);
+    assert_eq!(pnl_loss, -50.0); // (100 - 105) * 10
 }
 
 #[test]

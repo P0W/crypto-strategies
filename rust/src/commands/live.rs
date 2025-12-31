@@ -120,8 +120,16 @@ impl LiveTrader {
         let state_positions = self.state_manager.load_positions(Some("open"))?;
         for sp in state_positions {
             let symbol = Symbol::new(&sp.symbol);
+            // Convert string "buy"/"sell" to Side enum
+            let side = if sp.side.to_lowercase() == "buy" {
+                Side::Buy
+            } else {
+                Side::Sell
+            };
+            
             let position = Position {
                 symbol: symbol.clone(),
+                side,
                 entry_price: sp.entry_price,
                 quantity: sp.quantity,
                 stop_price: sp.stop_loss,
@@ -373,6 +381,7 @@ impl LiveTrader {
 
         let position = Position {
             symbol: symbol.clone(),
+            side: Side::Buy, // TODO: Update when adding short support to live trading
             entry_price,
             quantity,
             stop_price,
