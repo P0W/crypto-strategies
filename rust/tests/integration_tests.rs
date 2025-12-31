@@ -502,7 +502,8 @@ fn test_position_side_field() {
 
 #[test]
 fn test_trade_return_pct() {
-    let trade = Trade {
+    // Test Long trade
+    let long_trade = Trade {
         symbol: Symbol::new("BTCINR"),
         side: Side::Buy,
         entry_price: 100.0,
@@ -515,7 +516,23 @@ fn test_trade_return_pct() {
         net_pnl: 9.8,
     };
 
-    assert_eq!(trade.return_pct(), 10.0); // (110-100)/100 * 100
+    assert_eq!(long_trade.return_pct(), 10.0); // (110-100)/100 * 100
+
+    // Test Short trade (profit when price goes down)
+    let short_trade = Trade {
+        symbol: Symbol::new("BTCINR"),
+        side: Side::Sell,
+        entry_price: 100.0,
+        exit_price: 90.0,
+        quantity: 1.0,
+        entry_time: Utc::now(),
+        exit_time: Utc::now(),
+        pnl: 10.0,
+        commission: 0.2,
+        net_pnl: 9.8,
+    };
+
+    assert_eq!(short_trade.return_pct(), 10.0); // (100-90)/100 * 100
 }
 
 // =============================================================================

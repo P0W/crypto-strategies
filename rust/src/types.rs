@@ -85,7 +85,10 @@ pub struct Trade {
 
 impl Trade {
     pub fn return_pct(&self) -> f64 {
-        ((self.exit_price - self.entry_price) / self.entry_price) * 100.0
+        match self.side {
+            Side::Buy => ((self.exit_price - self.entry_price) / self.entry_price) * 100.0,
+            Side::Sell => ((self.entry_price - self.exit_price) / self.entry_price) * 100.0,
+        }
     }
 }
 
