@@ -25,10 +25,7 @@ use crypto_strategies::risk::RiskManager;
 use crypto_strategies::state_manager::{
     create_state_manager, Checkpoint, Position as StatePosition, SqliteStateManager,
 };
-use crypto_strategies::strategies::volatility_regime::{
-    create_strategy_from_config, VolatilityRegimeStrategy,
-};
-use crypto_strategies::strategies::Strategy;
+use crypto_strategies::strategies::{self, Strategy};
 use crypto_strategies::{
     Candle, Config, Order, OrderExecution, OrderStatus, Position, Side, Signal, Symbol, Trade,
 };
@@ -36,7 +33,7 @@ use crypto_strategies::{
 /// Live trader state
 struct LiveTrader {
     config: Config,
-    strategy: VolatilityRegimeStrategy,
+    strategy: Box<dyn Strategy>,
     risk_manager: RiskManager,
     exchange: CoinDCXClient,
     state_manager: SqliteStateManager,
@@ -49,7 +46,7 @@ struct LiveTrader {
 
 impl LiveTrader {
     async fn new(config: Config, state_db_path: &str, paper_mode: bool) -> Result<Self> {
-        let strategy = create_strategy_from_config(&config).context("Failed to create strategy")?;
+        let strategy = strategies::create_strategy(&config).context("Failed to create strategy")?;
 
         let risk_manager = RiskManager::new(
             config.trading.initial_capital,
@@ -605,7 +602,7 @@ async fn run_async(
     info!("╠══════════════════════════════════════════════════════════════╣");
     info!("║ Strategy: {:<50} ║", config.strategy_name);
     info!("║ Pairs: {:<53} ║", config.trading.pairs.join(", "));
-    info!("║ Timeframe: {:<49} ║", config.trading.timeframe);
+    info!("║ Timeframe: {:<49} ║", config.timeframe());
     info!(
         "║ Initial Capital: Rs {:<39.2} ║",
         config.trading.initial_capital

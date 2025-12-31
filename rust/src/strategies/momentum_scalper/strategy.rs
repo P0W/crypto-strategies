@@ -218,6 +218,10 @@ impl MomentumScalperStrategy {
 }
 
 impl Strategy for MomentumScalperStrategy {
+    fn name(&self) -> &'static str {
+        "momentum_scalper"
+    }
+
     fn generate_signal(
         &self,
         _symbol: &Symbol,

@@ -177,6 +177,10 @@ impl MeanReversionStrategy {
 }
 
 impl Strategy for MeanReversionStrategy {
+    fn name(&self) -> &'static str {
+        "mean_reversion"
+    }
+
     fn generate_signal(
         &self,
         _symbol: &Symbol,

@@ -1,64 +1,59 @@
 {
-    "_comment": "Sample configuration for CoinDCX Trading Strategy - Works for both Backtest and Live Trading",
-    
     "exchange": {
         "maker_fee": 0.001,
         "taker_fee": 0.001,
         "assumed_slippage": 0.001,
         "rate_limit": 10
     },
-    
     "trading": {
         "pairs": ["BTCINR", "ETHINR", "SOLINR", "BNBINR", "XRPINR"],
-        "timeframe": "1d",
         "initial_capital": 100000,
-        
         "risk_per_trade": 0.15,
         "max_positions": 5,
         "max_portfolio_heat": 0.30,
         "max_position_pct": 0.20,
         "max_drawdown": 0.20,
-        
         "drawdown_warning": 0.10,
         "drawdown_critical": 0.15,
         "drawdown_warning_multiplier": 0.50,
         "drawdown_critical_multiplier": 0.25,
-        
         "consecutive_loss_limit": 3,
         "consecutive_loss_multiplier": 0.75
     },
-    
+    "strategy_name": "volatility_regime",
     "strategy": {
+        "timeframe": "1d",
         "atr_period": 14,
         "volatility_lookback": 20,
         "compression_threshold": 0.6,
         "expansion_threshold": 1.5,
         "extreme_threshold": 2.5,
-        
         "ema_fast": 8,
         "ema_slow": 21,
         "adx_period": 14,
         "adx_threshold": 30.0,
-        
         "breakout_atr_multiple": 1.5,
         "stop_atr_multiple": 2.5,
         "target_atr_multiple": 5.0,
         "trailing_activation": 0.5,
         "trailing_atr_multiple": 1.5
     },
-    
     "tax": {
         "tax_rate": 0.30,
         "tds_rate": 0.01,
         "loss_offset_allowed": false
     },
-    
     "backtest": {
         "data_dir": "../data",
         "results_dir": "../results",
-        "timeframe": "1d",
-        "start_date": null,
-        "end_date": null,
         "commission": 0.001
+    },
+    "grid": {
+        "atr_period": [14],
+        "ema_fast": [8, 13],
+        "ema_slow": [21, 34],
+        "adx_threshold": [20.0, 25.0, 30.0],
+        "stop_atr_multiple": [2.0, 2.5, 3.0],
+        "target_atr_multiple": [4.0, 5.0, 6.0]
     }
 }

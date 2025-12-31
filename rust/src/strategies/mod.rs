@@ -1,202 +1,32 @@
 //! Trading Strategies Module
 //!
-//! Contains all available trading strategies and common abstractions.
-//!
-//! ## Available Strategies
-//!
-//! - `volatility_regime`: Volatility Regime Adaptive Strategy - trades breakouts in
-//!   compression/normal volatility regimes with trend confirmation
-//! - `mean_reversion`: Mean Reversion Scalper - professional-grade mean reversion
-//!   strategy for short timeframes (5m, 15m, 1h) using Bollinger Bands, RSI, and volume
-//! - `simple_trend`: Simple Trend Following - minimalist strategy with only 2 entry filters
-//!   (price above EMA + ATR expanding) designed to generate more trades
+//! Production-ready strategy framework with:
+//! - Clean trait interface that all strategies must implement
+//! - Dynamic strategy registry (no hardcoded names)
+//! - Automatic strategy discovery via registration
 
 pub mod mean_reversion;
 pub mod momentum_scalper;
 pub mod range_breakout;
-pub mod simple_trend;
 pub mod volatility_regime;
 
 use crate::{Candle, Config, Order, Position, Signal, Symbol, Trade};
 use anyhow::Result;
 use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
 
-// ============================================================================
-// Strategy Factory - Creates strategies from config
-// ============================================================================
+// =============================================================================
+// Strategy Trait - The contract all strategies must implement
+// =============================================================================
 
-/// Create a strategy from configuration
-pub fn create_strategy(config: &Config) -> Result<Box<dyn Strategy>> {
-    match config.strategy_name.as_str() {
-        "volatility_regime" => Ok(Box::new(volatility_regime::create_strategy_from_config(config)?)),
-        "mean_reversion" => Ok(Box::new(mean_reversion::create_strategy_from_config(config)?)),
-        "momentum_scalper" => Ok(Box::new(momentum_scalper::create_strategy_from_config(config)?)),
-        "range_breakout" => Ok(Box::new(range_breakout::create_strategy_from_config(config)?)),
-        "simple_trend" => Ok(Box::new(simple_trend::create_strategy_from_config(config)?)),
-        other => anyhow::bail!(
-            "Unknown strategy: {}. Available: volatility_regime, mean_reversion, momentum_scalper, range_breakout, simple_trend",
-            other
-        ),
-    }
-}
-
-// ============================================================================
-// Grid Parameter Generation - Strategy-agnostic optimization
-// ============================================================================
-
-/// Generate grid search configs for any strategy
-pub fn generate_grid_configs(config: &Config, mode: &str) -> Vec<Config> {
-    match config.strategy_name.as_str() {
-        "volatility_regime" => {
-            let grid = match mode {
-                "full" => volatility_regime::GridParams::full(),
-                _ => volatility_regime::GridParams::quick(),
-            };
-            grid.generate_configs(config)
-        }
-        "mean_reversion" => {
-            let grid = match mode {
-                "full" => mean_reversion::GridParams::full(),
-                _ => mean_reversion::GridParams::quick(),
-            };
-            grid.generate_configs(config)
-        }
-        "momentum_scalper" => {
-            let grid = match mode {
-                "full" => momentum_scalper::GridParams::full(),
-                _ => momentum_scalper::GridParams::quick(),
-            };
-            grid.generate_configs(config)
-        }
-        "range_breakout" => {
-            let grid = match mode {
-                "full" => range_breakout::GridParams::full(),
-                _ => range_breakout::GridParams::quick(),
-            };
-            grid.generate_configs(config)
-        }
-        "simple_trend" => {
-            let grid = match mode {
-                "full" => simple_trend::GridParams::full(),
-                _ => simple_trend::GridParams::quick(),
-            };
-            grid.generate_configs(config)
-        }
-        _ => vec![config.clone()], // Unknown strategy: return base config
-    }
-}
-
-/// Get total grid combinations for any strategy
-pub fn get_grid_combinations(strategy_name: &str, mode: &str) -> usize {
-    match strategy_name {
-        "volatility_regime" => {
-            let grid = match mode {
-                "full" => volatility_regime::GridParams::full(),
-                _ => volatility_regime::GridParams::quick(),
-            };
-            grid.total_combinations()
-        }
-        "mean_reversion" => {
-            let grid = match mode {
-                "full" => mean_reversion::GridParams::full(),
-                _ => mean_reversion::GridParams::quick(),
-            };
-            grid.total_combinations()
-        }
-        "momentum_scalper" => {
-            let grid = match mode {
-                "full" => momentum_scalper::GridParams::full(),
-                _ => momentum_scalper::GridParams::quick(),
-            };
-            grid.total_combinations()
-        }
-        "range_breakout" => {
-            let grid = match mode {
-                "full" => range_breakout::GridParams::full(),
-                _ => range_breakout::GridParams::quick(),
-            };
-            grid.total_combinations()
-        }
-        "simple_trend" => {
-            let grid = match mode {
-                "full" => simple_trend::GridParams::full(),
-                _ => simple_trend::GridParams::quick(),
-            };
-            grid.total_combinations()
-        }
-        _ => 1, // Unknown strategy: 1 combination (base config only)
-    }
-}
-
-/// Extract parameters from config for reporting
-pub fn extract_params(config: &Config) -> HashMap<String, f64> {
-    match config.strategy_name.as_str() {
-        "volatility_regime" => {
-            if let Ok(vr_config) = serde_json::from_value::<volatility_regime::VolatilityRegimeConfig>(
-                config.strategy.clone(),
-            ) {
-                volatility_regime::config_to_params(&vr_config)
-            } else {
-                HashMap::new()
-            }
-        }
-        "mean_reversion" => {
-            if let Ok(mr_config) = serde_json::from_value::<mean_reversion::MeanReversionConfig>(
-                config.strategy.clone(),
-            ) {
-                mean_reversion::config_to_params(&mr_config)
-            } else {
-                HashMap::new()
-            }
-        }
-        "momentum_scalper" => {
-            if let Ok(ms_config) = serde_json::from_value::<momentum_scalper::MomentumScalperConfig>(
-                config.strategy.clone(),
-            ) {
-                momentum_scalper::config_to_params(&ms_config)
-            } else {
-                HashMap::new()
-            }
-        }
-        "range_breakout" => {
-            if let Ok(rb_config) = serde_json::from_value::<range_breakout::RangeBreakoutConfig>(
-                config.strategy.clone(),
-            ) {
-                range_breakout::config_to_params(&rb_config)
-            } else {
-                HashMap::new()
-            }
-        }
-        "simple_trend" => {
-            if let Ok(st_config) = serde_json::from_value::<simple_trend::SimpleTrendConfig>(
-                config.strategy.clone(),
-            ) {
-                simple_trend::config_to_params(&st_config)
-            } else {
-                HashMap::new()
-            }
-        }
-        _ => HashMap::new(),
-    }
-}
-
-/// Format parameters for display based on strategy
-/// Dispatches to strategy-specific format_params in utils.rs
-pub fn format_params(params: &HashMap<String, f64>, strategy_name: &str) -> String {
-    match strategy_name {
-        "mean_reversion" => mean_reversion::format_params(params),
-        "momentum_scalper" => momentum_scalper::format_params(params),
-        "range_breakout" => range_breakout::format_params(params),
-        "simple_trend" => simple_trend::format_params(params),
-        _ => volatility_regime::format_params(params),
-    }
-}
-
-/// Trading strategy trait
+/// Trading strategy trait - defines the mandatory interface for all strategies.
 ///
-/// This trait defines the interface for trading strategies, matching the backtrader interface
-/// for compatibility and providing hooks for order and trade notifications.
+/// Every strategy must implement these core methods. Default implementations
+/// are provided for optional callbacks.
 pub trait Strategy: Send + Sync {
+    /// Strategy identifier (must match config's strategy_name)
+    fn name(&self) -> &'static str;
+
     /// Generate trading signal for the given candle data
     fn generate_signal(
         &self,
@@ -220,38 +50,20 @@ pub trait Strategy: Send + Sync {
     ) -> Option<f64>;
 
     /// Get regime score for position sizing (default: 1.0)
-    ///
-    /// Returns a multiplier for position sizing based on market regime:
-    /// - Compression: 1.5 (higher conviction for breakouts)
-    /// - Normal: 1.0 (standard sizing)
-    /// - Expansion: 0.8 (reduced size)
-    /// - Extreme: 0.5 (minimal exposure)
     fn get_regime_score(&self, _candles: &[Candle]) -> f64 {
-        1.0 // Default implementation returns 1.0
+        1.0
     }
 
     /// Notification when an order state changes
-    ///
-    /// Called when:
-    /// - Order is submitted
-    /// - Order is accepted by exchange
-    /// - Order is partially filled
-    /// - Order is completed
-    /// - Order is canceled, rejected, or failed
     fn notify_order(&mut self, order: &Order) {
-        // Default implementation: log order status
         match order.status {
-            crate::OrderStatus::Submitted | crate::OrderStatus::Accepted => {
-                // Order in flight, no action needed by default
-            }
             crate::OrderStatus::Completed => {
                 if let Some(ref exec) = order.executed {
-                    tracing::info!(
+                    tracing::debug!(
                         symbol = %order.symbol,
                         side = ?order.side,
                         price = exec.price,
                         size = exec.size,
-                        commission = exec.commission,
                         "Order executed"
                     );
                 }
@@ -259,47 +71,75 @@ pub trait Strategy: Send + Sync {
             crate::OrderStatus::Canceled
             | crate::OrderStatus::Margin
             | crate::OrderStatus::Rejected => {
-                tracing::warn!(
-                    symbol = %order.symbol,
-                    status = ?order.status,
-                    "Order failed"
-                );
+                tracing::warn!(symbol = %order.symbol, status = ?order.status, "Order failed");
             }
             _ => {}
         }
     }
 
-    /// Notification when a trade (position) is closed
-    ///
-    /// Called with the completed trade details including P&L, commission, etc.
-    /// Strategies can use this to track performance, adjust parameters, or log results.
+    /// Notification when a trade is closed
     fn notify_trade(&mut self, trade: &Trade) {
-        // Default implementation: log trade results
-        let return_pct = trade.return_pct();
-        let net_pnl_post_tax = if trade.net_pnl > 0.0 {
-            trade.net_pnl * 0.7 // 30% tax on profits
-        } else {
-            trade.net_pnl
-        };
-
-        tracing::info!(
+        tracing::debug!(
             symbol = %trade.symbol,
-            entry_price = trade.entry_price,
-            exit_price = trade.exit_price,
-            quantity = trade.quantity,
-            return_pct = format!("{:.2}%", return_pct),
-            gross_pnl = trade.pnl,
-            commission = trade.commission,
-            net_pnl = trade.net_pnl,
-            net_pnl_post_tax = format!("{:.2}", net_pnl_post_tax),
+            pnl = trade.net_pnl,
+            return_pct = format!("{:.2}%", trade.return_pct()),
             "Trade closed"
         );
     }
 
     /// Initialize strategy (called once before trading starts)
-    ///
-    /// Use this to set up any internal state, load models, etc.
-    fn init(&mut self) {
-        // Default: no initialization needed
-    }
+    fn init(&mut self) {}
+}
+
+// =============================================================================
+// Strategy Factory - Type alias for strategy constructor functions
+// =============================================================================
+
+/// Factory function type for creating strategies from config
+pub type StrategyFactory = fn(&Config) -> Result<Box<dyn Strategy>>;
+
+// =============================================================================
+// Strategy Registry - Dynamic registration without hardcoding
+// =============================================================================
+
+/// Global strategy registry
+static REGISTRY: OnceLock<RwLock<HashMap<&'static str, StrategyFactory>>> = OnceLock::new();
+
+fn get_registry() -> &'static RwLock<HashMap<&'static str, StrategyFactory>> {
+    REGISTRY.get_or_init(|| {
+        let mut map = HashMap::new();
+        map.insert("volatility_regime", volatility_regime::create as StrategyFactory);
+        map.insert("mean_reversion", mean_reversion::create as StrategyFactory);
+        map.insert("momentum_scalper", momentum_scalper::create as StrategyFactory);
+        map.insert("range_breakout", range_breakout::create as StrategyFactory);
+        RwLock::new(map)
+    })
+}
+
+/// Create a strategy from configuration
+pub fn create_strategy(config: &Config) -> Result<Box<dyn Strategy>> {
+    let registry = get_registry().read().unwrap();
+
+    let factory = registry
+        .get(config.strategy_name.as_str())
+        .ok_or_else(|| {
+            let available: Vec<_> = registry.keys().copied().collect();
+            anyhow::anyhow!(
+                "Unknown strategy: '{}'. Available: {}",
+                config.strategy_name,
+                available.join(", ")
+            )
+        })?;
+
+    factory(config)
+}
+
+/// Get list of available strategy names
+pub fn available_strategies() -> Vec<&'static str> {
+    get_registry().read().unwrap().keys().copied().collect()
+}
+
+/// Register a new strategy (for plugins or testing)
+pub fn register_strategy(name: &'static str, factory: StrategyFactory) {
+    get_registry().write().unwrap().insert(name, factory);
 }

@@ -1,24 +1,29 @@
-//! Volatility Regime Strategy Module
+//! Volatility Regime Strategy
 //!
-//! Contains all components for the Volatility Regime Adaptive Strategy.
+//! Exploits volatility clustering via regime classification.
 
-use serde::{Deserialize, Serialize};
-
-pub mod config;
-pub mod grid_params;
-pub mod strategy;
-pub mod utils;
+mod config;
+mod strategy;
 
 pub use config::VolatilityRegimeConfig;
-pub use grid_params::GridParams;
 pub use strategy::VolatilityRegimeStrategy;
-pub use utils::{config_to_params, create_strategy_from_config, format_params};
+
+use crate::{Config, Strategy};
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 
 /// Market volatility regime
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VolatilityRegime {
-    Compression, // Low volatility, potential breakout
-    Normal,      // Average volatility
-    Expansion,   // High volatility, trending
-    Extreme,     // Very high volatility, risk-off
+    Compression,
+    Normal,
+    Expansion,
+    Extreme,
+}
+
+/// Create strategy from config (called by registry)
+pub fn create(config: &Config) -> Result<Box<dyn Strategy>> {
+    let strategy_config: VolatilityRegimeConfig = serde_json::from_value(config.strategy.clone())
+        .map_err(|e| anyhow::anyhow!("Failed to parse volatility_regime config: {}", e))?;
+    Ok(Box::new(VolatilityRegimeStrategy::new(strategy_config)))
 }

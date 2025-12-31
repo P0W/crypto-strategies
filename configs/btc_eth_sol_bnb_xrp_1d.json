@@ -7,7 +7,6 @@
     },
     "trading": {
         "pairs": ["BTCINR", "ETHINR", "SOLINR", "BNBINR", "XRPINR"],
-        "timeframe": "1d",
         "initial_capital": 100000,
         "risk_per_trade": 0.15,
         "max_positions": 5,
@@ -23,6 +22,7 @@
     },
     "strategy_name": "volatility_regime",
     "strategy": {
+        "timeframe": "1d",
         "atr_period": 14,
         "volatility_lookback": 20,
         "compression_threshold": 0.6,
@@ -46,9 +46,14 @@
     "backtest": {
         "data_dir": "../data",
         "results_dir": "../results",
-        "timeframe": "1d",
-        "start_date": null,
-        "end_date": null,
         "commission": 0.001
+    },
+    "grid": {
+        "atr_period": [14],
+        "ema_fast": [8, 13],
+        "ema_slow": [21, 34],
+        "adx_threshold": [20.0, 25.0, 30.0],
+        "stop_atr_multiple": [2.0, 2.5, 3.0],
+        "target_atr_multiple": [4.0, 5.0, 6.0]
     }
 }

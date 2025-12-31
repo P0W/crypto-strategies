@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -20,6 +21,10 @@ pub struct Config {
     pub strategy: serde_json::Value,
     pub tax: TaxConfig,
     pub backtest: BacktestConfig,
+    /// Grid search parameters for optimization (optional)
+    /// Each key is a strategy param name, value is array of values to test
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid: Option<HashMap<String, Vec<serde_json::Value>>>,
 }
 
 fn default_strategy_name() -> String {
@@ -43,6 +48,22 @@ impl Config {
 
         Ok(config)
     }
+
+    /// Get timeframe from strategy config
+    pub fn timeframe(&self) -> String {
+        self.strategy
+            .get("timeframe")
+            .and_then(|v| v.as_str())
+            .unwrap_or("1d")
+            .to_string()
+    }
+
+    /// Set timeframe in strategy config
+    pub fn set_timeframe(&mut self, timeframe: &str) {
+        if let Some(obj) = self.strategy.as_object_mut() {
+            obj.insert("timeframe".to_string(), serde_json::json!(timeframe));
+        }
+    }
 }
 
 impl Default for Config {
@@ -51,9 +72,10 @@ impl Default for Config {
             exchange: ExchangeConfig::default(),
             trading: TradingConfig::default(),
             strategy_name: "volatility_regime".to_string(),
-            strategy: serde_json::json!({}), // Empty, strategy defaults should come from strategy itself
+            strategy: serde_json::json!({}),
             tax: TaxConfig::default(),
             backtest: BacktestConfig::default(),
+            grid: None,
         }
     }
 }
@@ -88,7 +110,6 @@ impl Default for ExchangeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingConfig {
     pub pairs: Vec<String>,
-    pub timeframe: String,
     pub initial_capital: f64,
     pub risk_per_trade: f64,
     pub max_positions: usize,
@@ -113,7 +134,6 @@ impl Default for TradingConfig {
                 "BNBINR".to_string(),
                 "XRPINR".to_string(),
             ],
-            timeframe: "1d".to_string(),
             initial_capital: 100_000.0,
             risk_per_trade: 0.15,
             max_positions: 5,
@@ -159,11 +179,6 @@ impl Default for TaxConfig {
 pub struct BacktestConfig {
     pub data_dir: String,
     pub results_dir: String,
-    pub timeframe: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub start_date: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub end_date: Option<String>,
     pub commission: f64,
 }
 
@@ -172,9 +187,6 @@ impl Default for BacktestConfig {
         BacktestConfig {
             data_dir: "data".to_string(),
             results_dir: "results".to_string(),
-            timeframe: "1d".to_string(),
-            start_date: None,
-            end_date: None,
             commission: 0.001,
         }
     }

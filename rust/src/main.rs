@@ -53,15 +53,11 @@ enum Commands {
         end: Option<String>,
     },
 
-    /// Optimize strategy parameters
+    /// Optimize strategy parameters (grid search from JSON config)
     Optimize {
-        /// Path to base configuration file
+        /// Path to configuration file with grid section
         #[arg(short, long, default_value = "configs/btc_eth_sol_bnb_xrp_1d.json")]
         config: String,
-
-        /// Optimization mode (quick, full, or custom)
-        #[arg(short, long, default_value = "quick")]
-        mode: String,
 
         /// Sort results by metric (sharpe, calmar, return, win_rate, profit_factor)
         #[arg(long, default_value = "sharpe")]
@@ -72,20 +68,18 @@ enum Commands {
         top: usize,
 
         /// Coins to test (comma-separated). E.g., "BTC,ETH,SOL"
-        /// Generates all combinations of coin portfolios
         #[arg(long)]
         coins: Option<String>,
 
-        /// Symbols to test directly (semicolon-separated groups, comma-separated within).
-        /// E.g., "BTCINR;ETHINR;BTCINR,ETHINR"
+        /// Symbols to test directly (semicolon-separated groups, comma-separated within)
         #[arg(long)]
         symbols: Option<String>,
 
-        /// Minimum coin combination size (default: 1 for singles)
+        /// Minimum coin combination size
         #[arg(long, default_value = "1")]
         min_combo: usize,
 
-        /// Maximum coin combination size (default: all coins)
+        /// Maximum coin combination size
         #[arg(long)]
         max_combo: Option<usize>,
 
@@ -93,33 +87,10 @@ enum Commands {
         #[arg(long)]
         timeframes: Option<String>,
 
-        /// ADX threshold values to test (comma-separated). E.g., "20,25,30"
-        #[arg(long)]
-        adx: Option<String>,
-
-        /// Stop ATR multiples to test (comma-separated). E.g., "2.0,2.5,3.0"
-        #[arg(long)]
-        stop_atr: Option<String>,
-
-        /// Target ATR multiples to test (comma-separated). E.g., "4.0,5.0,6.0"
-        #[arg(long)]
-        target_atr: Option<String>,
-
-        /// Compression threshold values to test (comma-separated). E.g., "0.5,0.6,0.7"
-        #[arg(long)]
-        compression: Option<String>,
-
-        /// EMA fast periods to test (comma-separated). E.g., "8,13"
-        #[arg(long)]
-        ema_fast: Option<String>,
-
-        /// EMA slow periods to test (comma-separated). E.g., "21,34"
-        #[arg(long)]
-        ema_slow: Option<String>,
-
-        /// ATR periods to test (comma-separated). E.g., "10,14,20"
-        #[arg(long)]
-        atr_period: Option<String>,
+        /// Override grid params. Format: "param=val1,val2,val3". Can be used multiple times.
+        /// Example: --override "atr_period=10,14,20" --override "ema_fast=5,8,13"
+        #[arg(short = 'O', long = "override")]
+        overrides: Vec<String>,
 
         /// Run sequentially instead of parallel
         #[arg(long)]
@@ -269,7 +240,6 @@ fn main() -> Result<()> {
 
         Commands::Optimize {
             config,
-            mode,
             sort_by,
             top,
             coins,
@@ -277,17 +247,10 @@ fn main() -> Result<()> {
             min_combo,
             max_combo,
             timeframes,
-            adx,
-            stop_atr,
-            target_atr,
-            compression,
-            ema_fast,
-            ema_slow,
-            atr_period,
+            overrides,
             sequential,
         } => commands::optimize::run(
             config,
-            mode,
             sort_by,
             top,
             coins,
@@ -295,13 +258,7 @@ fn main() -> Result<()> {
             min_combo,
             max_combo,
             timeframes,
-            adx,
-            stop_atr,
-            target_atr,
-            compression,
-            ema_fast,
-            ema_slow,
-            atr_period,
+            overrides,
             sequential,
         ),
 

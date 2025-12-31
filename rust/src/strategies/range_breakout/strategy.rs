@@ -71,6 +71,10 @@ impl RangeBreakoutStrategy {
 }
 
 impl Strategy for RangeBreakoutStrategy {
+    fn name(&self) -> &'static str {
+        "range_breakout"
+    }
+
     fn generate_signal(
         &self,
         _symbol: &Symbol,
