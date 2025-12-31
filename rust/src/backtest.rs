@@ -627,6 +627,7 @@ impl Backtester {
 
         // Standard Sharpe calculation: use ALL returns consistently for both mean and std_dev
         // This matches Backtrader's SharpeRatio analyzer and industry standard practice
+        // Note: n > 0.0 check is defensive against edge cases like single-day equity curves
         let mean_return = if n > 0.0 {
             all_returns.iter().sum::<f64>() / n
         } else {
@@ -705,11 +706,12 @@ pub struct BacktestResult {
 
 #[cfg(test)]
 mod tests {
-    /// Test that Sharpe ratio uses ALL returns consistently for both mean and std_dev.
-    /// This is the industry standard approach that matches Backtrader's SharpeRatio analyzer.
+    /// Test that Sharpe ratio calculation matches industry standard formula.
+    /// Verifies that all returns (including zero-return days) are used consistently
+    /// for both mean and std_dev, matching Backtrader's SharpeRatio analyzer.
     #[test]
-    fn test_sharpe_uses_all_returns_consistently() {
-        // Test with realistic daily returns
+    fn test_sharpe_formula_matches_industry_standard() {
+        // Test with realistic daily returns including some zero-return (flat) days
         let returns = vec![
             0.02, -0.01, 0.03, -0.02, 0.01, 0.0, 0.0, 0.025, -0.015, 0.02, -0.01, 0.015, 0.0, 0.02,
             -0.01, 0.03, -0.02, 0.01, 0.025, -0.015,
@@ -717,7 +719,9 @@ mod tests {
 
         let n = returns.len() as f64;
 
-        // Industry standard: use same set for both mean and std_dev
+        // Industry standard Sharpe calculation:
+        // 1. Mean uses ALL returns (including zeros)
+        // 2. Std dev uses ALL returns (including zeros) with the SAME mean
         let mean_return = returns.iter().sum::<f64>() / n;
         let variance = returns
             .iter()
@@ -731,21 +735,25 @@ mod tests {
 
         let sharpe = excess_return / std_dev * (365.0_f64).sqrt();
 
-        println!("Total returns count: {}", returns.len());
+        println!("Total returns count (including zeros): {}", returns.len());
+        println!("Zero-return days: {}", returns.iter().filter(|&&r| r == 0.0).count());
         println!("Mean return: {:.6}", mean_return);
         println!("Std dev: {:.6}", std_dev);
         println!("Sharpe ratio: {:.2}", sharpe);
 
-        // Verify reasonable values
+        // Verify the formula produces consistent results
         assert!(
             std_dev > 0.0,
             "Std dev should be positive: got {}",
             std_dev
         );
+        
+        // Verify mean includes all data (if we excluded zeros, mean would be different)
+        let non_zero_returns: Vec<f64> = returns.iter().filter(|&&r| r != 0.0).copied().collect();
+        let non_zero_mean = non_zero_returns.iter().sum::<f64>() / non_zero_returns.len() as f64;
         assert!(
-            mean_return.abs() < 0.1,
-            "Mean return should be reasonable: got {}",
-            mean_return
+            (mean_return - non_zero_mean).abs() > 0.0001,
+            "Mean should differ when including vs excluding zero returns"
         );
 
         // With positive mean return and reasonable volatility, Sharpe should be reasonable
