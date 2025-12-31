@@ -247,7 +247,7 @@ pub fn run(
     let pb = ProgressBar::new(total_runs as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("  {spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({per_sec}) {msg}")
+            .template("  {spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({per_sec}) ETA: {eta} {msg}")
             .unwrap()
             .progress_chars("█▓░"),
     );
