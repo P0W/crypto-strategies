@@ -17,6 +17,17 @@ use crate::coindcx::{self, CoinDCXClient};
 use crate::{Candle, Symbol};
 
 // =============================================================================
+// Type Aliases
+// =============================================================================
+
+/// Result type for check_data_coverage: (missing_files, needs_earlier_data, needs_later_data)
+pub type DataCoverageResult = (
+    Vec<(Symbol, String)>,
+    Vec<(Symbol, String, DateTime<Utc>)>,
+    Vec<(Symbol, String, DateTime<Utc>)>,
+);
+
+// =============================================================================
 // Constants
 // =============================================================================
 
@@ -273,11 +284,7 @@ pub fn check_data_coverage(
     timeframes: &[String],
     start: Option<DateTime<Utc>>,
     end: Option<DateTime<Utc>>,
-) -> (
-    Vec<(Symbol, String)>,
-    Vec<(Symbol, String, DateTime<Utc>)>,
-    Vec<(Symbol, String, DateTime<Utc>)>,
-) {
+) -> DataCoverageResult {
     let mut missing_files = Vec::new();
     let mut needs_earlier = Vec::new();
     let mut needs_later = Vec::new();
