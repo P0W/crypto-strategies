@@ -102,7 +102,7 @@ impl Backtester {
                 let _current_price = current_candle.close; // Kept for potential future use
                 let open_price = current_candle.open; // Use open for order execution
 
-                // Execute pending buy order at OPEN price with slippage
+                // Execute pending buy/sell order at OPEN price with slippage
                 // Professional systems apply slippage to account for market impact
                 if let Some(order) = pending_orders.remove(symbol) {
                     let (entry_price, action_str) = match order.side {
@@ -118,8 +118,19 @@ impl Backtester {
                     let position_value = order.quantity * entry_price;
                     let commission = position_value * self.config.exchange.taker_fee;
 
-                    if cash >= position_value + commission {
-                        cash -= position_value + commission;
+                    // Cash flow:
+                    // - Long (Buy): Pay cash + commission
+                    // - Short (Sell): Receive cash - commission
+                    let cash_required = match order.side {
+                        Side::Buy => position_value + commission,
+                        Side::Sell => commission, // Only need commission, we receive the position value
+                    };
+
+                    if cash >= cash_required {
+                        match order.side {
+                            Side::Buy => cash -= position_value + commission,
+                            Side::Sell => cash += position_value - commission,
+                        }
 
                         let pos = Position {
                             symbol: symbol.clone(),
@@ -155,7 +166,14 @@ impl Backtester {
                             Side::Sell => open_price * (1.0 + self.config.exchange.assumed_slippage),
                         };
                         let trade = self.close_position(&pos, exit_price, candle_dt, &reason); // Use candle_dt
-                        cash += pos.quantity * exit_price - trade.commission;
+                        
+                        // Cash flow on close:
+                        // - Long (Sell): Receive cash - commission
+                        // - Short (Buy to cover): Pay cash + commission
+                        match pos.side {
+                            Side::Buy => cash += pos.quantity * exit_price - trade.commission,
+                            Side::Sell => cash -= pos.quantity * exit_price + trade.commission,
+                        }
 
                         let action_str = match pos.side {
                             Side::Buy => "SELL",
