@@ -41,6 +41,7 @@ pub mod binance;
 pub mod coindcx;
 pub mod config;
 pub mod data;
+pub mod grid;
 pub mod indicators;
 pub mod optimizer;
 pub mod risk;

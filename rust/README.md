@@ -1,25 +1,29 @@
 # Crypto Strategies - Rust Implementation
 
-High-performance Rust implementation of the Volatility Regime Adaptive Trading Strategy for CoinDCX.
+High-performance Rust implementation of trading strategies for CoinDCX.
 
-## Why Rust?
+## Features
 
 - **Performance**: 10-100x faster backtests enabling thorough optimization
 - **Type Safety**: Compile-time guarantees eliminate runtime type errors
-- **Production Resilience**: Memory safety, no null pointer exceptions
-- **Concurrency**: Safe parallelization with Rayon for optimization
+- **Production Ready**: Memory safety, graceful error handling
+- **Parallel Optimization**: Safe parallelization with Rayon
+- **Generic Strategy Framework**: Add new strategies with minimal boilerplate
 
 ## Prerequisites
 
 - [Rust toolchain](https://rustup.rs/) (1.70+)
 - CoinDCX API credentials (for live trading)
 
-## Setup
+## Quick Start
 
 ```bash
 cd rust
 
-# Build
+# Build (debug for development)
+cargo build
+
+# Build (release for production/optimization)
 cargo build --release
 
 # Run tests
@@ -31,9 +35,8 @@ cargo test
 ```bash
 # Create .env from template (in repo root)
 copy ..\.env.example ..\.env  # Windows
-# cp ../.env.example ../.env  # Linux/Mac
 
-# Add CoinDCX credentials to .env
+# Add CoinDCX credentials
 COINDCX_API_KEY=your_api_key_here
 COINDCX_API_SECRET=your_api_secret_here
 ```
@@ -44,13 +47,10 @@ COINDCX_API_SECRET=your_api_secret_here
 
 ```bash
 # Run with default config
-cargo run --release -- backtest
-
-# With specific config
 cargo run --release -- backtest --config ../configs/sample_config.json
 
 # Override parameters
-cargo run --release -- backtest --capital 100000 --start 2023-01-01 --end 2024-01-01
+cargo run --release -- backtest --capital 100000
 
 # Verbose output
 cargo run --release -- backtest -v
@@ -58,39 +58,55 @@ cargo run --release -- backtest -v
 
 ### Optimization
 
-```bash
-# Quick optimization (fewer parameter combinations)
-cargo run --release -- optimize --mode quick
+Grid search parameters are defined in your JSON config file under the `grid` section:
 
-# Full optimization (comprehensive grid search)
-cargo run --release -- optimize --mode full
+```json
+{
+  "strategy": { ... },
+  "grid": {
+    "atr_period": [14],
+    "ema_fast": [8, 13],
+    "ema_slow": [21, 34],
+    "adx_threshold": [20.0, 25.0, 30.0],
+    "stop_atr_multiple": [2.0, 2.5, 3.0],
+    "target_atr_multiple": [4.0, 5.0, 6.0]
+  }
+}
+```
+
+```bash
+# Run optimization (uses grid from config)
+cargo run --release -- optimize --config ../configs/sample_config.json
+
+# Override grid params via CLI
+cargo run --release -- optimize -O "adx_threshold=20,25,30,35" -O "ema_fast=5,8,13"
 
 # Sort by different metrics
-cargo run --release -- optimize --mode quick --sort-by calmar  # return/drawdown
-cargo run --release -- optimize --mode quick --sort-by return  # raw return
+cargo run --release -- optimize --sort-by calmar
+cargo run --release -- optimize --sort-by return
 
 # Show top N results
-cargo run --release -- optimize --mode quick --top 20
+cargo run --release -- optimize --top 20
+
+# Test multiple coin combinations
+cargo run --release -- optimize --coins BTC,ETH,SOL
 ```
 
 **Sorting Options:**
 
-| Option | Description | Best For |
-|--------|-------------|----------|
-| `sharpe` | Risk-adjusted return (default) | Overall performance |
-| `calmar` | Return / Max Drawdown | Drawdown-sensitive |
-| `return` | Raw total return | Maximum gains |
-| `profit_factor` | Gross profits / Gross losses | Trade consistency |
-| `win_rate` | Winning trades % | High-probability setups |
+| Option | Description |
+|--------|-------------|
+| `sharpe` | Risk-adjusted return (default) |
+| `calmar` | Return / Max Drawdown |
+| `return` | Raw total return |
+| `profit_factor` | Gross profits / Gross losses |
+| `win_rate` | Winning trades % |
 
 ### Live Trading
 
 ```bash
 # Paper trading (safe, simulated)
 cargo run --release -- live --paper
-
-# With verbose logging
-cargo run --release -- live --paper -v
 
 # Custom cycle interval (seconds)
 cargo run --release -- live --paper --interval 300
@@ -101,132 +117,285 @@ cargo run --release -- live --live
 
 ## Architecture
 
-### Execution Modes
-
-1. **Backtest** - Historical P&L simulation with comprehensive metrics
-2. **Optimize** - Parallel parameter grid search using Rayon
-3. **Live** - Real-time trading with state persistence
-
-### Core Components
-
 ```
 src/
-├── main.rs              # CLI dispatch, logging setup
+├── main.rs              # CLI dispatch
+├── lib.rs               # Library exports
 ├── commands/            # Command implementations
-│   ├── backtest.rs      # Backtest runner
-│   ├── optimize.rs      # Parallel optimization
-│   ├── live.rs          # Live trading loop
-│   └── download.rs      # Data fetcher
+│   ├── backtest.rs
+│   ├── optimize.rs
+│   ├── live.rs
+│   └── download.rs
 ├── strategies/          # Strategy implementations
-│   └── volatility_regime/
-│       ├── strategy.rs  # Signal generation
-│       ├── config.rs    # Strategy parameters
-│       └── grid_params.rs # Optimization ranges
-├── backtest.rs          # Event-driven simulation engine
-├── exchange.rs          # CoinDCX API client (circuit breaker, rate limiting)
-├── risk.rs              # Position sizing, drawdown management
-├── state_manager.rs     # SQLite persistence with JSON backup
-├── indicators.rs        # ATR, EMA, ADX calculations
-├── config.rs            # JSON configuration parsing
-├── types.rs             # Domain model (Candle, Signal, Position, Trade)
-└── data.rs              # CSV data loading and alignment
+│   ├── mod.rs           # Strategy trait + registry
+│   ├── volatility_regime/
+│   ├── mean_reversion/
+│   ├── momentum_scalper/
+│   └── range_breakout/
+├── backtest.rs          # Simulation engine
+├── grid.rs              # Generic grid search
+├── risk.rs              # Position sizing
+├── indicators.rs        # Technical indicators
+├── config.rs            # Configuration parsing
+├── types.rs             # Domain model
+└── data.rs              # Data loading
 ```
 
-### Key Patterns
+## Creating a New Strategy
 
-- **Strategy Trait**: Plugin architecture for multiple strategies
-- **Circuit Breaker**: Fail-fast on API errors with auto-recovery
-- **Rate Limiting**: Token bucket algorithm for API calls
-- **Event-Driven Backtest**: Prevents lookahead bias
-- **Parallel Optimization**: Work-stealing via Rayon
+The strategy framework uses a trait-based plugin architecture. To add a new strategy:
 
-## Strategy: Volatility Regime
-
-### Regime Classification
-
-Based on ATR ratio (`current_ATR / median_ATR(lookback)`):
-
-| Regime | ATR Ratio | Action |
-|--------|-----------|--------|
-| Compression | < 0.6 | Setup for breakout entry |
-| Normal | 0.6-1.5 | Standard trend-following |
-| Expansion | 1.5-2.5 | No new entries |
-| Extreme | > 2.5 | Close all positions |
-
-### Entry Conditions
-
-All must be true:
-- Regime is Compression or Normal
-- EMA(8) > EMA(21) AND ADX > 30
-- Close > (Recent High - 1.5×ATR)
-- Risk manager allows entry
-
-### Exit Strategy
-
-- **Stop Loss**: 2.5× ATR below entry
-- **Take Profit**: 5.0× ATR above entry (2:1 reward-risk)
-- **Trailing Stop**: Activates at 50% profit, trails at 1.5× ATR
-- **Regime Exit**: Immediate close if Extreme
-- **Trend Exit**: Close if price < EMA(21) when profitable
-
-## Risk Management
-
-| Parameter | Value |
-|-----------|-------|
-| Risk Per Trade | 0.5% - 2% (dynamic) |
-| Max Positions | 2 |
-| Max Portfolio Heat | 10% |
-| Max Drawdown | 20% (hard halt) |
-
-### Drawdown-Based De-Risking
-
-- 10% drawdown: Reduce position sizes by 50%
-- 15% drawdown: Reduce position sizes by 75%
-- 20% drawdown: Halt all trading
-
-## Performance Results
-
-**Winning Config:** `configs/btc_eth_sol_bnb_xrp_1d.json`
-
-Backtest Period: April 2023 - December 2025 (1000 candles)
-
-| Metric | Value |
-|--------|-------|
-| Total Return | 65.99% |
-| Post-Tax Return | 46.19% |
-| Sharpe Ratio | 1.48 |
-| Calmar Ratio | 1.67 |
-| Max Drawdown | 12.22% |
-| Win Rate | 65.52% |
-| Profit Factor | 2.95 |
-| Total Trades | 29 |
-| Winning Trades | 19 |
-| Losing Trades | 10 |
-| Average Win | ₹5,318.79 |
-| Average Loss | ₹3,425.32 |
-
-**Fee & Tax Impact:**
-- Total Commission: ₹1,699.83
-- Tax (30%): ₹19,796.47
-
-**Assets:** BTC, ETH, SOL, BNB, XRP on 1D timeframe
-
-## State Persistence
-
-SQLite-based with automatic JSON backup:
+### Step 1: Create Strategy Directory
 
 ```
-../state/
-├── trading_state.db      # SQLite database (primary)
-├── trading_state.json    # Auto JSON backup
-└── final_state.json      # Export on graceful shutdown
+src/strategies/my_strategy/
+├── mod.rs
+├── config.rs
+└── strategy.rs
 ```
 
-**What's Persisted:**
-- Open positions with entry details
-- Portfolio checkpoints (value, cycle count, drawdown)
-- Complete trade history
-- Config hash for change detection
+### Step 2: Define Config (`config.rs`)
+
+```rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MyStrategyConfig {
+    pub param1: usize,
+    pub param2: f64,
+    // ... your parameters
+}
+
+impl Default for MyStrategyConfig {
+    fn default() -> Self {
+        Self {
+            param1: 14,
+            param2: 2.5,
+        }
+    }
+}
+```
+
+### Step 3: Implement Strategy (`strategy.rs`)
+
+```rust
+use crate::strategies::Strategy;
+use crate::{Candle, Position, Signal, Symbol};
+use super::config::MyStrategyConfig;
+
+pub struct MyStrategy {
+    config: MyStrategyConfig,
+}
+
+impl MyStrategy {
+    pub fn new(config: MyStrategyConfig) -> Self {
+        Self { config }
+    }
+}
+
+impl Strategy for MyStrategy {
+    // REQUIRED: Strategy identifier
+    fn name(&self) -> &'static str {
+        "my_strategy"
+    }
+
+    // REQUIRED: Generate trading signal
+    fn generate_signal(
+        &self,
+        symbol: &Symbol,
+        candles: &[Candle],
+        position: Option<&Position>,
+    ) -> Signal {
+        // Your signal logic here
+        Signal::Flat
+    }
+
+    // REQUIRED: Calculate stop loss
+    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64 {
+        entry_price * 0.95  // Example: 5% stop
+    }
+
+    // REQUIRED: Calculate take profit
+    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64) -> f64 {
+        entry_price * 1.10  // Example: 10% target
+    }
+
+    // REQUIRED: Update trailing stop
+    fn update_trailing_stop(
+        &self,
+        position: &Position,
+        current_price: f64,
+        candles: &[Candle],
+    ) -> Option<f64> {
+        None  // No trailing stop
+    }
+
+    // OPTIONAL: Regime-based position sizing (default: 1.0)
+    fn get_regime_score(&self, candles: &[Candle]) -> f64 {
+        1.0
+    }
+}
+```
+
+### Step 4: Create Module (`mod.rs`)
+
+```rust
+mod config;
+mod strategy;
+
+pub use config::MyStrategyConfig;
+pub use strategy::MyStrategy;
+
+use crate::{Config, Strategy};
+use anyhow::Result;
+
+/// Factory function called by registry
+pub fn create(config: &Config) -> Result<Box<dyn Strategy>> {
+    let strategy_config: MyStrategyConfig = serde_json::from_value(config.strategy.clone())
+        .map_err(|e| anyhow::anyhow!("Failed to parse my_strategy config: {}", e))?;
+    Ok(Box::new(MyStrategy::new(strategy_config)))
+}
+```
+
+### Step 5: Register Strategy
+
+In `src/strategies/mod.rs`, add your strategy:
+
+```rust
+// Add module declaration
+pub mod my_strategy;
+
+// Add to registry (in get_registry function)
+fn get_registry() -> &'static RwLock<HashMap<&'static str, StrategyFactory>> {
+    REGISTRY.get_or_init(|| {
+        let mut map = HashMap::new();
+        map.insert("volatility_regime", volatility_regime::create as StrategyFactory);
+        map.insert("mean_reversion", mean_reversion::create as StrategyFactory);
+        map.insert("momentum_scalper", momentum_scalper::create as StrategyFactory);
+        map.insert("range_breakout", range_breakout::create as StrategyFactory);
+        map.insert("my_strategy", my_strategy::create as StrategyFactory);  // <-- Add this
+        RwLock::new(map)
+    })
+}
+```
+
+### Step 6: Create Config File
+
+```json
+{
+  "strategy_name": "my_strategy",
+  "strategy": {
+    "timeframe": "1h",
+    "param1": 14,
+    "param2": 2.5
+  },
+  "grid": {
+    "param1": [10, 14, 20],
+    "param2": [2.0, 2.5, 3.0]
+  },
+  ...
+}
+```
+
+### Step 7: Test
+
+```bash
+# Backtest
+cargo run -- backtest --config ../configs/my_strategy.json
+
+# Optimize
+cargo run -- optimize --config ../configs/my_strategy.json
+```
+
+## Strategy Trait Reference
+
+```rust
+pub trait Strategy: Send + Sync {
+    /// Strategy identifier (must match config's strategy_name)
+    fn name(&self) -> &'static str;
+
+    /// Generate trading signal
+    fn generate_signal(
+        &self,
+        symbol: &Symbol,
+        candles: &[Candle],
+        position: Option<&Position>,
+    ) -> Signal;
+
+    /// Calculate stop loss price for entry
+    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64;
+
+    /// Calculate take profit price for entry
+    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64) -> f64;
+
+    /// Update trailing stop (return None if not using trailing)
+    fn update_trailing_stop(
+        &self,
+        position: &Position,
+        current_price: f64,
+        candles: &[Candle],
+    ) -> Option<f64>;
+
+    /// Position sizing multiplier based on market regime (default: 1.0)
+    fn get_regime_score(&self, candles: &[Candle]) -> f64 { 1.0 }
+
+    /// Called when order status changes (default: logging)
+    fn notify_order(&mut self, order: &Order) { ... }
+
+    /// Called when trade closes (default: logging)
+    fn notify_trade(&mut self, trade: &Trade) { ... }
+
+    /// Called once before trading starts
+    fn init(&mut self) { }
+}
+```
+
+## Available Strategies
+
+| Strategy | Description | Best Timeframe |
+|----------|-------------|----------------|
+| `volatility_regime` | Volatility clustering breakouts | 1d |
+| `mean_reversion` | Bollinger Band + RSI reversion | 5m, 15m, 1h |
+| `momentum_scalper` | EMA crossover momentum | 5m, 15m |
+| `range_breakout` | N-bar high/low breakouts | 1h, 4h |
+
+## Configuration Structure
+
+```json
+{
+  "exchange": {
+    "maker_fee": 0.001,
+    "taker_fee": 0.001,
+    "assumed_slippage": 0.001
+  },
+  "trading": {
+    "pairs": ["BTCINR", "ETHINR"],
+    "initial_capital": 100000,
+    "risk_per_trade": 0.15,
+    "max_positions": 5,
+    "max_drawdown": 0.20
+  },
+  "strategy_name": "volatility_regime",
+  "strategy": {
+    "timeframe": "1d",
+    "atr_period": 14,
+    ...
+  },
+  "tax": {
+    "tax_rate": 0.30,
+    "tds_rate": 0.01
+  },
+  "backtest": {
+    "data_dir": "../data",
+    "results_dir": "../results",
+    "commission": 0.001
+  },
+  "grid": {
+    "param1": [10, 14, 20],
+    "param2": [2.0, 2.5, 3.0]
+  }
+}
+```
 
 ## Testing
 
@@ -234,15 +403,8 @@ SQLite-based with automatic JSON backup:
 cargo test                    # Run all tests
 cargo test --release          # With optimizations
 cargo test -- --nocapture     # Show output
-cargo test risk::             # Test specific module
+cargo test strategies::       # Test strategies module
 ```
-
-## Performance Tips
-
-1. Always use `--release` for backtesting and optimization
-2. Use `--mode quick` for iterative development
-3. Limit date range with `--start` and `--end` for faster iteration
-4. Check logs in `../logs/` for debugging
 
 ## License
 

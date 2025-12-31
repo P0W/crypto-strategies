@@ -54,7 +54,8 @@ impl MeanReversionStrategy {
         }
 
         let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
-        let (upper, middle, lower) = bollinger_bands(&close, self.config.bb_period, self.config.bb_std);
+        let (upper, middle, lower) =
+            bollinger_bands(&close, self.config.bb_period, self.config.bb_std);
         let rsi_values = rsi(&close, self.config.rsi_period);
 
         // Get current values
@@ -177,6 +178,10 @@ impl MeanReversionStrategy {
 }
 
 impl Strategy for MeanReversionStrategy {
+    fn name(&self) -> &'static str {
+        "mean_reversion"
+    }
+
     fn generate_signal(
         &self,
         _symbol: &Symbol,
@@ -347,10 +352,10 @@ impl Strategy for MeanReversionStrategy {
     /// Mean reversion works best in normal/compression regimes
     fn get_regime_score(&self, candles: &[Candle]) -> f64 {
         match self.classify_market_state(candles) {
-            Some(MarketState::Oversold) => 1.2,  // Good setup, slightly larger
+            Some(MarketState::Oversold) => 1.2, // Good setup, slightly larger
             Some(MarketState::Overbought) => 1.2, // Good setup for shorts
-            Some(MarketState::Neutral) => 0.8,   // Not in setup zone
-            Some(MarketState::Extreme) => 0.3,   // Dangerous, minimal size
+            Some(MarketState::Neutral) => 0.8,  // Not in setup zone
+            Some(MarketState::Extreme) => 0.3,  // Dangerous, minimal size
             None => 1.0,
         }
     }

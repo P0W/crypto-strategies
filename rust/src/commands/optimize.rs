@@ -1,8 +1,7 @@
-//! Optimize command implementation with progress tracking and custom parameter support
+//! Optimize command - JSON-driven grid search optimization
 
 use anyhow::Result;
-use crypto_strategies::strategies::{self, volatility_regime::GridParams};
-use crypto_strategies::{data, optimizer::OptimizationResult, Config, Symbol};
+use crypto_strategies::{data, grid, optimizer::OptimizationResult, strategies, Config, Symbol};
 use indicatif::{ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -10,16 +9,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tracing::info;
-
-/// Parse comma-separated floats
-fn parse_float_list(s: &str) -> Vec<f64> {
-    s.split(',').filter_map(|x| x.trim().parse().ok()).collect()
-}
-
-/// Parse comma-separated integers
-fn parse_int_list(s: &str) -> Vec<usize> {
-    s.split(',').filter_map(|x| x.trim().parse().ok()).collect()
-}
 
 /// Parse symbol groups (semicolon-separated groups, comma-separated within)
 fn parse_symbol_groups(s: &str) -> Vec<Vec<String>> {
@@ -42,20 +31,17 @@ fn generate_coin_combinations(
     max_size: usize,
 ) -> Vec<Vec<String>> {
     let mut result = Vec::new();
-
     for size in min_size..=max_size {
         for combo in coins.iter().combinations(size) {
             result.push(combo.into_iter().map(|c| format!("{}INR", c)).collect());
         }
     }
-
     result
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     config_path: String,
-    mode: String,
     sort_by: String,
     top: usize,
     coins: Option<String>,
@@ -63,20 +49,33 @@ pub fn run(
     min_combo: usize,
     max_combo: Option<usize>,
     timeframes: Option<String>,
-    adx: Option<String>,
-    stop_atr: Option<String>,
-    target_atr: Option<String>,
-    compression: Option<String>,
-    ema_fast: Option<String>,
-    ema_slow: Option<String>,
-    atr_period: Option<String>,
+    overrides: Vec<String>,
     sequential: bool,
 ) -> Result<()> {
     info!("Starting optimization");
 
-    // Load base configuration
-    let config = Config::from_file(&config_path)?;
+    // Load configuration
+    let mut config = Config::from_file(&config_path)?;
     info!("Loaded configuration from: {}", config_path);
+
+    // Apply CLI overrides to grid
+    if !overrides.is_empty() {
+        grid::apply_overrides(&mut config, &overrides);
+        info!("Applied {} CLI overrides to grid", overrides.len());
+    }
+
+    // Verify grid exists
+    if config.grid.is_none() || config.grid.as_ref().map(|g| g.is_empty()).unwrap_or(true) {
+        anyhow::bail!(
+            "No grid parameters found in config. Add a 'grid' section to your config file.\n\
+             Example:\n\
+             \"grid\": {{\n\
+               \"atr_period\": [10, 14, 20],\n\
+               \"ema_fast\": [5, 8, 13],\n\
+               \"ema_slow\": [21, 34, 55]\n\
+             }}"
+        );
+    }
 
     // Parse coin list
     let coins_parsed: Option<Vec<String>> = coins
@@ -85,15 +84,6 @@ pub fn run(
 
     // Parse symbol groups
     let symbols_parsed: Option<Vec<Vec<String>>> = symbols.as_ref().map(|s| parse_symbol_groups(s));
-
-    // Parse custom parameter grids
-    let adx_parsed = adx.as_ref().map(|s| parse_float_list(s));
-    let stop_atr_parsed = stop_atr.as_ref().map(|s| parse_float_list(s));
-    let target_atr_parsed = target_atr.as_ref().map(|s| parse_float_list(s));
-    let _compression_parsed = compression.as_ref().map(|s| parse_float_list(s));
-    let ema_fast_parsed = ema_fast.as_ref().map(|s| parse_int_list(s));
-    let ema_slow_parsed = ema_slow.as_ref().map(|s| parse_int_list(s));
-    let atr_period_parsed = atr_period.as_ref().map(|s| parse_int_list(s));
 
     // Parse timeframes
     let timeframes_parsed: Option<Vec<String>> = timeframes
@@ -128,7 +118,7 @@ pub fn run(
 
     // Determine timeframes to test
     let timeframes_to_test: Vec<String> =
-        timeframes_parsed.unwrap_or_else(|| vec![config.trading.timeframe.clone()]);
+        timeframes_parsed.unwrap_or_else(|| vec![config.timeframe()]);
 
     info!("Timeframes to test: {:?}", timeframes_to_test);
     info!("Strategy: {}", config.strategy_name);
@@ -144,8 +134,9 @@ pub fn run(
 
     // Check for missing data and fetch if needed
     info!("Checking for missing data files...");
-    let missing = data::find_missing_data(&config.backtest.data_dir, &all_symbols, &timeframes_to_test);
-    
+    let missing =
+        data::find_missing_data(&config.backtest.data_dir, &all_symbols, &timeframes_to_test);
+
     if !missing.is_empty() {
         println!("\n{}", "=".repeat(60));
         println!("FETCHING MISSING DATA");
@@ -156,7 +147,6 @@ pub fn run(
         }
         println!("{}\n", "=".repeat(60));
 
-        // Fetch missing data (default 365 days)
         match data::ensure_data_available_sync(
             &config.backtest.data_dir,
             &all_symbols,
@@ -165,54 +155,25 @@ pub fn run(
         ) {
             Ok(failed) => {
                 if !failed.is_empty() {
-                    println!("  ⚠ Could not fetch {} files:", failed.len());
+                    println!("  Warning: Could not fetch {} files:", failed.len());
                     for (sym, tf) in &failed {
                         println!("    - {}_{}.csv", sym.as_str(), tf);
                     }
                 } else {
-                    println!("  ✓ All missing data fetched successfully\n");
+                    println!("  All missing data fetched successfully\n");
                 }
             }
             Err(e) => {
-                println!("  ⚠ Error fetching data: {}\n", e);
+                println!("  Warning: Error fetching data: {}\n", e);
             }
         }
     }
 
-    // Check if any custom params were provided
-    let has_custom = adx_parsed.is_some()
-        || stop_atr_parsed.is_some()
-        || target_atr_parsed.is_some()
-        || ema_fast_parsed.is_some()
-        || ema_slow_parsed.is_some()
-        || atr_period_parsed.is_some();
+    // Calculate total parameter combinations from grid
+    let total_param_combinations = grid::total_combinations(&config);
+    info!("Grid parameter combinations: {}", total_param_combinations);
 
-    // Build grid params based on mode and CLI overrides
-    // For volatility_regime with custom params, use custom grid
-    // For other strategies or no custom params, use generic grid generation
-    let use_custom_vr_grid = has_custom && config.strategy_name == "volatility_regime";
-    let vr_grid_params = if use_custom_vr_grid {
-        Some(GridParams::custom(
-            atr_period_parsed.unwrap_or_else(|| vec![14]),
-            ema_fast_parsed.unwrap_or_else(|| vec![8, 13]),
-            ema_slow_parsed.unwrap_or_else(|| vec![21, 34]),
-            adx_parsed.unwrap_or_else(|| vec![25.0, 30.0]),
-            stop_atr_parsed.unwrap_or_else(|| vec![2.0, 2.5]),
-            target_atr_parsed.unwrap_or_else(|| vec![4.0, 5.0]),
-        ))
-    } else {
-        None
-    };
-
-    let total_param_combinations = if let Some(ref grid) = vr_grid_params {
-        grid.total_combinations()
-    } else {
-        strategies::get_grid_combinations(&config.strategy_name, &mode)
-    };
-    info!("Optimization mode: {}", mode);
-    info!("Parameter combinations: {}", total_param_combinations);
-
-    // Pre-calculate total runs and build task list
+    // Build task list (symbol group × timeframe combinations)
     let mut tasks: Vec<OptTask> = Vec::new();
     let mut symbol_groups_flat: Vec<String> = Vec::new();
 
@@ -228,8 +189,7 @@ pub fn run(
         task_config.trading.pairs = symbols_vec.clone();
 
         for timeframe in &timeframes_to_test {
-            task_config.trading.timeframe = timeframe.clone();
-            task_config.backtest.timeframe = timeframe.clone();
+            task_config.set_timeframe(timeframe);
 
             let symbol_list: Vec<Symbol> = symbols_vec.iter().map(|s| Symbol(s.clone())).collect();
             if let Ok(data) =
@@ -247,14 +207,10 @@ pub fn run(
         }
     }
 
-    // Generate all (task, param_config) combinations
+    // Generate all (task, param_config) combinations using generic grid generator
     let mut all_runs: Vec<(OptTask, Config)> = Vec::new();
     for task in &tasks {
-        let configs = if let Some(ref grid) = vr_grid_params {
-            grid.generate_configs(&task.config)
-        } else {
-            strategies::generate_grid_configs(&task.config, &mode)
-        };
+        let configs = grid::generate_grid_configs(&task.config);
         for cfg in configs {
             all_runs.push((task.clone(), cfg));
         }
@@ -262,7 +218,7 @@ pub fn run(
 
     let total_runs = all_runs.len();
     info!(
-        "Total runs: {} groups × {} timeframes × {} params = {} actual runs",
+        "Total runs: {} groups x {} timeframes x {} params = {} actual runs",
         symbol_groups.len(),
         timeframes_to_test.len(),
         total_param_combinations,
@@ -270,39 +226,33 @@ pub fn run(
     );
 
     if total_runs == 0 {
-        info!("No valid runs found. Check data availability.");
+        info!("No valid runs found. Check data availability and grid config.");
         return Ok(());
     }
 
     // Print summary
-    println!("\n{}", "=".repeat(70));
-    println!("OPTIMIZATION SUMMARY");
-    println!("{}", "=".repeat(70));
-    println!("  Symbol groups: {}", symbol_groups.len());
-    println!("  Timeframes:    {:?}", timeframes_to_test);
-    println!("  Parameters:    {} combinations", total_param_combinations);
-    println!("  Total tests:   {}", total_runs);
+    println!();
+    println!("  Strategy      {}", config.strategy_name);
+    println!("  Symbols       {} group(s)", symbol_groups.len());
+    println!("  Timeframes    {}", timeframes_to_test.join(", "));
+    println!("  Grid          {} combinations", total_param_combinations);
+    println!("  Total runs    {}", total_runs);
     println!(
-        "  Mode:          {}",
+        "  Execution     {}",
         if sequential { "sequential" } else { "parallel" }
     );
-    println!("{}\n", "=".repeat(70));
+    println!();
 
-    // Create single progress bar (tqdm style)
+    // Create progress bar with solid blocks
     let pb = ProgressBar::new(total_runs as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template(
-                "⚡ {percent:>3}%|{bar:40}| {pos}/{len} [{elapsed}<{eta}, {per_sec}] ✓ {msg}",
-            )
+            .template("  {spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({per_sec}) {msg}")
             .unwrap()
-            .progress_chars("█░ "),
+            .progress_chars("█▓░"),
     );
-    // Force initial draw so user sees progress immediately
-    pb.set_message("starting...");
-    pb.tick();
-
-    println!("Running backtests (this may take a while for large datasets)...\n");
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+    pb.set_message("");
 
     let valid_count = Arc::new(AtomicUsize::new(0));
     let valid_count_clone = valid_count.clone();
@@ -312,7 +262,7 @@ pub fn run(
         all_runs
             .iter()
             .filter_map(|(task, param_config)| {
-                let result = run_single_backtest(task, param_config, &symbol_groups_flat);
+                let result = run_single_backtest(task, param_config);
                 pb.inc(1);
                 if let Some(ref r) = result {
                     if r.total_trades > 0 {
@@ -327,7 +277,7 @@ pub fn run(
         all_runs
             .par_iter()
             .filter_map(|(task, param_config)| {
-                let result = run_single_backtest(task, param_config, &symbol_groups_flat);
+                let result = run_single_backtest(task, param_config);
                 pb.inc(1);
                 if let Some(ref r) = result {
                     if r.total_trades > 0 {
@@ -357,47 +307,63 @@ pub fn run(
         sort_by
     );
 
+    // Get grid param keys for filtering display
+    let grid_keys: Vec<String> = config
+        .grid
+        .as_ref()
+        .map(|g| g.keys().cloned().collect())
+        .unwrap_or_default();
+
     // Display top results
     let display_count = top.min(all_results.len());
-    println!("\n{}", "=".repeat(120));
+    println!();
+    println!("  Top {} results (sorted by {})", display_count, sort_by);
+    println!();
     println!(
-        "TOP {} OPTIMIZATION RESULTS (sorted by {})",
-        display_count, sort_by
+        "  {:<3} {:>7} {:>8} {:>7} {:>6} {:>5}  {:<12} {:>3}  Grid Parameters",
+        "#", "Sharpe", "Return", "MaxDD", "WinR", "Trd", "Symbols", "TF"
     );
-    println!("{}", "=".repeat(120));
-    println!(
-        "{:<4} {:>7} {:>9} {:>8} {:>8} {:>6} | {:<15} {:>3} | Parameters",
-        "Rank", "Sharpe", "Return%", "MaxDD%", "WinR%", "Trades", "Symbols", "TF"
-    );
-    println!("{}", "-".repeat(120));
+    println!("  {}", "-".repeat(90));
 
     for (i, result) in all_results.iter().take(top).enumerate() {
         let group_idx = *result.params.get("_group_idx").unwrap_or(&0.0) as usize;
         let symbols_str = if group_idx < symbol_groups_flat.len() {
-            &symbol_groups_flat[group_idx]
+            symbol_groups_flat[group_idx]
+                .chars()
+                .take(12)
+                .collect::<String>()
         } else {
-            "N/A"
+            "N/A".to_string()
         };
 
         let tf_val = *result.params.get("_timeframe").unwrap_or(&0.0);
-        let tf = if (tf_val - 0.083).abs() < 0.01 {
-            "5m"
-        } else if (tf_val - 0.25).abs() < 0.01 {
-            "15m"
-        } else if (tf_val - 1.0).abs() < 0.01 {
-            "1h"
-        } else if (tf_val - 4.0).abs() < 0.01 {
-            "4h"
-        } else if (tf_val - 24.0).abs() < 0.01 {
-            "1d"
-        } else {
-            "?"
+        let tf = match tf_val {
+            v if (v - 0.083).abs() < 0.01 => "5m",
+            v if (v - 0.25).abs() < 0.01 => "15m",
+            v if (v - 1.0).abs() < 0.01 => "1h",
+            v if (v - 4.0).abs() < 0.01 => "4h",
+            v if (v - 24.0).abs() < 0.01 => "1d",
+            _ => "?",
         };
 
-        let params_str = strategies::format_params(&result.params, &config.strategy_name);
+        // Format only grid params (the ones that vary)
+        let grid_params: String = grid_keys
+            .iter()
+            .filter_map(|k| {
+                result.params.get(k).map(|v| {
+                    let short_key = k.replace("_multiple", "").replace("_threshold", "");
+                    if v.fract() == 0.0 {
+                        format!("{}={}", short_key, *v as i64)
+                    } else {
+                        format!("{}={:.1}", short_key, v)
+                    }
+                })
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
 
         println!(
-            "{:<4} {:>7.2} {:>9.2} {:>8.2} {:>8.2} {:>6} | {:<15} {:>3} | {}",
+            "  {:<3} {:>7.2} {:>7.1}% {:>6.1}% {:>5.0}% {:>5}  {:<12} {:>3}  {}",
             i + 1,
             result.sharpe_ratio,
             result.total_return,
@@ -406,10 +372,10 @@ pub fn run(
             result.total_trades,
             symbols_str,
             tf,
-            params_str
+            grid_params
         );
     }
-    println!("{}", "=".repeat(120));
+    println!();
 
     info!("Optimization completed successfully");
 
@@ -424,11 +390,7 @@ struct OptTask {
     config: Config,
 }
 
-fn run_single_backtest(
-    task: &OptTask,
-    param_config: &Config,
-    _symbol_groups_flat: &[String],
-) -> Option<OptimizationResult> {
+fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<OptimizationResult> {
     use crypto_strategies::backtest::Backtester;
 
     let symbol_list: Vec<Symbol> = task.symbols_vec.iter().map(|s| Symbol(s.clone())).collect();
@@ -441,7 +403,6 @@ fn run_single_backtest(
         _ => return None,
     };
 
-    // Use generic strategy factory
     let strategy = match strategies::create_strategy(param_config) {
         Ok(s) => s,
         Err(_) => return None,
@@ -450,7 +411,7 @@ fn run_single_backtest(
     let mut backtester = Backtester::new(param_config.clone(), strategy);
     let result = backtester.run(data);
 
-    // Build params with metadata and strategy-specific params
+    // Build params with metadata
     let mut params: HashMap<String, f64> = HashMap::new();
     params.insert("_group_idx".to_string(), task.group_idx as f64);
     params.insert(
@@ -465,8 +426,8 @@ fn run_single_backtest(
         },
     );
 
-    // Use generic param extraction
-    for (k, v) in strategies::extract_params(param_config) {
+    // Extract params from config
+    for (k, v) in grid::extract_params(param_config) {
         params.insert(k, v);
     }
 

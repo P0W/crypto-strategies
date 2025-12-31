@@ -42,14 +42,14 @@ pub fn run(
     match source {
         DataSource::Binance => {
             let fetcher = BinanceDataFetcher::new(&output);
-            
+
             for symbol in &symbols {
                 println!("\n{}:", symbol);
-                
+
                 for interval in &intervals {
                     total_downloads += 1;
                     print!("  Downloading {} {}... ", symbol, interval);
-                    
+
                     match rt.block_on(fetcher.download_pair(symbol, interval, days)) {
                         Ok(filepath) => {
                             if let Ok(candles) = load_csv(&filepath) {
@@ -67,14 +67,14 @@ pub fn run(
         }
         DataSource::CoinDCX => {
             let fetcher = CoinDCXDataFetcher::new(&output);
-            
+
             for symbol in &symbols {
                 println!("\n{}:", symbol);
-                
+
                 for interval in &intervals {
                     total_downloads += 1;
                     print!("  Downloading {} {}... ", symbol, interval);
-                    
+
                     match rt.block_on(fetcher.download_pair(symbol, interval, days)) {
                         Ok(filepath) => {
                             if let Ok(candles) = load_csv(&filepath) {

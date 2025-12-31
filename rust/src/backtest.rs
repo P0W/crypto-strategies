@@ -78,13 +78,24 @@ impl Backtester {
             .min()
             .unwrap_or(0);
 
+        // Maximum lookback window for indicator calculation
+        // Strategies don't need full history - just enough for the longest indicator period
+        // This reduces O(n²) to O(n*k) where k is the lookback window
+        // 300 bars covers: ADX (14*3=42), ATR (14), EMA slow (34), volatility lookback (20)
+        // with plenty of buffer for warmup periods
+        const MAX_LOOKBACK: usize = 300;
+
         for (i, current_date) in dates.iter().take(min_len).enumerate() {
+            // Calculate windowed start index once per bar (used by both phases)
+            let start_idx = i.saturating_sub(MAX_LOOKBACK - 1);
+
             // ============================================================
             // PHASE 1: Execute pending orders from previous bar (T+1 execution)
             // Orders execute at the OPEN of the current bar (matching Backtrader)
             // ============================================================
             for (symbol, candles) in &aligned_data {
-                let current_candles = &candles[..=i];
+                // Use windowed slice for performance - strategies only need recent history
+                let current_candles = &candles[start_idx..=i];
                 let current_candle = current_candles.last().unwrap();
                 let candle_dt = current_candle.datetime;
                 let _current_price = current_candle.close; // Kept for potential future use
@@ -159,7 +170,8 @@ impl Backtester {
             let mut total_value = cash;
 
             for (symbol, candles) in &aligned_data {
-                let current_candles = &candles[..=i];
+                // Use windowed slice for performance - strategies only need recent history
+                let current_candles = &candles[start_idx..=i];
                 let current_candle = current_candles.last().unwrap();
                 let candle_dt = current_candle.datetime;
                 let current_price = current_candle.close;
@@ -286,8 +298,10 @@ impl Backtester {
             equity_curve.push((*current_date, total_value));
         }
 
-        // Close any remaining positions
-        for (symbol, pos) in positions {
+        // Close any remaining positions (sorted for deterministic order)
+        let mut sorted_positions: Vec<(Symbol, Position)> = positions.into_iter().collect();
+        sorted_positions.sort_by(|a, b| a.0 .0.cmp(&b.0 .0));
+        for (symbol, pos) in sorted_positions {
             let candles = &aligned_data.iter().find(|(s, _)| s == &symbol).unwrap().1;
             let exit_price = candles.last().unwrap().close;
             let exit_time = candles.last().unwrap().datetime;
@@ -354,7 +368,11 @@ impl Backtester {
         // Fill missing timestamps with the previous candle (forward fill)
         let mut aligned_data = Vec::new();
 
-        for (symbol, candles) in data {
+        // Sort symbols for deterministic iteration order
+        let mut sorted_data: Vec<(Symbol, Vec<Candle>)> = data.into_iter().collect();
+        sorted_data.sort_by(|a, b| a.0 .0.cmp(&b.0 .0));
+
+        for (symbol, candles) in sorted_data {
             let mut aligned_candles = Vec::new();
             let mut candle_iter = candles.iter().peekable();
             let mut last_candle: Option<Candle> = None;

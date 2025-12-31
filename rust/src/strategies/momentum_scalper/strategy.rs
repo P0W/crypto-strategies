@@ -218,6 +218,10 @@ impl MomentumScalperStrategy {
 }
 
 impl Strategy for MomentumScalperStrategy {
+    fn name(&self) -> &'static str {
+        "momentum_scalper"
+    }
+
     fn generate_signal(
         &self,
         _symbol: &Symbol,
@@ -404,12 +408,9 @@ impl Strategy for MomentumScalperStrategy {
     }
 
     fn notify_order(&mut self, order: &Order) {
-        match order.status {
-            OrderStatus::Completed => {
-                self.bars_in_position = 0;
-                self.cooldown_counter = 0;
-            }
-            _ => {}
+        if order.status == OrderStatus::Completed {
+            self.bars_in_position = 0;
+            self.cooldown_counter = 0;
         }
     }
 

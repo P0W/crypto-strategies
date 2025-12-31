@@ -9,8 +9,8 @@ pub fn run(
     config_path: String,
     strategy_override: Option<String>,
     capital_override: Option<f64>,
-    start_override: Option<String>,
-    end_override: Option<String>,
+    _start_override: Option<String>,
+    _end_override: Option<String>,
 ) -> Result<()> {
     info!("Starting backtest");
 
@@ -29,25 +29,18 @@ pub fn run(
         config.trading.initial_capital = capital;
     }
 
-    if let Some(start) = start_override {
-        info!("Overriding start date to: {}", start);
-        config.backtest.start_date = Some(start);
-    }
-
-    if let Some(end) = end_override {
-        info!("Overriding end date to: {}", end);
-        config.backtest.end_date = Some(end);
-    }
+    // Note: start/end date filtering not yet implemented in data loader
 
     // Load data
     info!("Loading data from: {}", config.backtest.data_dir);
     let symbols = config.trading.symbols();
+    let timeframe = config.timeframe();
     debug!("Symbols: {:?}", symbols);
 
     // Check for missing data and fetch if needed
-    let timeframes = vec![config.trading.timeframe.clone()];
+    let timeframes = vec![timeframe.clone()];
     let missing = data::find_missing_data(&config.backtest.data_dir, &symbols, &timeframes);
-    
+
     if !missing.is_empty() {
         println!("\n{}", "=".repeat(60));
         println!("FETCHING MISSING DATA");
@@ -82,11 +75,7 @@ pub fn run(
         println!("{}\n", "=".repeat(60));
     }
 
-    let data = data::load_multi_symbol(
-        &config.backtest.data_dir,
-        &symbols,
-        &config.trading.timeframe,
-    )?;
+    let data = data::load_multi_symbol(&config.backtest.data_dir, &symbols, &timeframe)?;
 
     info!("Loaded data for {} symbols", data.len());
 

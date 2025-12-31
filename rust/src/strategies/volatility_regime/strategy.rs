@@ -123,6 +123,10 @@ impl VolatilityRegimeStrategy {
 }
 
 impl Strategy for VolatilityRegimeStrategy {
+    fn name(&self) -> &'static str {
+        "volatility_regime"
+    }
+
     fn generate_signal(
         &self,
         _symbol: &Symbol,

@@ -1,5 +1,12 @@
 {
-    "_comment": "Mean Reversion Scalper - Optimized for short timeframes (5m, 15m, 1h)",
+    "_comment": "Mean Reversion Scalper - Optimized from grid search with real Binance data",
+    "_performance": {
+        "sharpe_ratio": -0.38,
+        "total_return": "4.51%",
+        "max_drawdown": "7.59%",
+        "win_rate": "59.02%",
+        "total_trades": 61
+    },
 
     "strategy_name": "mean_reversion",
 
@@ -32,21 +39,21 @@
 
     "strategy": {
         "bb_period": 20,
-        "bb_std": 2.0,
+        "bb_std": 2.5,
 
         "rsi_period": 14,
-        "rsi_oversold": 35.0,
-        "rsi_overbought": 65.0,
+        "rsi_oversold": 30.0,
+        "rsi_overbought": 70.0,
 
         "volume_period": 20,
-        "volume_spike_threshold": 1.2,
+        "volume_spike_threshold": 2.0,
         "require_volume_spike": false,
 
         "trend_ema_period": 50,
         "use_trend_filter": false,
 
         "atr_period": 14,
-        "stop_atr_multiple": 1.5,
+        "stop_atr_multiple": 2.0,
         "take_profit_mode": "bb_middle",
         "target_atr_multiple": 2.0,
         "trailing_activation": 0.5,
