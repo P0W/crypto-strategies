@@ -526,9 +526,27 @@ pub fn run(
                 config_tf
             );
             println!();
+        } else if best_metric < 0.0 {
+            // Don't update with a losing strategy
+            println!(
+                "  Skipping config update: best result has negative {} ({:.2})",
+                sort_by, best_metric
+            );
+            println!("  Won't save a losing strategy configuration");
+            println!();
         } else {
-            // Run baseline backtest with current config to compare (same timeframe)
-            let baseline_metric = run_baseline_backtest(&config, &sort_by, start_date, end_date);
+            // Compare against saved optimization metrics, or run backtest as fallback
+            let saved_metric = get_saved_optimization_metric(&config, &sort_by);
+            let baseline_metric = match saved_metric {
+                Some(m) => {
+                    println!("  Using saved optimization metrics for comparison");
+                    Some(m)
+                }
+                None => {
+                    println!("  No saved metrics, running baseline backtest...");
+                    run_baseline_backtest(&config, &sort_by, start_date, end_date)
+                }
+            };
 
             let should_update = match baseline_metric {
                 Some(baseline) => {
@@ -548,15 +566,18 @@ pub fn run(
                     }
                 }
                 None => {
-                    println!("  No baseline comparison available, updating with best result");
+                    println!("  No baseline available, updating with best result");
                     true
                 }
             };
 
             if should_update {
-                match update_config_with_best(&config_path, best, &grid_keys) {
+                match update_config_with_best(&config_path, best, &grid_keys, start_date, end_date) {
                     Ok(backup_path) => {
                         println!("  Config updated: {}", config_path);
+                        if start_date.is_some() || end_date.is_some() {
+                            println!("  Date range saved to backtest section");
+                        }
                         println!("  Backup saved:   {}", backup_path);
                     }
                     Err(e) => {
@@ -585,7 +606,27 @@ fn get_metric_value(result: &OptimizationResult, sort_by: &str) -> f64 {
     }
 }
 
-/// Run baseline backtest with current config to get comparison metric
+/// Get saved optimization metric from config's _optimization field
+fn get_saved_optimization_metric(config: &Config, sort_by: &str) -> Option<f64> {
+    // The _optimization field is stored in the raw JSON, not parsed into Config
+    // We need to read it from the strategy value which contains the full JSON
+    // Actually, we store it at root level, so we need to check the original file
+    // For now, return None - the update function will save metrics for future comparisons
+
+    // Try to get from the config's strategy field (where we might have stored it)
+    let opt = config.strategy.get("_optimization")?;
+    let metric_name = match sort_by {
+        "sharpe" => "sharpe_ratio",
+        "return" => "total_return",
+        "calmar" => "calmar_ratio",
+        "win_rate" => "win_rate",
+        "profit_factor" => "profit_factor",
+        _ => "sharpe_ratio",
+    };
+    opt.get(metric_name)?.as_f64()
+}
+
+/// Run baseline backtest with current config to get comparison metric (fallback when no saved metrics)
 fn run_baseline_backtest(
     config: &Config,
     sort_by: &str,
@@ -628,6 +669,8 @@ fn update_config_with_best(
     config_path: &str,
     best: &OptimizationResult,
     grid_keys: &[String],
+    start_date: Option<DateTime<Utc>>,
+    end_date: Option<DateTime<Utc>>,
 ) -> Result<String> {
     use std::fs;
     use std::path::Path;
@@ -659,6 +702,41 @@ fn update_config_with_best(
                         obj.insert(key.clone(), serde_json::json!(*value));
                     }
                 }
+            }
+
+            // Save optimization metrics for future comparisons
+            // Using _optimization prefix to indicate metadata (won't affect strategy parsing)
+            let optimization_meta = serde_json::json!({
+                "sharpe_ratio": (best.sharpe_ratio * 100.0).round() / 100.0,
+                "total_return": (best.total_return * 10.0).round() / 10.0,
+                "max_drawdown": (best.max_drawdown * 10.0).round() / 10.0,
+                "win_rate": (best.win_rate * 10.0).round() / 10.0,
+                "total_trades": best.total_trades,
+                "calmar_ratio": (best.calmar_ratio * 100.0).round() / 100.0,
+                "optimized_at": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            });
+            obj.insert("_optimization".to_string(), optimization_meta);
+        }
+    }
+
+    // Update backtest section with date range (if filters were used)
+    if let Some(backtest) = config_json.get_mut("backtest") {
+        if let Some(obj) = backtest.as_object_mut() {
+            if let Some(start) = start_date {
+                obj.insert(
+                    "start_date".to_string(),
+                    serde_json::json!(start.format("%Y-%m-%d").to_string()),
+                );
+            } else {
+                obj.remove("start_date");
+            }
+            if let Some(end) = end_date {
+                obj.insert(
+                    "end_date".to_string(),
+                    serde_json::json!(end.format("%Y-%m-%d").to_string()),
+                );
+            } else {
+                obj.remove("end_date");
             }
         }
     }
