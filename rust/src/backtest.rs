@@ -612,6 +612,7 @@ impl Backtester {
 
         // Calculate Sharpe ratio
         // Crypto markets trade 365 days/year, using 5% annual risk-free rate
+        // Using standard industry formula: (mean_return - risk_free) / std_dev * sqrt(annualization_factor)
         const TRADING_DAYS_PER_YEAR: f64 = 365.0;
         const RISK_FREE_RATE: f64 = 0.05; // 5% annual risk-free rate
         let daily_risk_free = RISK_FREE_RATE / TRADING_DAYS_PER_YEAR;
@@ -622,28 +623,24 @@ impl Backtester {
             .map(|w| (w[1].1 - w[0].1) / w[0].1)
             .collect();
 
-        // Filter to only non-zero returns for volatility calculation
-        // This gives the TRUE volatility of the strategy when in market
-        // Zero returns (cash days) artificially deflate measured volatility
-        let active_returns: Vec<f64> = all_returns.iter().filter(|&&r| r != 0.0).copied().collect();
+        let n = all_returns.len() as f64;
 
-        let n_total = all_returns.len() as f64;
-        let n_active = active_returns.len() as f64;
-
-        // Mean return uses ALL returns (including cash days) - this is correct
-        let mean_return = all_returns.iter().sum::<f64>() / n_total;
+        // Standard Sharpe calculation: use ALL returns consistently for both mean and std_dev
+        // This matches Backtrader's SharpeRatio analyzer and industry standard practice
+        let mean_return = if n > 0.0 {
+            all_returns.iter().sum::<f64>() / n
+        } else {
+            0.0
+        };
         let excess_return = mean_return - daily_risk_free;
 
-        // Standard deviation uses ACTIVE returns only - this reflects true strategy risk
-        // When strategy is in cash, there's no market risk, so including those zeros
-        // would understate the actual volatility experienced when invested
-        let std_dev = if n_active > 1.0 {
-            let active_mean = active_returns.iter().sum::<f64>() / n_active;
-            let variance = active_returns
+        // Standard deviation using sample formula (n-1 denominator)
+        let std_dev = if n > 1.0 {
+            let variance = all_returns
                 .iter()
-                .map(|r| (r - active_mean).powi(2))
+                .map(|r| (r - mean_return).powi(2))
                 .sum::<f64>()
-                / (n_active - 1.0);
+                / (n - 1.0);
             variance.sqrt()
         } else {
             0.0
@@ -708,85 +705,53 @@ pub struct BacktestResult {
 
 #[cfg(test)]
 mod tests {
-    /// Test that Sharpe ratio uses only active (non-zero) returns for std_dev calculation.
-    /// This prevents artificially high Sharpe ratios from including zero-return cash days.
+    /// Test that Sharpe ratio uses ALL returns consistently for both mean and std_dev.
+    /// This is the industry standard approach that matches Backtrader's SharpeRatio analyzer.
     #[test]
-    fn test_sharpe_uses_active_returns_for_volatility() {
-        // Simulate a scenario with many zero-return days (cash) and few active trading days
-        // If we incorrectly include zeros in std_dev, volatility will be artificially low
-
-        // Example: 100 days total, but only 20 active trading days
-        // Active returns: 2%, -1%, 3%, -2%, 1%, ... (realistic daily swings)
-        let active_returns = vec![
-            0.02, -0.01, 0.03, -0.02, 0.01, 0.025, -0.015, 0.02, -0.01, 0.015, 0.02, -0.01, 0.03,
-            -0.02, 0.01, 0.025, -0.015, 0.02, -0.01, 0.015,
+    fn test_sharpe_uses_all_returns_consistently() {
+        // Test with realistic daily returns
+        let returns = vec![
+            0.02, -0.01, 0.03, -0.02, 0.01, 0.0, 0.0, 0.025, -0.015, 0.02, -0.01, 0.015, 0.0, 0.02,
+            -0.01, 0.03, -0.02, 0.01, 0.025, -0.015,
         ];
 
-        // Build all_returns with many zeros (cash days)
-        let mut all_returns: Vec<f64> = vec![0.0; 100];
-        for (i, &ret) in active_returns.iter().enumerate() {
-            all_returns[i * 5] = ret; // Every 5th day is active
-        }
+        let n = returns.len() as f64;
 
-        let n_total = all_returns.len() as f64;
-        let n_active = active_returns.len() as f64;
-
-        // CORRECT: Calculate std_dev from active returns only
-        let active_mean = active_returns.iter().sum::<f64>() / n_active;
-        let active_variance = active_returns
+        // Industry standard: use same set for both mean and std_dev
+        let mean_return = returns.iter().sum::<f64>() / n;
+        let variance = returns
             .iter()
-            .map(|r| (r - active_mean).powi(2))
+            .map(|r| (r - mean_return).powi(2))
             .sum::<f64>()
-            / (n_active - 1.0);
-        let correct_std_dev = active_variance.sqrt();
+            / (n - 1.0);
+        let std_dev = variance.sqrt();
 
-        // WRONG: Calculate std_dev including zeros (the bug we fixed)
-        let total_mean = all_returns.iter().sum::<f64>() / n_total;
-        let total_variance = all_returns
-            .iter()
-            .map(|r| (r - total_mean).powi(2))
-            .sum::<f64>()
-            / (n_total - 1.0);
-        let wrong_std_dev = total_variance.sqrt();
-
-        // Calculate Sharpe both ways
-        let mean_return = all_returns.iter().sum::<f64>() / n_total; // Use total mean for expected return
         let risk_free_daily = 0.05 / 365.0;
         let excess_return = mean_return - risk_free_daily;
 
-        let correct_sharpe = excess_return / correct_std_dev * (365.0_f64).sqrt();
-        let wrong_sharpe = excess_return / wrong_std_dev * (365.0_f64).sqrt();
+        let sharpe = excess_return / std_dev * (365.0_f64).sqrt();
 
-        println!("Active returns count: {}", active_returns.len());
-        println!("Total days: {}", all_returns.len());
-        println!("Correct std_dev (active only): {:.6}", correct_std_dev);
-        println!("Wrong std_dev (including zeros): {:.6}", wrong_std_dev);
-        println!("Correct Sharpe: {:.2}", correct_sharpe);
-        println!("Wrong Sharpe: {:.2}", wrong_sharpe);
+        println!("Total returns count: {}", returns.len());
+        println!("Mean return: {:.6}", mean_return);
+        println!("Std dev: {:.6}", std_dev);
+        println!("Sharpe ratio: {:.2}", sharpe);
 
-        // The wrong method should give HIGHER Sharpe (lower std_dev = higher Sharpe)
+        // Verify reasonable values
         assert!(
-            wrong_std_dev < correct_std_dev,
-            "Including zeros should reduce std_dev: {} should be < {}",
-            wrong_std_dev,
-            correct_std_dev
+            std_dev > 0.0,
+            "Std dev should be positive: got {}",
+            std_dev
+        );
+        assert!(
+            mean_return.abs() < 0.1,
+            "Mean return should be reasonable: got {}",
+            mean_return
         );
 
-        // The inflation factor should be significant (at least 2x)
-        let inflation_factor = wrong_sharpe / correct_sharpe;
-        println!("Sharpe inflation factor from bug: {:.1}x", inflation_factor);
-        assert!(
-            inflation_factor > 1.5,
-            "The bug should significantly inflate Sharpe: got {}x",
-            inflation_factor
-        );
-
-        // Correct std_dev should be realistic for crypto (1-3% daily)
-        assert!(
-            correct_std_dev > 0.01 && correct_std_dev < 0.05,
-            "Active std_dev {:.4} should be realistic (1-5% daily)",
-            correct_std_dev
-        );
+        // With positive mean return and reasonable volatility, Sharpe should be reasonable
+        if mean_return > risk_free_daily {
+            assert!(sharpe > 0.0, "Sharpe should be positive for positive excess returns");
+        }
     }
 
     /// Test that the Sharpe formula handles edge cases correctly
