@@ -14,7 +14,7 @@ use tracing::{info, warn};
 
 use crate::binance::{self, BinanceClient};
 use crate::coindcx::{self, CoinDCXClient};
-use crate::{Candle, Symbol};
+use crate::{Candle, CandleValidationError, Symbol};
 
 // =============================================================================
 // Type Aliases
@@ -72,31 +72,35 @@ impl std::fmt::Display for DataSource {
 // Candle Conversion
 // =============================================================================
 
-/// Convert from CoinDCX API candle to internal Candle type
-impl From<coindcx::types::Candle> for Candle {
-    fn from(c: coindcx::types::Candle) -> Self {
-        Candle {
-            datetime: DateTime::from_timestamp_millis(c.time).unwrap_or_else(Utc::now),
-            open: c.open,
-            high: c.high,
-            low: c.low,
-            close: c.close,
-            volume: c.volume,
-        }
+/// Convert from CoinDCX API candle to internal Candle type with validation
+impl TryFrom<coindcx::types::Candle> for Candle {
+    type Error = CandleValidationError;
+
+    fn try_from(c: coindcx::types::Candle) -> Result<Self, Self::Error> {
+        Candle::new(
+            DateTime::from_timestamp_millis(c.time).unwrap_or_else(Utc::now),
+            c.open,
+            c.high,
+            c.low,
+            c.close,
+            c.volume,
+        )
     }
 }
 
-/// Convert from Binance kline to internal Candle type
-impl From<binance::BinanceKline> for Candle {
-    fn from(k: binance::BinanceKline) -> Self {
-        Candle {
-            datetime: DateTime::from_timestamp_millis(k.open_time).unwrap_or_else(Utc::now),
-            open: k.open,
-            high: k.high,
-            low: k.low,
-            close: k.close,
-            volume: k.volume,
-        }
+/// Convert from Binance kline to internal Candle type with validation
+impl TryFrom<binance::BinanceKline> for Candle {
+    type Error = CandleValidationError;
+
+    fn try_from(k: binance::BinanceKline) -> Result<Self, Self::Error> {
+        Candle::new(
+            DateTime::from_timestamp_millis(k.open_time).unwrap_or_else(Utc::now),
+            k.open,
+            k.high,
+            k.low,
+            k.close,
+            k.volume,
+        )
     }
 }
 
@@ -104,11 +108,13 @@ impl From<binance::BinanceKline> for Candle {
 // CSV Data Loading
 // =============================================================================
 
-/// Load OHLCV data from CSV file
+/// Load OHLCV data from CSV file with validation
 pub fn load_csv(path: impl AsRef<Path>) -> Result<Vec<Candle>> {
-    let mut reader = csv::Reader::from_path(path.as_ref()).context("Failed to open CSV file")?;
+    let path = path.as_ref();
+    let mut reader = csv::Reader::from_path(path).context("Failed to open CSV file")?;
 
     let mut candles = Vec::new();
+    let mut invalid_count = 0;
 
     for (row_idx, result) in reader.records().enumerate() {
         let record = result.context(format!("Failed to read row {}", row_idx + 1))?;
@@ -149,14 +155,27 @@ pub fn load_csv(path: impl AsRef<Path>) -> Result<Vec<Candle>> {
             .parse()
             .context("Failed to parse volume")?;
 
-        candles.push(Candle {
-            datetime,
-            open,
-            high,
-            low,
-            close,
-            volume,
-        });
+        match Candle::new(datetime, open, high, low, close, volume) {
+            Ok(candle) => candles.push(candle),
+            Err(e) => {
+                invalid_count += 1;
+                warn!(
+                    "Skipping invalid candle at row {} in {:?}: {}",
+                    row_idx + 2, // +2 for 1-indexed and header row
+                    path.file_name().unwrap_or_default(),
+                    e
+                );
+            }
+        }
+    }
+
+    if invalid_count > 0 {
+        warn!(
+            "Skipped {} invalid candles out of {} in {:?}",
+            invalid_count,
+            invalid_count + candles.len(),
+            path.file_name().unwrap_or_default()
+        );
     }
 
     Ok(candles)
@@ -626,7 +645,29 @@ impl CoinDCXDataFetcher {
         limit: Option<u32>,
     ) -> Result<Vec<Candle>> {
         let api_candles = self.client.get_candles(pair, interval, limit).await?;
-        Ok(api_candles.into_iter().map(Candle::from).collect())
+        let mut candles = Vec::with_capacity(api_candles.len());
+        let mut invalid_count = 0;
+
+        for api_candle in api_candles {
+            match Candle::try_from(api_candle) {
+                Ok(candle) => candles.push(candle),
+                Err(e) => {
+                    invalid_count += 1;
+                    warn!("Skipping invalid candle for {}: {}", pair, e);
+                }
+            }
+        }
+
+        if invalid_count > 0 {
+            warn!(
+                "Skipped {} invalid candles out of {} for {}",
+                invalid_count,
+                invalid_count + candles.len(),
+                pair
+            );
+        }
+
+        Ok(candles)
     }
 
     /// Get list of available markets
@@ -788,7 +829,30 @@ impl BinanceDataFetcher {
             .client
             .get_klines(&binance_pair, interval, None, None, limit)
             .await?;
-        Ok(klines.into_iter().map(Candle::from).collect())
+
+        let mut candles = Vec::with_capacity(klines.len());
+        let mut invalid_count = 0;
+
+        for kline in klines {
+            match Candle::try_from(kline) {
+                Ok(candle) => candles.push(candle),
+                Err(e) => {
+                    invalid_count += 1;
+                    warn!("Skipping invalid candle for {}: {}", symbol, e);
+                }
+            }
+        }
+
+        if invalid_count > 0 {
+            warn!(
+                "Skipped {} invalid candles out of {} for {}",
+                invalid_count,
+                invalid_count + candles.len(),
+                symbol
+            );
+        }
+
+        Ok(candles)
     }
 
     /// Fetch full historical data
@@ -802,7 +866,30 @@ impl BinanceDataFetcher {
             .client
             .fetch_full_history(symbol, interval, days_back)
             .await?;
-        Ok(klines.into_iter().map(Candle::from).collect())
+
+        let mut candles = Vec::with_capacity(klines.len());
+        let mut invalid_count = 0;
+
+        for kline in klines {
+            match Candle::try_from(kline) {
+                Ok(candle) => candles.push(candle),
+                Err(e) => {
+                    invalid_count += 1;
+                    warn!("Skipping invalid candle for {}: {}", symbol, e);
+                }
+            }
+        }
+
+        if invalid_count > 0 {
+            warn!(
+                "Skipped {} invalid candles out of {} for {}",
+                invalid_count,
+                invalid_count + candles.len(),
+                symbol
+            );
+        }
+
+        Ok(candles)
     }
 
     /// Save candles to CSV file

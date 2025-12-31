@@ -173,26 +173,29 @@ impl LiveTrader {
             match self.exchange.get_ticker(pair).await {
                 Ok(ticker) => {
                     let price: f64 = ticker.last_price.parse().unwrap_or(0.0);
-                    if price > 0.0 {
-                        let candle = Candle {
-                            datetime: Utc::now(),
-                            open: price,
-                            high: price,
-                            low: price,
-                            close: price,
-                            volume: ticker.volume.parse().unwrap_or(0.0),
-                        };
+                    let volume: f64 = ticker.volume.parse().unwrap_or(0.0);
+                    let volume = volume.max(0.0); // Ensure non-negative
 
-                        info!(
-                            "📊 {} price: ₹{:.2} vol: {:.2}",
-                            symbol, price, candle.volume
-                        );
+                    // Create candle with validation
+                    match Candle::new(Utc::now(), price, price, price, price, volume) {
+                        Ok(candle) => {
+                            info!(
+                                "📊 {} price: ₹{:.2} vol: {:.2}",
+                                symbol, price, candle.volume
+                            );
 
-                        let cache = self.candle_cache.entry(symbol.clone()).or_default();
-                        cache.push(candle);
+                            let cache = self.candle_cache.entry(symbol.clone()).or_default();
+                            cache.push(candle);
 
-                        if cache.len() > 100 {
-                            cache.remove(0);
+                            if cache.len() > 100 {
+                                cache.remove(0);
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Invalid ticker data for {}: {} (price={}, vol={})",
+                                pair, e, price, volume
+                            );
                         }
                     }
                 }
@@ -224,7 +227,13 @@ impl LiveTrader {
                 }
             };
 
-            let current_price = candles.last().unwrap().close;
+            let current_price = match candles.last() {
+                Some(candle) => candle.close,
+                None => {
+                    debug!("No candle data available for {}", symbol);
+                    continue;
+                }
+            };
 
             if let Some(pos) = self.positions.get(&symbol).cloned() {
                 total_value += pos.quantity * current_price;

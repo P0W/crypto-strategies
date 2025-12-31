@@ -2,6 +2,31 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+/// Validation errors for candle data
+#[derive(Debug, Error)]
+pub enum CandleValidationError {
+    #[error("high ({high}) must be >= low ({low})")]
+    HighLessThanLow { high: f64, low: f64 },
+
+    #[error("volume ({0}) must be >= 0")]
+    NegativeVolume(f64),
+
+    #[error("open ({open}) must be between low ({low}) and high ({high})")]
+    OpenOutOfRange { open: f64, low: f64, high: f64 },
+
+    #[error("close ({close}) must be between low ({low}) and high ({high})")]
+    CloseOutOfRange { close: f64, low: f64, high: f64 },
+
+    #[error("prices must be positive: open={open}, high={high}, low={low}, close={close}")]
+    NonPositivePrice {
+        open: f64,
+        high: f64,
+        low: f64,
+        close: f64,
+    },
+}
 
 /// OHLCV candlestick data
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,6 +37,99 @@ pub struct Candle {
     pub low: f64,
     pub close: f64,
     pub volume: f64,
+}
+
+impl Candle {
+    /// Create a new candle with validation
+    pub fn new(
+        datetime: DateTime<Utc>,
+        open: f64,
+        high: f64,
+        low: f64,
+        close: f64,
+        volume: f64,
+    ) -> Result<Self, CandleValidationError> {
+        let candle = Self {
+            datetime,
+            open,
+            high,
+            low,
+            close,
+            volume,
+        };
+        candle.validate()?;
+        Ok(candle)
+    }
+
+    /// Create a candle without validation (for trusted sources or when validation is done separately)
+    pub fn new_unchecked(
+        datetime: DateTime<Utc>,
+        open: f64,
+        high: f64,
+        low: f64,
+        close: f64,
+        volume: f64,
+    ) -> Self {
+        Self {
+            datetime,
+            open,
+            high,
+            low,
+            close,
+            volume,
+        }
+    }
+
+    /// Validate the candle data
+    pub fn validate(&self) -> Result<(), CandleValidationError> {
+        // Check for non-positive prices
+        if self.open <= 0.0 || self.high <= 0.0 || self.low <= 0.0 || self.close <= 0.0 {
+            return Err(CandleValidationError::NonPositivePrice {
+                open: self.open,
+                high: self.high,
+                low: self.low,
+                close: self.close,
+            });
+        }
+
+        // Check high >= low
+        if self.high < self.low {
+            return Err(CandleValidationError::HighLessThanLow {
+                high: self.high,
+                low: self.low,
+            });
+        }
+
+        // Check volume >= 0
+        if self.volume < 0.0 {
+            return Err(CandleValidationError::NegativeVolume(self.volume));
+        }
+
+        // Check open is within [low, high] range
+        if self.open < self.low || self.open > self.high {
+            return Err(CandleValidationError::OpenOutOfRange {
+                open: self.open,
+                low: self.low,
+                high: self.high,
+            });
+        }
+
+        // Check close is within [low, high] range
+        if self.close < self.low || self.close > self.high {
+            return Err(CandleValidationError::CloseOutOfRange {
+                close: self.close,
+                low: self.low,
+                high: self.high,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Check if the candle is valid without returning detailed error
+    pub fn is_valid(&self) -> bool {
+        self.validate().is_ok()
+    }
 }
 
 /// Trading pair symbol
