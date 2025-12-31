@@ -293,8 +293,12 @@ pub fn run(
                         "{}_{}: No data in date range{}{}",
                         group_name,
                         timeframe,
-                        start_date.map(|d| format!(" from {}", d.format("%Y-%m-%d"))).unwrap_or_default(),
-                        end_date.map(|d| format!(" to {}", d.format("%Y-%m-%d"))).unwrap_or_default()
+                        start_date
+                            .map(|d| format!(" from {}", d.format("%Y-%m-%d")))
+                            .unwrap_or_default(),
+                        end_date
+                            .map(|d| format!(" to {}", d.format("%Y-%m-%d")))
+                            .unwrap_or_default()
                     ));
                 }
                 Err(e) => {
@@ -572,7 +576,8 @@ pub fn run(
             };
 
             if should_update {
-                match update_config_with_best(&config_path, best, &grid_keys, start_date, end_date) {
+                match update_config_with_best(&config_path, best, &grid_keys, start_date, end_date)
+                {
                     Ok(backup_path) => {
                         println!("  Config updated: {}", config_path);
                         if start_date.is_some() || end_date.is_some() {

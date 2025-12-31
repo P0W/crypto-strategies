@@ -249,7 +249,9 @@ pub fn load_multi_symbol_with_range(
 }
 
 /// Get the date range covered by a data file
-pub fn get_data_date_range(path: impl AsRef<Path>) -> Result<Option<(DateTime<Utc>, DateTime<Utc>)>> {
+pub fn get_data_date_range(
+    path: impl AsRef<Path>,
+) -> Result<Option<(DateTime<Utc>, DateTime<Utc>)>> {
     let candles = load_csv(path.as_ref())?;
     if candles.is_empty() {
         return Ok(None);
@@ -271,7 +273,11 @@ pub fn check_data_coverage(
     timeframes: &[String],
     start: Option<DateTime<Utc>>,
     end: Option<DateTime<Utc>>,
-) -> (Vec<(Symbol, String)>, Vec<(Symbol, String, DateTime<Utc>)>, Vec<(Symbol, String, DateTime<Utc>)>) {
+) -> (
+    Vec<(Symbol, String)>,
+    Vec<(Symbol, String, DateTime<Utc>)>,
+    Vec<(Symbol, String, DateTime<Utc>)>,
+) {
     let mut missing_files = Vec::new();
     let mut needs_earlier = Vec::new();
     let mut needs_later = Vec::new();
@@ -421,7 +427,12 @@ pub async fn ensure_data_for_range(
                 .map(|s| (Utc::now() - s).num_days() as u32 + 1)
                 .unwrap_or(365);
 
-            println!("    Downloading {}_{}.csv ({} days)...", symbol.as_str(), timeframe, days_back);
+            println!(
+                "    Downloading {}_{}.csv ({} days)...",
+                symbol.as_str(),
+                timeframe,
+                days_back
+            );
             match fetcher
                 .download_pair(symbol.as_str(), timeframe, days_back)
                 .await
@@ -482,7 +493,10 @@ pub async fn ensure_data_for_range(
             );
 
             // Fetch historical data
-            match fetcher.fetch_full_history(symbol.as_str(), timeframe, days_back).await {
+            match fetcher
+                .fetch_full_history(symbol.as_str(), timeframe, days_back)
+                .await
+            {
                 Ok(new_candles) => {
                     if new_candles.is_empty() {
                         println!(
@@ -494,7 +508,7 @@ pub async fn ensure_data_for_range(
 
                     // Check if we actually got earlier data
                     let fetched_start = new_candles.iter().map(|c| c.datetime).min().unwrap();
-                    
+
                     if fetched_start >= existing_start {
                         println!(
                             "    ⚠ Binance data only goes back to {} (requested: {})",
