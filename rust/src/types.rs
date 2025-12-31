@@ -45,6 +45,7 @@ pub enum Side {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Position {
     pub symbol: Symbol,
+    pub side: Side,
     pub entry_price: f64,
     pub quantity: f64,
     pub stop_price: f64,
@@ -60,7 +61,10 @@ impl Position {
     }
 
     pub fn unrealized_pnl(&self, current_price: f64) -> f64 {
-        (current_price - self.entry_price) * self.quantity
+        match self.side {
+            Side::Buy => (current_price - self.entry_price) * self.quantity,  // Long: profit when price goes up
+            Side::Sell => (self.entry_price - current_price) * self.quantity, // Short: profit when price goes down
+        }
     }
 }
 

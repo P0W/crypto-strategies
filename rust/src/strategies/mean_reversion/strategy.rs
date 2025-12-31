@@ -210,9 +210,10 @@ impl Strategy for MeanReversionStrategy {
         // If we have a position, check exit conditions
         if let Some(pos) = position {
             let current_price = candles.last().unwrap().close;
+            let is_long = pos.side == Side::Buy;
 
             // Exit on RSI extreme (momentum exhaustion)
-            if self.should_exit_on_rsi(candles, true) {
+            if self.should_exit_on_rsi(candles, is_long) {
                 return Signal::Flat;
             }
 
@@ -220,15 +221,22 @@ impl Strategy for MeanReversionStrategy {
             // we can also signal exit if using different TP mode)
             if self.config.take_profit_mode == "bb_middle" {
                 if let Some(bb_middle) = self.get_bb_middle(candles) {
-                    // If price crosses above middle band, consider exiting
-                    if current_price >= bb_middle && pos.unrealized_pnl(current_price) > 0.0 {
+                    // Long: exit if price crosses above middle band
+                    // Short: exit if price crosses below middle band
+                    let should_exit = if is_long {
+                        current_price >= bb_middle
+                    } else {
+                        current_price <= bb_middle
+                    };
+                    
+                    if should_exit && pos.unrealized_pnl(current_price) > 0.0 {
                         return Signal::Flat;
                     }
                 }
             }
 
-            // Hold position
-            return Signal::Long;
+            // Hold position - return the same signal type
+            return if is_long { Signal::Long } else { Signal::Short };
         }
 
         // Entry logic - classify market state
@@ -280,7 +288,18 @@ impl Strategy for MeanReversionStrategy {
             .and_then(|&x| x)
             .unwrap_or(entry_price * 0.02); // Fallback: 2% of price
 
-        entry_price - self.config.stop_atr_multiple * current_atr
+        // Determine if this is a long or short based on market state
+        // Long signals come from Oversold state, Short signals from Overbought
+        let market_state = self.classify_market_state(candles);
+        let is_short_signal = matches!(market_state, Some(MarketState::Overbought));
+        
+        if is_short_signal {
+            // Short: stop above entry
+            entry_price + self.config.stop_atr_multiple * current_atr
+        } else {
+            // Long: stop below entry
+            entry_price - self.config.stop_atr_multiple * current_atr
+        }
     }
 
     fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64) -> f64 {
@@ -321,9 +340,11 @@ impl Strategy for MeanReversionStrategy {
             .and_then(|&x| x)
             .unwrap_or(current_price * 0.02);
 
-        // Calculate profit in ATR terms
+        let is_long = position.side == Side::Buy;
+
+        // Calculate profit in ATR terms (works for both long and short due to unrealized_pnl)
         let profit_atr = if current_atr > 0.0 {
-            (current_price - position.entry_price) / current_atr
+            position.unrealized_pnl(current_price).abs() / (current_atr * position.quantity)
         } else {
             0.0
         };
@@ -333,12 +354,34 @@ impl Strategy for MeanReversionStrategy {
 
         // Check if profit threshold is met for trailing activation
         if profit_atr >= self.config.trailing_activation {
-            let new_stop = current_price - self.config.trailing_atr_multiple * current_atr;
+            let new_stop = if is_long {
+                // Long: trail below price
+                current_price - self.config.trailing_atr_multiple * current_atr
+            } else {
+                // Short: trail above price
+                current_price + self.config.trailing_atr_multiple * current_atr
+            };
 
-            // Only update if new stop is higher (ratchet up only)
-            if new_stop > current_stop {
+            // Only update if new stop is better (tighter)
+            // Long: new stop should be higher (closer to price)
+            // Short: new stop should be lower (closer to price)
+            let should_update = if is_long {
+                new_stop > current_stop
+            } else {
+                new_stop < current_stop
+            };
+            
+            if should_update {
                 Some(new_stop)
             } else {
+                Some(current_stop)
+            }
+        } else if position.trailing_stop.is_some() {
+            Some(current_stop)
+        } else {
+            None
+        }
+    }
                 Some(current_stop)
             }
         } else if position.trailing_stop.is_some() {

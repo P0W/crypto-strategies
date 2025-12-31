@@ -13,6 +13,7 @@ use crate::{Candle, Config, PerformanceMetrics, Position, Side, Signal, Symbol, 
 /// Pending order for T+1 execution
 #[derive(Debug, Clone)]
 struct PendingOrder {
+    side: Side,
     quantity: f64,
     stop_price: f64,
     target_price: f64,
@@ -101,10 +102,16 @@ impl Backtester {
                 let _current_price = current_candle.close; // Kept for potential future use
                 let open_price = current_candle.open; // Use open for order execution
 
-                // Execute pending buy order at OPEN price with slippage
+                // Execute pending order at OPEN price with slippage
                 // Professional systems apply slippage to account for market impact
                 if let Some(order) = pending_orders.remove(symbol) {
-                    let entry_price = open_price * (1.0 + self.config.exchange.assumed_slippage);
+                    // For Long (Buy): slippage increases entry price (worse fill)
+                    // For Short (Sell): slippage decreases entry price (worse fill)
+                    let entry_price = match order.side {
+                        Side::Buy => open_price * (1.0 + self.config.exchange.assumed_slippage),
+                        Side::Sell => open_price * (1.0 - self.config.exchange.assumed_slippage),
+                    };
+                    
                     let position_value = order.quantity * entry_price;
                     let commission = position_value * self.config.exchange.taker_fee;
 
@@ -113,6 +120,7 @@ impl Backtester {
 
                         let pos = Position {
                             symbol: symbol.clone(),
+                            side: order.side,
                             entry_price,
                             quantity: order.quantity,
                             stop_price: order.stop_price,
@@ -122,9 +130,15 @@ impl Backtester {
                             risk_amount: (entry_price - order.stop_price).abs() * order.quantity,
                         };
 
+                        let side_str = match order.side {
+                            Side::Buy => "BUY",
+                            Side::Sell => "SELL",
+                        };
+                        
                         tracing::info!(
-                            "{} BUY EXECUTED for {}: Price={:.2}, Qty={:.4}",
+                            "{} {} EXECUTED for {}: Price={:.2}, Qty={:.4}",
                             candle_dt.format("%Y-%m-%d"), // Use actual candle datetime
+                            side_str,
                             symbol,
                             entry_price,
                             order.quantity
@@ -136,15 +150,27 @@ impl Backtester {
 
                 // Execute pending close order at OPEN price with slippage
                 // Slippage works against us: we get slightly worse price on exit
+                // For Long (closing with Sell): slippage decreases exit price
+                // For Short (closing with Buy): slippage increases exit price
                 if let Some(reason) = pending_closes.remove(symbol) {
                     if let Some(pos) = positions.remove(symbol) {
-                        let exit_price = open_price * (1.0 - self.config.exchange.assumed_slippage);
+                        let exit_price = match pos.side {
+                            Side::Buy => open_price * (1.0 - self.config.exchange.assumed_slippage),
+                            Side::Sell => open_price * (1.0 + self.config.exchange.assumed_slippage),
+                        };
+                        
                         let trade = self.close_position(&pos, exit_price, candle_dt, &reason); // Use candle_dt
                         cash += pos.quantity * exit_price - trade.commission;
 
+                        let action_str = match pos.side {
+                            Side::Buy => "SELL",  // Closing a long position
+                            Side::Sell => "BUY",  // Closing a short position (buy to cover)
+                        };
+                        
                         tracing::info!(
-                            "{} SELL EXECUTED for {}: Price={:.2}, Reason={}, PnL={:.2}",
+                            "{} {} EXECUTED for {}: Price={:.2}, Reason={}, PnL={:.2}",
                             candle_dt.format("%Y-%m-%d"), // Use actual candle datetime
+                            action_str,
                             symbol,
                             exit_price,
                             reason,
@@ -203,14 +229,27 @@ impl Backtester {
                     };
 
                     // Check stop loss - place close order (T+1 execution)
-                    if current_price <= current_stop {
+                    // Long: stop when price drops below stop (current_price <= current_stop)
+                    // Short: stop when price rises above stop (current_price >= current_stop)
+                    let stop_hit = match pos.side {
+                        Side::Buy => current_price <= current_stop,
+                        Side::Sell => current_price >= current_stop,
+                    };
+                    
+                    if stop_hit {
                         pending_closes.insert(symbol.clone(), "Stop Loss".to_string());
                         continue;
                     }
 
-                    // Check take profit against HIGH price (production correctness)
-                    // Targets should trigger if intraday high reaches target, not just close
-                    if current_candle.high >= pos.target_price {
+                    // Check take profit against intraday extremes (production correctness)
+                    // Long: target triggers if intraday high reaches target
+                    // Short: target triggers if intraday low reaches target
+                    let target_hit = match pos.side {
+                        Side::Buy => current_candle.high >= pos.target_price,
+                        Side::Sell => current_candle.low <= pos.target_price,
+                    };
+                    
+                    if target_hit {
                         pending_closes.insert(symbol.clone(), "Take Profit".to_string());
                         continue;
                     }
@@ -272,6 +311,64 @@ impl Backtester {
                                 pending_orders.insert(
                                     symbol.clone(),
                                     PendingOrder {
+                                        side: Side::Buy,
+                                        quantity,
+                                        stop_price,
+                                        target_price,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    Signal::Short
+                        if !positions.contains_key(symbol)
+                            && !pending_orders.contains_key(symbol) =>
+                    {
+                        // Place pending short order (will execute next bar)
+                        let can_open = self
+                            .risk_manager
+                            .can_open_position(&positions.values().cloned().collect::<Vec<_>>());
+
+                        if !can_open {
+                            let dd = self.risk_manager.current_drawdown();
+                            if dd >= 0.20 {
+                                tracing::warn!(
+                                    "{} HALTED - Drawdown {:.2}% exceeds max 20%",
+                                    candle_dt.format("%Y-%m-%d"),
+                                    dd * 100.0
+                                );
+                            }
+                        }
+
+                        if can_open {
+                            // Calculate stops/targets for short position
+                            // For shorts: stop is ABOVE entry, target is BELOW entry
+                            let stop_price = self
+                                .strategy
+                                .calculate_stop_loss(current_candles, current_price);
+                            let target_price = self
+                                .strategy
+                                .calculate_take_profit(current_candles, current_price);
+
+                            let current_positions: Vec<Position> =
+                                positions.values().cloned().collect();
+
+                            // Get regime score for position sizing adjustment
+                            let regime_score = self.strategy.get_regime_score(current_candles);
+
+                            // Position sizing based on close price (matching Python)
+                            let quantity = self.risk_manager.calculate_position_size_with_regime(
+                                current_price,
+                                stop_price,
+                                &current_positions,
+                                regime_score,
+                            );
+
+                            if quantity > 0.0 {
+                                pending_orders.insert(
+                                    symbol.clone(),
+                                    PendingOrder {
+                                        side: Side::Sell,
                                         quantity,
                                         stop_price,
                                         target_price,
@@ -325,7 +422,12 @@ impl Backtester {
         exit_time: DateTime<Utc>,
         _reason: &str,
     ) -> Trade {
-        let pnl = (exit_price - pos.entry_price) * pos.quantity;
+        // PnL calculation depends on position side
+        let pnl = match pos.side {
+            Side::Buy => (exit_price - pos.entry_price) * pos.quantity,  // Long: profit when exit > entry
+            Side::Sell => (pos.entry_price - exit_price) * pos.quantity, // Short: profit when entry > exit
+        };
+        
         // Commission: taker fee on both entry and exit (round-trip cost)
         let commission = (pos.quantity * pos.entry_price * self.config.exchange.taker_fee)
             + (pos.quantity * exit_price * self.config.exchange.taker_fee);
@@ -333,7 +435,7 @@ impl Backtester {
 
         Trade {
             symbol: pos.symbol.clone(),
-            side: Side::Buy,
+            side: pos.side,
             entry_price: pos.entry_price,
             exit_price,
             quantity: pos.quantity,
