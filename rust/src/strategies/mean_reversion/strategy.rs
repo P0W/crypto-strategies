@@ -24,7 +24,7 @@
 
 use crate::indicators::{atr, bollinger_bands, ema, rsi, sma};
 use crate::strategies::Strategy;
-use crate::{Candle, Position, Signal, Symbol};
+use crate::{Candle, Position, Side, Signal, Symbol};
 
 use super::config::MeanReversionConfig;
 use super::{MarketState, VolumeState};
@@ -212,7 +212,8 @@ impl Strategy for MeanReversionStrategy {
             let current_price = candles.last().unwrap().close;
 
             // Exit on RSI extreme (momentum exhaustion)
-            if self.should_exit_on_rsi(candles, true) {
+            let is_long = pos.side == Side::Buy;
+            if self.should_exit_on_rsi(candles, is_long) {
                 return Signal::Flat;
             }
 
@@ -220,15 +221,27 @@ impl Strategy for MeanReversionStrategy {
             // we can also signal exit if using different TP mode)
             if self.config.take_profit_mode == "bb_middle" {
                 if let Some(bb_middle) = self.get_bb_middle(candles) {
-                    // If price crosses above middle band, consider exiting
-                    if current_price >= bb_middle && pos.unrealized_pnl(current_price) > 0.0 {
+                    // For Long: If price crosses above middle band, consider exiting
+                    // For Short: If price crosses below middle band, consider exiting
+                    let should_exit = match pos.side {
+                        Side::Buy => {
+                            current_price >= bb_middle && pos.unrealized_pnl(current_price) > 0.0
+                        }
+                        Side::Sell => {
+                            current_price <= bb_middle && pos.unrealized_pnl(current_price) > 0.0
+                        }
+                    };
+                    if should_exit {
                         return Signal::Flat;
                     }
                 }
             }
 
-            // Hold position
-            return Signal::Long;
+            // Hold position - return appropriate signal
+            return match pos.side {
+                Side::Buy => Signal::Long,
+                Side::Sell => Signal::Short,
+            };
         }
 
         // Entry logic - classify market state
