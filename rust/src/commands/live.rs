@@ -381,7 +381,8 @@ impl LiveTrader {
 
         let position = Position {
             symbol: symbol.clone(),
-            side: Side::Buy, // TODO: Update when adding short support to live trading
+            side: Side::Buy, // NOTE: Live trading currently only supports Long positions
+                             // Short selling is implemented in backtester but not yet in live mode
             entry_price,
             quantity,
             stop_price,
