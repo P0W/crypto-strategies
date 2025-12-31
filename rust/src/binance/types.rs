@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Binance kline/candlestick data
-/// API returns an array: [open_time, open, high, low, close, volume, close_time, 
+/// API returns an array: [open_time, open, high, low, close, volume, close_time,
 ///                        quote_volume, trades, taker_buy_base, taker_buy_quote, ignore]
 #[derive(Debug, Clone)]
 pub struct BinanceKline {
@@ -26,7 +26,7 @@ impl BinanceKline {
         if raw.len() < 11 {
             return None;
         }
-        
+
         Some(BinanceKline {
             open_time: raw[0].as_i64()?,
             open: raw[1].as_str()?.parse().ok()?,
@@ -52,7 +52,7 @@ pub struct SymbolMapping {
 impl Default for SymbolMapping {
     fn default() -> Self {
         let mut mappings = std::collections::HashMap::new();
-        
+
         // Common crypto symbols mapped to USDT pairs
         mappings.insert("BTC".to_string(), "BTCUSDT".to_string());
         mappings.insert("ETH".to_string(), "ETHUSDT".to_string());
@@ -74,7 +74,7 @@ impl Default for SymbolMapping {
         mappings.insert("APT".to_string(), "APTUSDT".to_string());
         mappings.insert("ARB".to_string(), "ARBUSDT".to_string());
         mappings.insert("OP".to_string(), "OPUSDT".to_string());
-        
+
         SymbolMapping { mappings }
     }
 }
@@ -87,7 +87,7 @@ impl SymbolMapping {
             .to_uppercase()
             .replace("INR", "")
             .replace("USDT", "");
-        
+
         self.mappings
             .get(&base)
             .cloned()
@@ -108,18 +108,18 @@ pub fn is_valid_interval(interval: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_symbol_mapping() {
         let mapping = SymbolMapping::default();
-        
+
         assert_eq!(mapping.to_binance_pair("BTC"), "BTCUSDT");
         assert_eq!(mapping.to_binance_pair("BTCINR"), "BTCUSDT");
         assert_eq!(mapping.to_binance_pair("eth"), "ETHUSDT");
         assert_eq!(mapping.to_binance_pair("SOLINR"), "SOLUSDT");
         assert_eq!(mapping.to_binance_pair("UNKNOWN"), "UNKNOWNUSDT");
     }
-    
+
     #[test]
     fn test_valid_intervals() {
         assert!(is_valid_interval("1h"));

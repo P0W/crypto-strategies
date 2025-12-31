@@ -250,15 +250,7 @@ fn main() -> Result<()> {
             overrides,
             sequential,
         } => commands::optimize::run(
-            config,
-            sort_by,
-            top,
-            coins,
-            symbols,
-            min_combo,
-            max_combo,
-            timeframes,
-            overrides,
+            config, sort_by, top, coins, symbols, min_combo, max_combo, timeframes, overrides,
             sequential,
         ),
 

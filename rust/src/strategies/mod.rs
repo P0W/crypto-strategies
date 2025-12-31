@@ -108,9 +108,15 @@ static REGISTRY: OnceLock<RwLock<HashMap<&'static str, StrategyFactory>>> = Once
 fn get_registry() -> &'static RwLock<HashMap<&'static str, StrategyFactory>> {
     REGISTRY.get_or_init(|| {
         let mut map = HashMap::new();
-        map.insert("volatility_regime", volatility_regime::create as StrategyFactory);
+        map.insert(
+            "volatility_regime",
+            volatility_regime::create as StrategyFactory,
+        );
         map.insert("mean_reversion", mean_reversion::create as StrategyFactory);
-        map.insert("momentum_scalper", momentum_scalper::create as StrategyFactory);
+        map.insert(
+            "momentum_scalper",
+            momentum_scalper::create as StrategyFactory,
+        );
         map.insert("range_breakout", range_breakout::create as StrategyFactory);
         RwLock::new(map)
     })
@@ -120,16 +126,14 @@ fn get_registry() -> &'static RwLock<HashMap<&'static str, StrategyFactory>> {
 pub fn create_strategy(config: &Config) -> Result<Box<dyn Strategy>> {
     let registry = get_registry().read().unwrap();
 
-    let factory = registry
-        .get(config.strategy_name.as_str())
-        .ok_or_else(|| {
-            let available: Vec<_> = registry.keys().copied().collect();
-            anyhow::anyhow!(
-                "Unknown strategy: '{}'. Available: {}",
-                config.strategy_name,
-                available.join(", ")
-            )
-        })?;
+    let factory = registry.get(config.strategy_name.as_str()).ok_or_else(|| {
+        let available: Vec<_> = registry.keys().copied().collect();
+        anyhow::anyhow!(
+            "Unknown strategy: '{}'. Available: {}",
+            config.strategy_name,
+            available.join(", ")
+        )
+    })?;
 
     factory(config)
 }

@@ -29,9 +29,10 @@ impl RangeBreakoutStrategy {
         // Exclude current bar, look at previous N bars
         let start = candles.len() - self.config.lookback - 1;
         let end = candles.len() - 1;
-        candles[start..end].iter().map(|c| c.high).fold(None, |max, h| {
-            Some(max.map_or(h, |m: f64| m.max(h)))
-        })
+        candles[start..end]
+            .iter()
+            .map(|c| c.high)
+            .fold(None, |max, h| Some(max.map_or(h, |m: f64| m.max(h))))
     }
 
     #[allow(dead_code)]
@@ -41,9 +42,10 @@ impl RangeBreakoutStrategy {
         }
         let start = candles.len() - self.config.lookback - 1;
         let end = candles.len() - 1;
-        candles[start..end].iter().map(|c| c.low).fold(None, |min, l| {
-            Some(min.map_or(l, |m: f64| m.min(l)))
-        })
+        candles[start..end]
+            .iter()
+            .map(|c| c.low)
+            .fold(None, |min, l| Some(min.map_or(l, |m: f64| m.min(l))))
     }
 
     /// Check if volatility is expanding (good for breakouts)
@@ -107,7 +109,10 @@ impl Strategy for RangeBreakoutStrategy {
 
         // Breakout: current close > range high AND previous close <= range high
         // Plus volatility filter to avoid false breakouts
-        if current.close > range_high && prev.close <= range_high && self.is_volatility_expanding(candles) {
+        if current.close > range_high
+            && prev.close <= range_high
+            && self.is_volatility_expanding(candles)
+        {
             return Signal::Long;
         }
 
@@ -120,7 +125,10 @@ impl Strategy for RangeBreakoutStrategy {
         let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
 
         let atr_vals = atr(&high, &low, &close, self.config.atr_period);
-        let current_atr = atr_vals.last().and_then(|&x| x).unwrap_or(entry_price * 0.02);
+        let current_atr = atr_vals
+            .last()
+            .and_then(|&x| x)
+            .unwrap_or(entry_price * 0.02);
 
         entry_price - self.config.stop_atr * current_atr
     }
@@ -131,7 +139,10 @@ impl Strategy for RangeBreakoutStrategy {
         let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
 
         let atr_vals = atr(&high, &low, &close, self.config.atr_period);
-        let current_atr = atr_vals.last().and_then(|&x| x).unwrap_or(entry_price * 0.02);
+        let current_atr = atr_vals
+            .last()
+            .and_then(|&x| x)
+            .unwrap_or(entry_price * 0.02);
 
         entry_price + self.config.target_atr * current_atr
     }

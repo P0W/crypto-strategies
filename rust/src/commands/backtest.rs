@@ -40,7 +40,7 @@ pub fn run(
     // Check for missing data and fetch if needed
     let timeframes = vec![timeframe.clone()];
     let missing = data::find_missing_data(&config.backtest.data_dir, &symbols, &timeframes);
-    
+
     if !missing.is_empty() {
         println!("\n{}", "=".repeat(60));
         println!("FETCHING MISSING DATA");
@@ -75,11 +75,7 @@ pub fn run(
         println!("{}\n", "=".repeat(60));
     }
 
-    let data = data::load_multi_symbol(
-        &config.backtest.data_dir,
-        &symbols,
-        &timeframe,
-    )?;
+    let data = data::load_multi_symbol(&config.backtest.data_dir, &symbols, &timeframe)?;
 
     info!("Loaded data for {} symbols", data.len());
 

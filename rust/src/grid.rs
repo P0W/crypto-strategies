@@ -73,9 +73,7 @@ fn cartesian_product_indices(arrays: &[&Vec<serde_json::Value>]) -> Vec<Vec<usiz
 /// Get total number of grid combinations
 pub fn total_combinations(config: &Config) -> usize {
     match &config.grid {
-        Some(grid) if !grid.is_empty() => {
-            grid.values().map(|v| v.len()).product()
-        }
+        Some(grid) if !grid.is_empty() => grid.values().map(|v| v.len()).product(),
         _ => 1, // No grid = 1 combination (base config)
     }
 }
@@ -161,4 +159,3 @@ pub fn format_params(params: &HashMap<String, f64>) -> String {
     items.sort();
     items.join(", ")
 }
-

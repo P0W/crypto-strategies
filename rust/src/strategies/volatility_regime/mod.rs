@@ -23,7 +23,8 @@ pub enum VolatilityRegime {
 
 /// Create strategy from config (called by registry)
 pub fn create(config: &Config) -> Result<Box<dyn Strategy>> {
-    let strategy_config: VolatilityRegimeConfig = serde_json::from_value(config.strategy.clone())
-        .map_err(|e| anyhow::anyhow!("Failed to parse volatility_regime config: {}", e))?;
+    let strategy_config: VolatilityRegimeConfig =
+        serde_json::from_value(config.strategy.clone())
+            .map_err(|e| anyhow::anyhow!("Failed to parse volatility_regime config: {}", e))?;
     Ok(Box::new(VolatilityRegimeStrategy::new(strategy_config)))
 }

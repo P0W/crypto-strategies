@@ -134,7 +134,8 @@ pub fn run(
 
     // Check for missing data and fetch if needed
     info!("Checking for missing data files...");
-    let missing = data::find_missing_data(&config.backtest.data_dir, &all_symbols, &timeframes_to_test);
+    let missing =
+        data::find_missing_data(&config.backtest.data_dir, &all_symbols, &timeframes_to_test);
 
     if !missing.is_empty() {
         println!("\n{}", "=".repeat(60));
@@ -327,7 +328,10 @@ pub fn run(
     for (i, result) in all_results.iter().take(top).enumerate() {
         let group_idx = *result.params.get("_group_idx").unwrap_or(&0.0) as usize;
         let symbols_str = if group_idx < symbol_groups_flat.len() {
-            symbol_groups_flat[group_idx].chars().take(12).collect::<String>()
+            symbol_groups_flat[group_idx]
+                .chars()
+                .take(12)
+                .collect::<String>()
         } else {
             "N/A".to_string()
         };
@@ -348,8 +352,11 @@ pub fn run(
             .filter_map(|k| {
                 result.params.get(k).map(|v| {
                     let short_key = k.replace("_multiple", "").replace("_threshold", "");
-                    if v.fract() == 0.0 { format!("{}={}", short_key, *v as i64) }
-                    else { format!("{}={:.1}", short_key, v) }
+                    if v.fract() == 0.0 {
+                        format!("{}={}", short_key, *v as i64)
+                    } else {
+                        format!("{}={:.1}", short_key, v)
+                    }
                 })
             })
             .collect::<Vec<_>>()

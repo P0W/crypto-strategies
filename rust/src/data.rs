@@ -35,12 +35,15 @@ pub enum DataSource {
 
 impl std::str::FromStr for DataSource {
     type Err = String;
-    
+
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "binance" => Ok(DataSource::Binance),
             "coindcx" => Ok(DataSource::CoinDCX),
-            _ => Err(format!("Unknown data source: {}. Use 'binance' or 'coindcx'", s)),
+            _ => Err(format!(
+                "Unknown data source: {}. Use 'binance' or 'coindcx'",
+                s
+            )),
         }
     }
 }
@@ -211,7 +214,7 @@ pub async fn ensure_data_available(
 ) -> Result<Vec<(Symbol, String)>> {
     let data_dir = data_dir.as_ref();
     let missing = find_missing_data(data_dir, symbols, timeframes);
-    
+
     if missing.is_empty() {
         info!("All data files present");
         return Ok(Vec::new());
@@ -227,12 +230,20 @@ pub async fn ensure_data_available(
 
     for (symbol, timeframe) in &missing {
         info!("Fetching {} {}...", symbol.as_str(), timeframe);
-        match fetcher.download_pair(symbol.as_str(), timeframe, days_back).await {
+        match fetcher
+            .download_pair(symbol.as_str(), timeframe, days_back)
+            .await
+        {
             Ok(path) => {
                 info!("  ✓ Downloaded to {}", path.display());
             }
             Err(e) => {
-                warn!("  ✗ Failed to fetch {} {}: {}", symbol.as_str(), timeframe, e);
+                warn!(
+                    "  ✗ Failed to fetch {} {}: {}",
+                    symbol.as_str(),
+                    timeframe,
+                    e
+                );
                 failed.push((symbol.clone(), timeframe.clone()));
             }
         }
@@ -249,7 +260,9 @@ pub fn ensure_data_available_sync(
     days_back: u32,
 ) -> Result<Vec<(Symbol, String)>> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(ensure_data_available(data_dir, symbols, timeframes, days_back))
+    rt.block_on(ensure_data_available(
+        data_dir, symbols, timeframes, days_back,
+    ))
 }
 
 // =============================================================================
@@ -460,7 +473,10 @@ impl BinanceDataFetcher {
         limit: Option<u32>,
     ) -> Result<Vec<Candle>> {
         let binance_pair = self.to_pair(symbol);
-        let klines = self.client.get_klines(&binance_pair, interval, None, None, limit).await?;
+        let klines = self
+            .client
+            .get_klines(&binance_pair, interval, None, None, limit)
+            .await?;
         Ok(klines.into_iter().map(Candle::from).collect())
     }
 
@@ -471,7 +487,10 @@ impl BinanceDataFetcher {
         interval: &str,
         days_back: u32,
     ) -> Result<Vec<Candle>> {
-        let klines = self.client.fetch_full_history(symbol, interval, days_back).await?;
+        let klines = self
+            .client
+            .fetch_full_history(symbol, interval, days_back)
+            .await?;
         Ok(klines.into_iter().map(Candle::from).collect())
     }
 
@@ -533,11 +552,11 @@ impl BinanceDataFetcher {
         days_back: u32,
     ) -> Vec<Result<PathBuf>> {
         let mut results = Vec::new();
-        
+
         for tf in timeframes {
             results.push(self.download_pair(symbol, tf, days_back).await);
         }
-        
+
         results
     }
 }

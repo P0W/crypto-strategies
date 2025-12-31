@@ -300,7 +300,7 @@ impl Backtester {
 
         // Close any remaining positions (sorted for deterministic order)
         let mut sorted_positions: Vec<(Symbol, Position)> = positions.into_iter().collect();
-        sorted_positions.sort_by(|a, b| a.0.0.cmp(&b.0.0));
+        sorted_positions.sort_by(|a, b| a.0 .0.cmp(&b.0 .0));
         for (symbol, pos) in sorted_positions {
             let candles = &aligned_data.iter().find(|(s, _)| s == &symbol).unwrap().1;
             let exit_price = candles.last().unwrap().close;
@@ -370,7 +370,7 @@ impl Backtester {
 
         // Sort symbols for deterministic iteration order
         let mut sorted_data: Vec<(Symbol, Vec<Candle>)> = data.into_iter().collect();
-        sorted_data.sort_by(|a, b| a.0.0.cmp(&b.0.0));
+        sorted_data.sort_by(|a, b| a.0 .0.cmp(&b.0 .0));
 
         for (symbol, candles) in sorted_data {
             let mut aligned_candles = Vec::new();
