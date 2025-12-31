@@ -1,6 +1,7 @@
 //! Optimize command - JSON-driven grid search optimization
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use crypto_strategies::{data, grid, optimizer::OptimizationResult, strategies, Config, Symbol};
 use indicatif::{ProgressBar, ProgressStyle};
 use itertools::Itertools;
@@ -49,14 +50,29 @@ pub fn run(
     min_combo: usize,
     max_combo: Option<usize>,
     timeframes: Option<String>,
+    start: Option<String>,
+    end: Option<String>,
     overrides: Vec<String>,
     sequential: bool,
+    no_update: bool,
 ) -> Result<()> {
     info!("Starting optimization");
 
     // Load configuration
     let mut config = Config::from_file(&config_path)?;
     info!("Loaded configuration from: {}", config_path);
+
+    // Parse date range filters
+    let start_date: Option<DateTime<Utc>> =
+        start.as_ref().map(|s| data::parse_date(s)).transpose()?;
+    let end_date: Option<DateTime<Utc>> = end.as_ref().map(|s| data::parse_date(s)).transpose()?;
+
+    if let Some(ref start) = start_date {
+        info!("Filtering data from: {}", start);
+    }
+    if let Some(ref end) = end_date {
+        info!("Filtering data until: {}", end);
+    }
 
     // Apply CLI overrides to grid
     if !overrides.is_empty() {
@@ -132,40 +148,102 @@ pub fn run(
         .into_iter()
         .collect();
 
-    // Check for missing data and fetch if needed
+    // Check for missing data and fetch if needed (including date range coverage)
     info!("Checking for missing data files...");
-    let missing =
-        data::find_missing_data(&config.backtest.data_dir, &all_symbols, &timeframes_to_test);
 
-    if !missing.is_empty() {
+    // First check date range coverage
+    let (missing_files, needs_earlier, _needs_later) = data::check_data_coverage(
+        &config.backtest.data_dir,
+        &all_symbols,
+        &timeframes_to_test,
+        start_date,
+        end_date,
+    );
+
+    let needs_download = !missing_files.is_empty() || !needs_earlier.is_empty();
+
+    if needs_download {
         println!("\n{}", "=".repeat(60));
-        println!("FETCHING MISSING DATA");
+        println!("DATA AVAILABILITY CHECK");
         println!("{}", "=".repeat(60));
-        println!("  Missing files: {}", missing.len());
-        for (sym, tf) in &missing {
-            println!("    - {}_{}.csv", sym.as_str(), tf);
-        }
-        println!("{}\n", "=".repeat(60));
 
-        match data::ensure_data_available_sync(
+        if !missing_files.is_empty() {
+            println!("  Missing files: {}", missing_files.len());
+            for (sym, tf) in &missing_files {
+                println!("    - {}_{}.csv", sym.as_str(), tf);
+            }
+        }
+
+        if !needs_earlier.is_empty() {
+            println!("  Files needing earlier data: {}", needs_earlier.len());
+            for (sym, tf, needed_start) in &needs_earlier {
+                println!(
+                    "    - {}_{}.csv (need data from {})",
+                    sym.as_str(),
+                    tf,
+                    needed_start.format("%Y-%m-%d")
+                );
+            }
+        }
+
+        println!("{}", "-".repeat(60));
+        println!("  Downloading missing data from Binance...\n");
+
+        match data::ensure_data_for_range_sync(
             &config.backtest.data_dir,
             &all_symbols,
             &timeframes_to_test,
-            365,
+            start_date,
+            end_date,
         ) {
             Ok(failed) => {
                 if !failed.is_empty() {
-                    println!("  Warning: Could not fetch {} files:", failed.len());
+                    println!("\n  ⚠ Could not fetch {} files:", failed.len());
                     for (sym, tf) in &failed {
                         println!("    - {}_{}.csv", sym.as_str(), tf);
                     }
                 } else {
-                    println!("  All missing data fetched successfully\n");
+                    println!("\n  ✓ All data fetched/extended successfully");
                 }
             }
             Err(e) => {
-                println!("  Warning: Error fetching data: {}\n", e);
+                println!("\n  ⚠ Error fetching data: {}", e);
             }
+        }
+        println!("{}\n", "=".repeat(60));
+    }
+
+    // Check actual data coverage and warn if not fully covered
+    if start_date.is_some() {
+        let mut coverage_warnings: Vec<String> = Vec::new();
+        for symbol in &all_symbols {
+            for tf in &timeframes_to_test {
+                let filename = format!("{}_{}.csv", symbol.as_str(), tf);
+                let path = std::path::Path::new(&config.backtest.data_dir).join(&filename);
+                if let Ok(Some((data_start, _))) = data::get_data_date_range(&path) {
+                    if let Some(req_start) = start_date {
+                        if data_start > req_start {
+                            coverage_warnings.push(format!(
+                                "{}_{}: data starts {} (requested {})",
+                                symbol.as_str(),
+                                tf,
+                                data_start.format("%Y-%m-%d"),
+                                req_start.format("%Y-%m-%d")
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        if !coverage_warnings.is_empty() {
+            println!("  ⚠ Note: Some data doesn't cover full date range:");
+            for w in coverage_warnings.iter().take(5) {
+                println!("    {}", w);
+            }
+            if coverage_warnings.len() > 5 {
+                println!("    ... and {} more", coverage_warnings.len() - 5);
+            }
+            println!("    (Binance may not have earlier historical data)\n");
         }
     }
 
@@ -176,6 +254,7 @@ pub fn run(
     // Build task list (symbol group × timeframe combinations)
     let mut tasks: Vec<OptTask> = Vec::new();
     let mut symbol_groups_flat: Vec<String> = Vec::new();
+    let mut skipped_reasons: Vec<String> = Vec::new();
 
     for (group_idx, symbols_vec) in symbol_groups.iter().enumerate() {
         let group_name = symbols_vec
@@ -183,7 +262,7 @@ pub fn run(
             .map(|s| s.replace("INR", ""))
             .collect::<Vec<_>>()
             .join("+");
-        symbol_groups_flat.push(group_name);
+        symbol_groups_flat.push(group_name.clone());
 
         let mut task_config = config.clone();
         task_config.trading.pairs = symbols_vec.clone();
@@ -192,16 +271,34 @@ pub fn run(
             task_config.set_timeframe(timeframe);
 
             let symbol_list: Vec<Symbol> = symbols_vec.iter().map(|s| Symbol(s.clone())).collect();
-            if let Ok(data) =
-                data::load_multi_symbol(&task_config.backtest.data_dir, &symbol_list, timeframe)
-            {
-                if !data.is_empty() {
+            match data::load_multi_symbol_with_range(
+                &task_config.backtest.data_dir,
+                &symbol_list,
+                timeframe,
+                start_date,
+                end_date,
+            ) {
+                Ok(data) if !data.is_empty() => {
                     tasks.push(OptTask {
                         group_idx,
                         symbols_vec: symbols_vec.clone(),
                         timeframe: timeframe.clone(),
                         config: task_config.clone(),
+                        start_date,
+                        end_date,
                     });
+                }
+                Ok(_) => {
+                    skipped_reasons.push(format!(
+                        "{}_{}: No data in date range{}{}",
+                        group_name,
+                        timeframe,
+                        start_date.map(|d| format!(" from {}", d.format("%Y-%m-%d"))).unwrap_or_default(),
+                        end_date.map(|d| format!(" to {}", d.format("%Y-%m-%d"))).unwrap_or_default()
+                    ));
+                }
+                Err(e) => {
+                    skipped_reasons.push(format!("{}_{}: {}", group_name, timeframe, e));
                 }
             }
         }
@@ -226,6 +323,24 @@ pub fn run(
     );
 
     if total_runs == 0 {
+        println!();
+        println!("  ❌ No valid runs found!");
+        println!();
+        if !skipped_reasons.is_empty() {
+            println!("  Reasons:");
+            for reason in skipped_reasons.iter().take(10) {
+                println!("    - {}", reason);
+            }
+            if skipped_reasons.len() > 10 {
+                println!("    ... and {} more", skipped_reasons.len() - 10);
+            }
+            println!();
+        }
+        println!("  Check:");
+        println!("    1. Data files exist in: {}", config.backtest.data_dir);
+        println!("    2. Date range has data (--start/--end)");
+        println!("    3. Grid config is valid");
+        println!();
         info!("No valid runs found. Check data availability and grid config.");
         return Ok(());
     }
@@ -235,6 +350,12 @@ pub fn run(
     println!("  Strategy      {}", config.strategy_name);
     println!("  Symbols       {} group(s)", symbol_groups.len());
     println!("  Timeframes    {}", timeframes_to_test.join(", "));
+    if let Some(ref start) = start_date {
+        println!("  Start date    {}", start.format("%Y-%m-%d %H:%M:%S"));
+    }
+    if let Some(ref end) = end_date {
+        println!("  End date      {}", end.format("%Y-%m-%d %H:%M:%S"));
+    }
     println!("  Grid          {} combinations", total_param_combinations);
     println!("  Total runs    {}", total_runs);
     println!(
@@ -377,9 +498,176 @@ pub fn run(
     }
     println!();
 
+    // Update config file with best parameters (unless --no-update)
+    if !no_update && !all_results.is_empty() {
+        let best = &all_results[0];
+        let best_metric = get_metric_value(best, &sort_by);
+
+        // Get best result's timeframe
+        let tf_val = *best.params.get("_timeframe").unwrap_or(&0.0);
+        let best_tf = match tf_val {
+            v if (v - 0.083).abs() < 0.01 => "5m",
+            v if (v - 0.25).abs() < 0.01 => "15m",
+            v if (v - 1.0).abs() < 0.01 => "1h",
+            v if (v - 4.0).abs() < 0.01 => "4h",
+            v if (v - 24.0).abs() < 0.01 => "1d",
+            _ => "unknown",
+        };
+
+        // Only update if best result's timeframe matches config's timeframe
+        let config_tf = config.timeframe();
+        if best_tf != config_tf {
+            println!(
+                "  Skipping config update: best result is on {} but config uses {}",
+                best_tf, config_tf
+            );
+            println!(
+                "  To update, run optimization with --timeframes {} or change config manually",
+                config_tf
+            );
+            println!();
+        } else {
+            // Run baseline backtest with current config to compare (same timeframe)
+            let baseline_metric = run_baseline_backtest(&config, &sort_by, start_date, end_date);
+
+            let should_update = match baseline_metric {
+                Some(baseline) => {
+                    let improvement = best_metric - baseline;
+                    if improvement > 0.0 {
+                        println!(
+                            "  Best result ({:.2}) is better than current ({:.2}) by {:.2}",
+                            best_metric, baseline, improvement
+                        );
+                        true
+                    } else {
+                        println!(
+                            "  Current config ({:.2}) is already optimal (best found: {:.2})",
+                            baseline, best_metric
+                        );
+                        false
+                    }
+                }
+                None => {
+                    println!("  No baseline comparison available, updating with best result");
+                    true
+                }
+            };
+
+            if should_update {
+                match update_config_with_best(&config_path, best, &grid_keys) {
+                    Ok(backup_path) => {
+                        println!("  Config updated: {}", config_path);
+                        println!("  Backup saved:   {}", backup_path);
+                    }
+                    Err(e) => {
+                        println!("  Warning: Failed to update config: {}", e);
+                    }
+                }
+            }
+            println!();
+        }
+    }
+
     info!("Optimization completed successfully");
 
     Ok(())
+}
+
+/// Get metric value from result based on sort key
+fn get_metric_value(result: &OptimizationResult, sort_by: &str) -> f64 {
+    match sort_by {
+        "sharpe" => result.sharpe_ratio,
+        "return" => result.total_return,
+        "calmar" => result.calmar_ratio,
+        "win_rate" => result.win_rate,
+        "profit_factor" => result.profit_factor,
+        _ => result.sharpe_ratio,
+    }
+}
+
+/// Run baseline backtest with current config to get comparison metric
+fn run_baseline_backtest(
+    config: &Config,
+    sort_by: &str,
+    start_date: Option<DateTime<Utc>>,
+    end_date: Option<DateTime<Utc>>,
+) -> Option<f64> {
+    use crypto_strategies::backtest::Backtester;
+
+    let symbols: Vec<Symbol> = config.trading.symbols();
+    let timeframe = config.timeframe();
+
+    let data = data::load_multi_symbol_with_range(
+        &config.backtest.data_dir,
+        &symbols,
+        &timeframe,
+        start_date,
+        end_date,
+    )
+    .ok()?;
+    if data.is_empty() {
+        return None;
+    }
+
+    let strategy = strategies::create_strategy(config).ok()?;
+    let mut backtester = Backtester::new(config.clone(), strategy);
+    let result = backtester.run(data);
+
+    Some(match sort_by {
+        "sharpe" => result.metrics.sharpe_ratio,
+        "return" => result.metrics.total_return,
+        "calmar" => result.metrics.calmar_ratio,
+        "win_rate" => result.metrics.win_rate,
+        "profit_factor" => result.metrics.profit_factor,
+        _ => result.metrics.sharpe_ratio,
+    })
+}
+
+/// Update config file with best parameters, creating a backup first
+fn update_config_with_best(
+    config_path: &str,
+    best: &OptimizationResult,
+    grid_keys: &[String],
+) -> Result<String> {
+    use std::fs;
+    use std::path::Path;
+
+    // Read original config
+    let original_content = fs::read_to_string(config_path)?;
+    let mut config_json: serde_json::Value = serde_json::from_str(&original_content)?;
+
+    // Create backup with timestamp
+    let path = Path::new(config_path);
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let ext = path.extension().unwrap_or_default().to_string_lossy();
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let backup_name = format!("{}_backup_{}.{}", stem, timestamp, ext);
+    let backup_path = parent.join(&backup_name);
+
+    fs::write(&backup_path, &original_content)?;
+
+    // Update strategy section with best params
+    if let Some(strategy) = config_json.get_mut("strategy") {
+        if let Some(obj) = strategy.as_object_mut() {
+            for key in grid_keys {
+                if let Some(value) = best.params.get(key) {
+                    // Preserve integer types where appropriate
+                    if value.fract() == 0.0 && *value >= 0.0 && *value < i64::MAX as f64 {
+                        obj.insert(key.clone(), serde_json::json!(*value as i64));
+                    } else {
+                        obj.insert(key.clone(), serde_json::json!(*value));
+                    }
+                }
+            }
+        }
+    }
+
+    // Write updated config with pretty formatting
+    let updated_content = serde_json::to_string_pretty(&config_json)?;
+    fs::write(config_path, updated_content)?;
+
+    Ok(backup_path.to_string_lossy().to_string())
 }
 
 #[derive(Clone)]
@@ -388,16 +676,20 @@ struct OptTask {
     symbols_vec: Vec<String>,
     timeframe: String,
     config: Config,
+    start_date: Option<DateTime<Utc>>,
+    end_date: Option<DateTime<Utc>>,
 }
 
 fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<OptimizationResult> {
     use crypto_strategies::backtest::Backtester;
 
     let symbol_list: Vec<Symbol> = task.symbols_vec.iter().map(|s| Symbol(s.clone())).collect();
-    let data = match data::load_multi_symbol(
+    let data = match data::load_multi_symbol_with_range(
         &task.config.backtest.data_dir,
         &symbol_list,
         &task.timeframe,
+        task.start_date,
+        task.end_date,
     ) {
         Ok(d) if !d.is_empty() => d,
         _ => return None,

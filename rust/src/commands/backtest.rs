@@ -1,6 +1,7 @@
 //! Backtest command implementation
 
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use crypto_strategies::strategies;
 use crypto_strategies::{backtest::Backtester, data, Config};
 use tracing::{debug, info};
@@ -9,8 +10,8 @@ pub fn run(
     config_path: String,
     strategy_override: Option<String>,
     capital_override: Option<f64>,
-    _start_override: Option<String>,
-    _end_override: Option<String>,
+    start_override: Option<String>,
+    end_override: Option<String>,
 ) -> Result<()> {
     info!("Starting backtest");
 
@@ -29,7 +30,22 @@ pub fn run(
         config.trading.initial_capital = capital;
     }
 
-    // Note: start/end date filtering not yet implemented in data loader
+    // Parse date range filters
+    let start_date: Option<DateTime<Utc>> = start_override
+        .as_ref()
+        .map(|s| data::parse_date(s))
+        .transpose()?;
+    let end_date: Option<DateTime<Utc>> = end_override
+        .as_ref()
+        .map(|s| data::parse_date(s))
+        .transpose()?;
+
+    if let Some(ref start) = start_date {
+        info!("Filtering data from: {}", start);
+    }
+    if let Some(ref end) = end_date {
+        info!("Filtering data until: {}", end);
+    }
 
     // Load data
     info!("Loading data from: {}", config.backtest.data_dir);
@@ -37,45 +53,77 @@ pub fn run(
     let timeframe = config.timeframe();
     debug!("Symbols: {:?}", symbols);
 
-    // Check for missing data and fetch if needed
+    // Check for missing data and fetch if needed (including date range coverage)
     let timeframes = vec![timeframe.clone()];
-    let missing = data::find_missing_data(&config.backtest.data_dir, &symbols, &timeframes);
 
-    if !missing.is_empty() {
+    let (missing_files, needs_earlier, _needs_later) = data::check_data_coverage(
+        &config.backtest.data_dir,
+        &symbols,
+        &timeframes,
+        start_date,
+        end_date,
+    );
+
+    let needs_download = !missing_files.is_empty() || !needs_earlier.is_empty();
+
+    if needs_download {
         println!("\n{}", "=".repeat(60));
-        println!("FETCHING MISSING DATA");
+        println!("DATA AVAILABILITY CHECK");
         println!("{}", "=".repeat(60));
-        println!("  Missing files: {}", missing.len());
-        for (sym, tf) in &missing {
-            println!("    - {}_{}.csv", sym.as_str(), tf);
-        }
-        println!("{}\n", "-".repeat(60));
 
-        // Fetch missing data (default 365 days)
-        match data::ensure_data_available_sync(
+        if !missing_files.is_empty() {
+            println!("  Missing files: {}", missing_files.len());
+            for (sym, tf) in &missing_files {
+                println!("    - {}_{}.csv", sym.as_str(), tf);
+            }
+        }
+
+        if !needs_earlier.is_empty() {
+            println!("  Files needing earlier data: {}", needs_earlier.len());
+            for (sym, tf, needed_start) in &needs_earlier {
+                println!(
+                    "    - {}_{}.csv (need data from {})",
+                    sym.as_str(),
+                    tf,
+                    needed_start.format("%Y-%m-%d")
+                );
+            }
+        }
+
+        println!("{}", "-".repeat(60));
+        println!("  Downloading missing data from Binance...\n");
+
+        match data::ensure_data_for_range_sync(
             &config.backtest.data_dir,
             &symbols,
             &timeframes,
-            365,
+            start_date,
+            end_date,
         ) {
             Ok(failed) => {
                 if !failed.is_empty() {
-                    println!("  ⚠ Could not fetch {} files:", failed.len());
+                    println!("\n  ⚠ Could not fetch {} files:", failed.len());
                     for (sym, tf) in &failed {
                         println!("    - {}_{}.csv", sym.as_str(), tf);
                     }
                 } else {
-                    println!("  ✓ All missing data fetched successfully");
+                    println!("\n  ✓ All data fetched/extended successfully");
                 }
             }
             Err(e) => {
-                println!("  ⚠ Error fetching data: {}", e);
+                println!("\n  ⚠ Error fetching data: {}", e);
             }
         }
         println!("{}\n", "=".repeat(60));
     }
 
-    let data = data::load_multi_symbol(&config.backtest.data_dir, &symbols, &timeframe)?;
+    let data = data::load_multi_symbol_with_range(
+        &config.backtest.data_dir,
+        &symbols,
+        &timeframe,
+        start_date,
+        end_date,
+    )?;
 
     info!("Loaded data for {} symbols", data.len());
 
@@ -92,6 +140,12 @@ pub fn run(
     println!("\n{}", "=".repeat(60));
     println!("BACKTEST RESULTS");
     println!("{}", "=".repeat(60));
+    if let Some(ref start) = start_date {
+        println!("Start Date:         {}", start.format("%Y-%m-%d %H:%M:%S"));
+    }
+    if let Some(ref end) = end_date {
+        println!("End Date:           {}", end.format("%Y-%m-%d %H:%M:%S"));
+    }
     println!("Initial Capital:    ₹{:.2}", config.trading.initial_capital);
     println!("Total Return:       {:.2}%", result.metrics.total_return);
     println!("Post-Tax Return:    {:.2}%", result.metrics.post_tax_return);

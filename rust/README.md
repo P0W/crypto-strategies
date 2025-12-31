@@ -131,7 +131,8 @@ src/
 │   ├── volatility_regime/
 │   ├── mean_reversion/
 │   ├── momentum_scalper/
-│   └── range_breakout/
+│   ├── range_breakout/
+│   └── vwap_scalper/
 ├── backtest.rs          # Simulation engine
 ├── grid.rs              # Generic grid search
 ├── risk.rs              # Position sizing
@@ -358,6 +359,7 @@ pub trait Strategy: Send + Sync {
 | `mean_reversion` | Bollinger Band + RSI reversion | 5m, 15m, 1h |
 | `momentum_scalper` | EMA crossover momentum | 5m, 15m |
 | `range_breakout` | N-bar high/low breakouts | 1h, 4h |
+| `vwap_scalper` | VWAP crossover price action | 5m, 15m |
 
 ## Configuration Structure
 

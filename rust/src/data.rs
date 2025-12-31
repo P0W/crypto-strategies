@@ -151,11 +151,62 @@ pub fn load_csv(path: impl AsRef<Path>) -> Result<Vec<Candle>> {
     Ok(candles)
 }
 
+/// Filter candles by date range
+pub fn filter_candles_by_date(
+    candles: Vec<Candle>,
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+) -> Vec<Candle> {
+    candles
+        .into_iter()
+        .filter(|c| {
+            let after_start = start.is_none_or(|s| c.datetime >= s);
+            let before_end = end.is_none_or(|e| c.datetime <= e);
+            after_start && before_end
+        })
+        .collect()
+}
+
+/// Parse a date string (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS) to DateTime<Utc>
+pub fn parse_date(date_str: &str) -> Result<DateTime<Utc>> {
+    // Try full datetime format first
+    if let Ok(dt) = date_str.parse::<DateTime<Utc>>() {
+        return Ok(dt);
+    }
+
+    // Try YYYY-MM-DD HH:MM:SS format
+    if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(date_str, "%Y-%m-%d %H:%M:%S") {
+        return Ok(DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc));
+    }
+
+    // Try YYYY-MM-DD format (assume start of day)
+    if let Ok(nd) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+        let ndt = nd.and_hms_opt(0, 0, 0).unwrap();
+        return Ok(DateTime::<Utc>::from_naive_utc_and_offset(ndt, Utc));
+    }
+
+    anyhow::bail!(
+        "Failed to parse date: {}. Use YYYY-MM-DD or YYYY-MM-DD HH:MM:SS format",
+        date_str
+    )
+}
+
 /// Load data for multiple symbols from CSV files
 pub fn load_multi_symbol(
     data_dir: impl AsRef<Path>,
     symbols: &[Symbol],
     timeframe: &str,
+) -> Result<HashMap<Symbol, Vec<Candle>>> {
+    load_multi_symbol_with_range(data_dir, symbols, timeframe, None, None)
+}
+
+/// Load data for multiple symbols from CSV files with optional date range filtering
+pub fn load_multi_symbol_with_range(
+    data_dir: impl AsRef<Path>,
+    symbols: &[Symbol],
+    timeframe: &str,
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
 ) -> Result<HashMap<Symbol, Vec<Candle>>> {
     let mut data = HashMap::new();
 
@@ -169,9 +220,25 @@ pub fn load_multi_symbol(
         }
 
         let candles = load_csv(&path).context(format!("Failed to load data for {}", symbol))?;
+        let original_len = candles.len();
 
-        info!("Loaded {} candles for {}", candles.len(), symbol);
-        data.insert(symbol.clone(), candles);
+        // Apply date filtering
+        let candles = filter_candles_by_date(candles, start, end);
+
+        if start.is_some() || end.is_some() {
+            info!(
+                "Loaded {} candles for {} (filtered from {} total)",
+                candles.len(),
+                symbol,
+                original_len
+            );
+        } else {
+            info!("Loaded {} candles for {}", candles.len(), symbol);
+        }
+
+        if !candles.is_empty() {
+            data.insert(symbol.clone(), candles);
+        }
     }
 
     if data.is_empty() {
@@ -179,6 +246,67 @@ pub fn load_multi_symbol(
     }
 
     Ok(data)
+}
+
+/// Get the date range covered by a data file
+pub fn get_data_date_range(path: impl AsRef<Path>) -> Result<Option<(DateTime<Utc>, DateTime<Utc>)>> {
+    let candles = load_csv(path.as_ref())?;
+    if candles.is_empty() {
+        return Ok(None);
+    }
+
+    let min_date = candles.iter().map(|c| c.datetime).min().unwrap();
+    let max_date = candles.iter().map(|c| c.datetime).max().unwrap();
+
+    Ok(Some((min_date, max_date)))
+}
+
+/// Check which symbols need data for a given date range
+/// Returns: (missing_files, files_needing_earlier_data, files_needing_later_data)
+/// Note: files_needing_earlier_data only includes files where there's a significant gap (>7 days)
+/// to avoid repeatedly trying to fetch data that Binance doesn't have
+pub fn check_data_coverage(
+    data_dir: impl AsRef<Path>,
+    symbols: &[Symbol],
+    timeframes: &[String],
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+) -> (Vec<(Symbol, String)>, Vec<(Symbol, String, DateTime<Utc>)>, Vec<(Symbol, String, DateTime<Utc>)>) {
+    let mut missing_files = Vec::new();
+    let mut needs_earlier = Vec::new();
+    let mut needs_later = Vec::new();
+    let data_dir = data_dir.as_ref();
+
+    for symbol in symbols {
+        for timeframe in timeframes {
+            let filename = format!("{}_{}.csv", symbol.as_str(), timeframe);
+            let path = data_dir.join(&filename);
+
+            if !path.exists() {
+                missing_files.push((symbol.clone(), timeframe.clone()));
+                continue;
+            }
+
+            // Check date range
+            if let Ok(Some((data_start, data_end))) = get_data_date_range(&path) {
+                if let Some(req_start) = start {
+                    // Only flag as needing earlier data if there's a significant gap (>7 days)
+                    // This prevents repeated attempts when Binance simply doesn't have older data
+                    let gap_days = (data_start - req_start).num_days();
+                    if gap_days > 7 {
+                        needs_earlier.push((symbol.clone(), timeframe.clone(), req_start));
+                    }
+                }
+                if let Some(req_end) = end {
+                    if data_end < req_end {
+                        needs_later.push((symbol.clone(), timeframe.clone(), req_end));
+                    }
+                }
+            }
+        }
+    }
+
+    (missing_files, needs_earlier, needs_later)
 }
 
 /// Check which data files are missing for given symbols and timeframes
@@ -262,6 +390,168 @@ pub fn ensure_data_available_sync(
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(ensure_data_available(
         data_dir, symbols, timeframes, days_back,
+    ))
+}
+
+/// Ensure data exists for date range, downloading and merging if needed
+/// Returns list of symbols/timeframes that couldn't be fetched
+pub async fn ensure_data_for_range(
+    data_dir: impl AsRef<Path>,
+    symbols: &[Symbol],
+    timeframes: &[String],
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+) -> Result<Vec<(Symbol, String)>> {
+    let data_dir = data_dir.as_ref();
+
+    // Check what data we need
+    let (missing_files, needs_earlier, _needs_later) =
+        check_data_coverage(data_dir, symbols, timeframes, start, end);
+
+    let mut failed = Vec::new();
+
+    // Download completely missing files
+    if !missing_files.is_empty() {
+        info!("Found {} missing data files", missing_files.len());
+        let fetcher = BinanceDataFetcher::new(data_dir);
+
+        for (symbol, timeframe) in &missing_files {
+            // Calculate days needed from start date to now
+            let days_back = start
+                .map(|s| (Utc::now() - s).num_days() as u32 + 1)
+                .unwrap_or(365);
+
+            println!("    Downloading {}_{}.csv ({} days)...", symbol.as_str(), timeframe, days_back);
+            match fetcher
+                .download_pair(symbol.as_str(), timeframe, days_back)
+                .await
+            {
+                Ok(path) => {
+                    println!("    ✓ Downloaded to {}", path.display());
+                }
+                Err(e) => {
+                    println!("    ✗ Failed: {}", e);
+                    failed.push((symbol.clone(), timeframe.clone()));
+                }
+            }
+        }
+    }
+
+    // Extend files that need earlier data
+    if !needs_earlier.is_empty() {
+        info!("Found {} files needing earlier data", needs_earlier.len());
+        let fetcher = BinanceDataFetcher::new(data_dir);
+
+        for (symbol, timeframe, needed_start) in &needs_earlier {
+            let filename = format!("{}_{}.csv", symbol.as_str(), timeframe);
+            let path = data_dir.join(&filename);
+
+            // Load existing data
+            let existing_candles = match load_csv(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("Failed to load existing data for {}: {}", symbol, e);
+                    failed.push((symbol.clone(), timeframe.clone()));
+                    continue;
+                }
+            };
+
+            let existing_start = existing_candles
+                .iter()
+                .map(|c| c.datetime)
+                .min()
+                .unwrap_or(Utc::now());
+
+            // Skip if we already tried and couldn't get earlier data
+            // (if existing_start is very close to needed_start, don't bother)
+            let days_gap = (existing_start - *needed_start).num_days();
+            if days_gap <= 1 {
+                // Already have data close to the requested start
+                continue;
+            }
+
+            // Calculate days to fetch
+            let days_back = days_gap as u32 + 30; // Extra buffer
+
+            println!(
+                "    Extending {}_{}.csv with earlier data ({} days before {})...",
+                symbol.as_str(),
+                timeframe,
+                days_back,
+                existing_start.format("%Y-%m-%d")
+            );
+
+            // Fetch historical data
+            match fetcher.fetch_full_history(symbol.as_str(), timeframe, days_back).await {
+                Ok(new_candles) => {
+                    if new_candles.is_empty() {
+                        println!(
+                            "    ⚠ No earlier data available from Binance (earliest: {})",
+                            existing_start.format("%Y-%m-%d")
+                        );
+                        continue;
+                    }
+
+                    // Check if we actually got earlier data
+                    let fetched_start = new_candles.iter().map(|c| c.datetime).min().unwrap();
+                    
+                    if fetched_start >= existing_start {
+                        println!(
+                            "    ⚠ Binance data only goes back to {} (requested: {})",
+                            existing_start.format("%Y-%m-%d"),
+                            needed_start.format("%Y-%m-%d")
+                        );
+                        continue;
+                    }
+
+                    // Merge: new candles + existing candles, deduplicate
+                    let mut all_candles: Vec<Candle> = new_candles
+                        .into_iter()
+                        .chain(existing_candles.into_iter())
+                        .collect();
+
+                    // Sort by datetime and deduplicate
+                    all_candles.sort_by_key(|c| c.datetime);
+                    all_candles.dedup_by_key(|c| c.datetime);
+
+                    // Save merged data
+                    match fetcher.save_to_csv(&all_candles, &filename) {
+                        Ok(_) => {
+                            let new_start = all_candles.iter().map(|c| c.datetime).min().unwrap();
+                            println!(
+                                "    ✓ Extended data now starts from {} ({} total candles)",
+                                new_start.format("%Y-%m-%d"),
+                                all_candles.len()
+                            );
+                        }
+                        Err(e) => {
+                            println!("    ✗ Failed to save merged data: {}", e);
+                            failed.push((symbol.clone(), timeframe.clone()));
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("    ✗ Failed to fetch earlier data: {}", e);
+                    failed.push((symbol.clone(), timeframe.clone()));
+                }
+            }
+        }
+    }
+
+    Ok(failed)
+}
+
+/// Synchronous wrapper for ensure_data_for_range
+pub fn ensure_data_for_range_sync(
+    data_dir: impl AsRef<Path>,
+    symbols: &[Symbol],
+    timeframes: &[String],
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+) -> Result<Vec<(Symbol, String)>> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(ensure_data_for_range(
+        data_dir, symbols, timeframes, start, end,
     ))
 }
 

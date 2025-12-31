@@ -163,10 +163,12 @@ impl Backtester {
                     if let Some(pos) = positions.remove(symbol) {
                         let exit_price = match pos.side {
                             Side::Buy => open_price * (1.0 - self.config.exchange.assumed_slippage),
-                            Side::Sell => open_price * (1.0 + self.config.exchange.assumed_slippage),
+                            Side::Sell => {
+                                open_price * (1.0 + self.config.exchange.assumed_slippage)
+                            }
                         };
                         let trade = self.close_position(&pos, exit_price, candle_dt, &reason); // Use candle_dt
-                        
+
                         // Cash flow on close:
                         // - Long (Sell): Receive cash - commission
                         // - Short (Buy to cover): Pay cash + commission

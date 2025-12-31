@@ -19,7 +19,6 @@
 
     "trading": {
         "pairs": ["BTCINR", "ETHINR", "SOLINR", "BNBINR", "XRPINR"],
-        "timeframe": "4h",
         "initial_capital": 100000,
 
         "risk_per_trade": 0.10,
@@ -38,10 +37,11 @@
     },
 
     "strategy": {
-        "bb_period": 20,
-        "bb_std": 2.5,
+        "timeframe": "4h",
+        "bb_period": 25,
+        "bb_std": 1.5,
 
-        "rsi_period": 14,
+        "rsi_period": 21,
         "rsi_oversold": 30.0,
         "rsi_overbought": 70.0,
 
@@ -52,14 +52,14 @@
         "trend_ema_period": 50,
         "use_trend_filter": false,
 
-        "atr_period": 14,
+        "atr_period": 20,
         "stop_atr_multiple": 2.0,
         "take_profit_mode": "bb_middle",
         "target_atr_multiple": 2.0,
         "trailing_activation": 0.5,
-        "trailing_atr_multiple": 1.0,
+        "trailing_atr_multiple": 1.5,
 
-        "bb_penetration": 0.0,
+        "bb_penetration": 0.1,
         "max_consecutive_losses": 3,
         "cooldown_bars": 5,
         "allow_short": false
@@ -74,9 +74,6 @@
     "backtest": {
         "data_dir": "../data",
         "results_dir": "../results",
-        "timeframe": "4h",
-        "start_date": null,
-        "end_date": null,
         "commission": 0.001
     },
 

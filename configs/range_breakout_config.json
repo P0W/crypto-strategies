@@ -10,7 +10,6 @@
 
     "trading": {
         "pairs": ["BTCINR", "ETHINR", "SOLINR", "BNBINR", "XRPINR"],
-        "timeframe": "15m",
         "initial_capital": 100000,
         "risk_per_trade": 0.05,
         "max_positions": 3,
@@ -26,6 +25,7 @@
     },
 
     "strategy": {
+        "timeframe": "15m",
         "lookback": 20,
         "atr_period": 14,
         "stop_atr": 1.0,
@@ -50,9 +50,6 @@
     "backtest": {
         "data_dir": "../data",
         "results_dir": "../results",
-        "timeframe": "15m",
-        "start_date": null,
-        "end_date": null,
         "commission": 0.001
     }
 }

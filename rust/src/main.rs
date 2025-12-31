@@ -87,6 +87,14 @@ enum Commands {
         #[arg(long)]
         timeframes: Option<String>,
 
+        /// Start date for backtest data (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
+        #[arg(long)]
+        start: Option<String>,
+
+        /// End date for backtest data (YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)
+        #[arg(long)]
+        end: Option<String>,
+
         /// Override grid params. Format: "param=val1,val2,val3". Can be used multiple times.
         /// Example: --override "atr_period=10,14,20" --override "ema_fast=5,8,13"
         #[arg(short = 'O', long = "override")]
@@ -95,6 +103,10 @@ enum Commands {
         /// Run sequentially instead of parallel
         #[arg(long)]
         sequential: bool,
+
+        /// Skip updating config file with best parameters (default: update if better)
+        #[arg(long)]
+        no_update: bool,
     },
 
     /// Run live trading
@@ -247,11 +259,14 @@ fn main() -> Result<()> {
             min_combo,
             max_combo,
             timeframes,
+            start,
+            end,
             overrides,
             sequential,
+            no_update,
         } => commands::optimize::run(
-            config, sort_by, top, coins, symbols, min_combo, max_combo, timeframes, overrides,
-            sequential,
+            config, sort_by, top, coins, symbols, min_combo, max_combo, timeframes, start, end,
+            overrides, sequential, no_update,
         ),
 
         Commands::Live {

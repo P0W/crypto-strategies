@@ -1,0 +1,84 @@
+{
+  "_comment": "VWAP Scalper - Simple price action around VWAP for short timeframes",
+  "backtest": {
+    "commission": 0.001,
+    "data_dir": "../data",
+    "results_dir": "../results"
+  },
+  "exchange": {
+    "assumed_slippage": 0.001,
+    "maker_fee": 0.001,
+    "rate_limit": 10,
+    "taker_fee": 0.001
+  },
+  "grid": {
+    "atr_period": [
+      10,
+      14,
+      20
+    ],
+    "max_distance_pct": [
+      1.0,
+      2.0,
+      3.0
+    ],
+    "max_hold_bars": [
+      30,
+      50,
+      100
+    ],
+    "stop_atr_multiple": [
+      1.0,
+      1.5,
+      2.0
+    ],
+    "target_atr_multiple": [
+      1.5,
+      2.0,
+      2.5,
+      3.0
+    ]
+  },
+  "strategy": {
+    "allow_short": false,
+    "atr_period": 20,
+    "cooldown_bars": 2,
+    "max_distance_pct": 3,
+    "max_hold_bars": 30,
+    "require_volume": false,
+    "stop_atr_multiple": 2,
+    "target_atr_multiple": 2.5,
+    "timeframe": "15m",
+    "trailing_activation": 1.0,
+    "trailing_atr_multiple": 1.0,
+    "volume_period": 20,
+    "volume_threshold": 1.0
+  },
+  "strategy_name": "vwap_scalper",
+  "tax": {
+    "loss_offset_allowed": false,
+    "tax_rate": 0.3,
+    "tds_rate": 0.01
+  },
+  "trading": {
+    "consecutive_loss_limit": 3,
+    "consecutive_loss_multiplier": 0.75,
+    "drawdown_critical": 0.1,
+    "drawdown_critical_multiplier": 0.25,
+    "drawdown_warning": 0.06,
+    "drawdown_warning_multiplier": 0.5,
+    "initial_capital": 100000,
+    "max_drawdown": 0.12,
+    "max_portfolio_heat": 0.2,
+    "max_position_pct": 0.12,
+    "max_positions": 3,
+    "pairs": [
+      "BTCINR",
+      "ETHINR",
+      "SOLINR",
+      "BNBINR",
+      "XRPINR"
+    ],
+    "risk_per_trade": 0.08
+  }
+}

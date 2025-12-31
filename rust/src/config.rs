@@ -50,11 +50,12 @@ impl Config {
     }
 
     /// Get timeframe from strategy config
+    /// Panics if timeframe is not set in the strategy section
     pub fn timeframe(&self) -> String {
         self.strategy
             .get("timeframe")
             .and_then(|v| v.as_str())
-            .unwrap_or("1d")
+            .expect("FATAL: 'timeframe' is required in the 'strategy' section of config. Example: \"strategy\": { \"timeframe\": \"1d\", ... }")
             .to_string()
     }
 

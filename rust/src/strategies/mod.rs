@@ -9,6 +9,7 @@ pub mod mean_reversion;
 pub mod momentum_scalper;
 pub mod range_breakout;
 pub mod volatility_regime;
+pub mod vwap_scalper;
 
 use crate::{Candle, Config, Order, Position, Signal, Symbol, Trade};
 use anyhow::Result;
@@ -118,6 +119,7 @@ fn get_registry() -> &'static RwLock<HashMap<&'static str, StrategyFactory>> {
             momentum_scalper::create as StrategyFactory,
         );
         map.insert("range_breakout", range_breakout::create as StrategyFactory);
+        map.insert("vwap_scalper", vwap_scalper::create as StrategyFactory);
         RwLock::new(map)
     })
 }

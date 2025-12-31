@@ -451,7 +451,7 @@ fn test_short_position_unrealized_pnl() {
         side: Side::Sell,
         entry_price: 100.0,
         quantity: 10.0,
-        stop_price: 105.0, // Stop is higher for shorts
+        stop_price: 105.0,  // Stop is higher for shorts
         target_price: 90.0, // Target is lower for shorts
         trailing_stop: None,
         entry_time: Utc::now(),
