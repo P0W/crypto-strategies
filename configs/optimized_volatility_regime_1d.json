@@ -1,11 +1,11 @@
 {
-    "_comment": "Optimized Volatility Regime Strategy - Best Sharpe from grid search (730 days)",
+    "_comment": "Optimized Volatility Regime Strategy - Best Sharpe from grid search with real Binance data",
     "_performance": {
-        "sharpe_ratio": 0.52,
-        "total_return": "26.16%",
-        "max_drawdown": "6.41%",
-        "win_rate": "51.22%",
-        "total_trades": 41
+        "sharpe_ratio": 0.02,
+        "total_return": "2.07%",
+        "max_drawdown": "6.10%",
+        "win_rate": "42.86%",
+        "total_trades": 7
     },
 
     "strategy_name": "volatility_regime",
@@ -43,10 +43,10 @@
         "compression_threshold": 0.6,
         "expansion_threshold": 1.5,
         "extreme_threshold": 2.5,
-        "ema_fast": 13,
-        "ema_slow": 34,
+        "ema_fast": 8,
+        "ema_slow": 21,
         "adx_period": 14,
-        "adx_threshold": 20.0,
+        "adx_threshold": 25.0,
         "breakout_atr_multiple": 1.5,
         "stop_atr_multiple": 2.5,
         "target_atr_multiple": 6.0,
