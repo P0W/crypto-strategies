@@ -8,10 +8,13 @@
 //!   compression/normal volatility regimes with trend confirmation
 //! - `mean_reversion`: Mean Reversion Scalper - professional-grade mean reversion
 //!   strategy for short timeframes (5m, 15m, 1h) using Bollinger Bands, RSI, and volume
+//! - `simple_trend`: Simple Trend Following - minimalist strategy with only 2 entry filters
+//!   (price above EMA + ATR expanding) designed to generate more trades
 
 pub mod mean_reversion;
 pub mod momentum_scalper;
 pub mod range_breakout;
+pub mod simple_trend;
 pub mod volatility_regime;
 
 use crate::{Candle, Config, Order, Position, Signal, Symbol, Trade};
@@ -29,8 +32,9 @@ pub fn create_strategy(config: &Config) -> Result<Box<dyn Strategy>> {
         "mean_reversion" => Ok(Box::new(mean_reversion::create_strategy_from_config(config)?)),
         "momentum_scalper" => Ok(Box::new(momentum_scalper::create_strategy_from_config(config)?)),
         "range_breakout" => Ok(Box::new(range_breakout::create_strategy_from_config(config)?)),
+        "simple_trend" => Ok(Box::new(simple_trend::create_strategy_from_config(config)?)),
         other => anyhow::bail!(
-            "Unknown strategy: {}. Available: volatility_regime, mean_reversion, momentum_scalper, range_breakout",
+            "Unknown strategy: {}. Available: volatility_regime, mean_reversion, momentum_scalper, range_breakout, simple_trend",
             other
         ),
     }
@@ -71,6 +75,13 @@ pub fn generate_grid_configs(config: &Config, mode: &str) -> Vec<Config> {
             };
             grid.generate_configs(config)
         }
+        "simple_trend" => {
+            let grid = match mode {
+                "full" => simple_trend::GridParams::full(),
+                _ => simple_trend::GridParams::quick(),
+            };
+            grid.generate_configs(config)
+        }
         _ => vec![config.clone()], // Unknown strategy: return base config
     }
 }
@@ -103,6 +114,13 @@ pub fn get_grid_combinations(strategy_name: &str, mode: &str) -> usize {
             let grid = match mode {
                 "full" => range_breakout::GridParams::full(),
                 _ => range_breakout::GridParams::quick(),
+            };
+            grid.total_combinations()
+        }
+        "simple_trend" => {
+            let grid = match mode {
+                "full" => simple_trend::GridParams::full(),
+                _ => simple_trend::GridParams::quick(),
             };
             grid.total_combinations()
         }
@@ -149,6 +167,15 @@ pub fn extract_params(config: &Config) -> HashMap<String, f64> {
                 HashMap::new()
             }
         }
+        "simple_trend" => {
+            if let Ok(st_config) = serde_json::from_value::<simple_trend::SimpleTrendConfig>(
+                config.strategy.clone(),
+            ) {
+                simple_trend::config_to_params(&st_config)
+            } else {
+                HashMap::new()
+            }
+        }
         _ => HashMap::new(),
     }
 }
@@ -160,6 +187,7 @@ pub fn format_params(params: &HashMap<String, f64>, strategy_name: &str) -> Stri
         "mean_reversion" => mean_reversion::format_params(params),
         "momentum_scalper" => momentum_scalper::format_params(params),
         "range_breakout" => range_breakout::format_params(params),
+        "simple_trend" => simple_trend::format_params(params),
         _ => volatility_regime::format_params(params),
     }
 }
