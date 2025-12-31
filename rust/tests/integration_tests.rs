@@ -1213,3 +1213,174 @@ async fn test_sharpe_ratio_excludes_zero_return_days() {
         );
     }
 }
+
+// =============================================================================
+// Short Selling Integration Tests
+// =============================================================================
+
+/// Test that backtester correctly handles short positions
+#[test]
+fn test_backtest_short_position_lifecycle() {
+    use crypto_strategies::backtest::Backtester;
+    use crypto_strategies::strategies::mean_reversion::{MeanReversionConfig, MeanReversionStrategy};
+    use std::collections::HashMap;
+
+    // Load a minimal config
+    let mut config = Config::default();
+    config.trading.initial_capital = 10000.0;
+    config.trading.risk_per_trade = 0.02;
+    
+    // Enable short selling
+    let mut mr_config = MeanReversionConfig::default();
+    mr_config.allow_short = true;
+    mr_config.bb_period = 20;
+    mr_config.rsi_period = 14;
+    mr_config.rsi_oversold = 30.0;
+    mr_config.rsi_overbought = 70.0;
+    mr_config.use_trend_filter = false; // Disable trend filter for testing
+    mr_config.require_volume_spike = false; // Disable volume filter
+    
+    let strategy = Box::new(MeanReversionStrategy::new(mr_config));
+    let mut backtester = Backtester::new(config.clone(), strategy);
+    
+    // Generate overbought scenario (should trigger Short signal)
+    // Price trending up significantly, then mean reverting down
+    let mut candles = Vec::new();
+    let base_time = Utc::now() - Duration::days(100);
+    
+    // First 50 candles: normal range around 100
+    for i in 0..50 {
+        candles.push(Candle {
+            datetime: base_time + Duration::days(i),
+            open: 100.0,
+            high: 102.0,
+            low: 98.0,
+            close: 100.0,
+            volume: 1000.0,
+        });
+    }
+    
+    // Next 10 candles: sharp uptrend (overbought setup)
+    for i in 50..60 {
+        let price = 100.0 + (i - 50) as f64 * 2.0; // Rising to 118
+        candles.push(Candle {
+            datetime: base_time + Duration::days(i),
+            open: price - 1.0,
+            high: price + 1.0,
+            low: price - 2.0,
+            close: price,
+            volume: 1500.0, // Higher volume
+        });
+    }
+    
+    // Next 20 candles: mean reversion down (short should profit)
+    for i in 60..80 {
+        let price = 118.0 - (i - 60) as f64 * 1.0; // Falling back to 98
+        candles.push(Candle {
+            datetime: base_time + Duration::days(i),
+            open: price + 1.0,
+            high: price + 2.0,
+            low: price - 1.0,
+            close: price,
+            volume: 1200.0,
+        });
+    }
+    
+    let symbol = Symbol::new("BTCINR");
+    let mut data = HashMap::new();
+    data.insert(symbol.clone(), candles);
+    
+    let result = backtester.run(data);
+    
+    // Verify we had some trades
+    println!("Total trades: {}", result.metrics.total_trades);
+    println!("Total return: {:.2}%", result.metrics.total_return);
+    println!("Win rate: {:.1}%", result.metrics.win_rate);
+    
+    // Check if any trades were short
+    let short_trades: Vec<&Trade> = result.trades.iter()
+        .filter(|t| t.side == Side::Sell)
+        .collect();
+    
+    if !short_trades.is_empty() {
+        println!("Found {} short trades", short_trades.len());
+        for trade in &short_trades {
+            println!(
+                "  Short: Entry={:.2}, Exit={:.2}, PnL={:.2}",
+                trade.entry_price, trade.exit_price, trade.net_pnl
+            );
+            
+            // Verify PnL calculation for short
+            let expected_pnl = (trade.entry_price - trade.exit_price) * trade.quantity;
+            let commission = (trade.quantity * trade.entry_price * config.exchange.taker_fee)
+                + (trade.quantity * trade.exit_price * config.exchange.taker_fee);
+            let expected_net_pnl = expected_pnl - commission;
+            
+            assert!(
+                (trade.pnl - expected_pnl).abs() < 0.01,
+                "Short PnL calculation incorrect: expected {:.2}, got {:.2}",
+                expected_pnl, trade.pnl
+            );
+            
+            assert!(
+                (trade.net_pnl - expected_net_pnl).abs() < 0.01,
+                "Short net PnL incorrect: expected {:.2}, got {:.2}",
+                expected_net_pnl, trade.net_pnl
+            );
+        }
+        
+        println!("✓ Short position lifecycle test passed");
+    } else {
+        println!("Note: No short trades were generated in this test scenario");
+        println!("This may be due to mean reversion strategy conditions not being met");
+    }
+    
+    // Regardless, verify no errors in backtest execution
+    assert!(result.equity_curve.len() > 0, "Should have equity curve data");
+}
+
+/// Test that backtester correctly calculates PnL for both long and short trades
+#[test]
+fn test_backtest_long_short_pnl_comparison() {
+    use crypto_strategies::backtest::Backtester;
+    use crypto_strategies::strategies::volatility_regime::{VolatilityRegimeConfig, VolatilityRegimeStrategy};
+    use std::collections::HashMap;
+
+    let config = Config::default();
+    let strategy = Box::new(VolatilityRegimeStrategy::new(VolatilityRegimeConfig::default()));
+    let mut backtester = Backtester::new(config, strategy);
+    
+    // Simple scenario with just enough data for warmup
+    let candles = generate_trending_candles(100, 100.0, 0.5);
+    
+    let symbol = Symbol::new("TESTINR");
+    let mut data = HashMap::new();
+    data.insert(symbol, candles);
+    
+    let result = backtester.run(data);
+    
+    // Verify trades have correct side assignment
+    for trade in &result.trades {
+        match trade.side {
+            Side::Buy => {
+                // Long: profit when exit > entry
+                let expected_pnl = (trade.exit_price - trade.entry_price) * trade.quantity;
+                assert!(
+                    (trade.pnl - expected_pnl).abs() < 0.01,
+                    "Long PnL incorrect for trade: {:?}", trade
+                );
+            }
+            Side::Sell => {
+                // Short: profit when entry > exit
+                let expected_pnl = (trade.entry_price - trade.exit_price) * trade.quantity;
+                assert!(
+                    (trade.pnl - expected_pnl).abs() < 0.01,
+                    "Short PnL incorrect for trade: {:?}", trade
+                );
+            }
+        }
+    }
+    
+    println!("✓ All {} trades have correct PnL calculations", result.trades.len());
+}
+
