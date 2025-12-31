@@ -120,8 +120,14 @@ impl LiveTrader {
         let state_positions = self.state_manager.load_positions(Some("open"))?;
         for sp in state_positions {
             let symbol = Symbol::new(&sp.symbol);
+            // Parse side from state, defaulting to Buy for backward compatibility
+            let side = match sp.side.as_str() {
+                "sell" => Side::Sell,
+                _ => Side::Buy,
+            };
             let position = Position {
                 symbol: symbol.clone(),
+                side,
                 entry_price: sp.entry_price,
                 quantity: sp.quantity,
                 stop_price: sp.stop_loss,
@@ -373,6 +379,7 @@ impl LiveTrader {
 
         let position = Position {
             symbol: symbol.clone(),
+            side: Side::Buy, // Live trading currently only supports Long positions
             entry_price,
             quantity,
             stop_price,

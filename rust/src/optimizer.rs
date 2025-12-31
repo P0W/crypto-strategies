@@ -58,7 +58,7 @@ impl Optimizer {
                 let result = backtester.run(data.clone());
 
                 OptimizationResult {
-                    params: HashMap::new(), // To be filled by caller
+                    params: crate::grid::extract_params(config),
                     sharpe_ratio: result.metrics.sharpe_ratio,
                     total_return: result.metrics.total_return,
                     max_drawdown: result.metrics.max_drawdown,
@@ -99,7 +99,7 @@ impl Optimizer {
                 progress_bar.inc(1);
 
                 OptimizationResult {
-                    params: HashMap::new(), // To be filled by caller
+                    params: crate::grid::extract_params(config),
                     sharpe_ratio: result.metrics.sharpe_ratio,
                     total_return: result.metrics.total_return,
                     max_drawdown: result.metrics.max_drawdown,
@@ -138,7 +138,7 @@ impl Optimizer {
                 let result = backtester.run(data.clone());
 
                 OptimizationResult {
-                    params: HashMap::new(),
+                    params: crate::grid::extract_params(config),
                     sharpe_ratio: result.metrics.sharpe_ratio,
                     total_return: result.metrics.total_return,
                     max_drawdown: result.metrics.max_drawdown,

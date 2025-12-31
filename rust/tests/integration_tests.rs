@@ -148,6 +148,7 @@ fn test_strategy_trailing_stop_not_active_initially() {
     let candles = generate_mock_candles(50, 100.0, 2.0);
     let position = Position {
         symbol: Symbol::new("BTCINR"),
+        side: Side::Buy,
         entry_price: 100.0,
         quantity: 1.0,
         stop_price: 95.0,
@@ -174,6 +175,7 @@ fn test_strategy_trailing_stop_activates_at_profit() {
     let candles = generate_mock_candles(50, 100.0, 2.0);
     let position = Position {
         symbol: Symbol::new("BTCINR"),
+        side: Side::Buy,
         entry_price: 100.0,
         quantity: 1.0,
         stop_price: 95.0,
@@ -330,6 +332,7 @@ fn test_risk_manager_can_open_position() {
     let full_positions = vec![
         Position {
             symbol: Symbol::new("BTC"),
+            side: Side::Buy,
             entry_price: 100.0,
             quantity: 1.0,
             stop_price: 95.0,
@@ -340,6 +343,7 @@ fn test_risk_manager_can_open_position() {
         },
         Position {
             symbol: Symbol::new("ETH"),
+            side: Side::Buy,
             entry_price: 100.0,
             quantity: 1.0,
             stop_price: 95.0,
@@ -425,6 +429,7 @@ fn test_symbol_creation() {
 fn test_position_unrealized_pnl() {
     let position = Position {
         symbol: Symbol::new("BTCINR"),
+        side: Side::Buy,
         entry_price: 100.0,
         quantity: 10.0,
         stop_price: 95.0,
@@ -437,6 +442,62 @@ fn test_position_unrealized_pnl() {
     // Price increased 5%
     let pnl = position.unrealized_pnl(105.0);
     assert_eq!(pnl, 50.0); // (105 - 100) * 10
+}
+
+#[test]
+fn test_short_position_unrealized_pnl() {
+    let position = Position {
+        symbol: Symbol::new("BTCINR"),
+        side: Side::Sell,
+        entry_price: 100.0,
+        quantity: 10.0,
+        stop_price: 105.0, // Stop is higher for shorts
+        target_price: 90.0, // Target is lower for shorts
+        trailing_stop: None,
+        entry_time: Utc::now(),
+        risk_amount: 50.0,
+    };
+
+    // Price goes down - profit for short
+    let current_price = 95.0;
+    let pnl = position.unrealized_pnl(current_price);
+    assert_eq!(pnl, 50.0); // (100 - 95) * 10 = 50
+
+    // Price goes up - loss for short
+    let current_price = 105.0;
+    let pnl = position.unrealized_pnl(current_price);
+    assert_eq!(pnl, -50.0); // (100 - 105) * 10 = -50
+}
+
+#[test]
+fn test_position_side_field() {
+    let long_position = Position {
+        symbol: Symbol::new("BTCINR"),
+        side: Side::Buy,
+        entry_price: 100.0,
+        quantity: 10.0,
+        stop_price: 95.0,
+        target_price: 110.0,
+        trailing_stop: None,
+        entry_time: Utc::now(),
+        risk_amount: 50.0,
+    };
+
+    assert_eq!(long_position.side, Side::Buy);
+
+    let short_position = Position {
+        symbol: Symbol::new("BTCINR"),
+        side: Side::Sell,
+        entry_price: 100.0,
+        quantity: 10.0,
+        stop_price: 105.0,
+        target_price: 90.0,
+        trailing_stop: None,
+        entry_time: Utc::now(),
+        risk_amount: 50.0,
+    };
+
+    assert_eq!(short_position.side, Side::Sell);
 }
 
 #[test]
