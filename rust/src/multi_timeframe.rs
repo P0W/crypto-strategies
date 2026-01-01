@@ -219,10 +219,10 @@ mod tests {
                 90.0,
                 105.0,
                 1000.0,
-            ),
+            ).unwrap(), // Unwrap the Result
         ];
         
-        mtf.add_timeframe("5m", candles_5m.clone());
+        mtf.add_timeframe("5m", candles_5m);
         
         assert_eq!(mtf.len(), 1);
         assert!(mtf.has_timeframe("5m"));
