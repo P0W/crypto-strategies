@@ -278,6 +278,114 @@ pub fn load_multi_symbol_with_range(
     Ok(data)
 }
 
+/// Load data for multiple symbols and multiple timeframes from CSV files
+/// 
+/// # Arguments
+/// * `data_dir` - Directory containing CSV files
+/// * `symbols` - Symbols to load
+/// * `timeframes` - Timeframes to load (e.g., ["1d", "15m", "5m"])
+/// * `primary_timeframe` - The primary timeframe for iteration
+/// * `start` - Optional start date filter
+/// * `end` - Optional end date filter
+///
+/// # Returns
+/// HashMap of Symbol to MultiTimeframeData, where each entry contains all requested timeframes
+pub fn load_multi_timeframe(
+    data_dir: impl AsRef<Path>,
+    symbols: &[Symbol],
+    timeframes: &[&str],
+    primary_timeframe: &str,
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+) -> Result<crate::MultiSymbolMultiTimeframeData> {
+    use crate::MultiTimeframeData;
+    use rayon::prelude::*;
+    
+    if timeframes.is_empty() {
+        anyhow::bail!("At least one timeframe must be specified");
+    }
+    
+    if !timeframes.contains(&primary_timeframe) {
+        anyhow::bail!(
+            "Primary timeframe '{}' must be in timeframes list: {:?}",
+            primary_timeframe,
+            timeframes
+        );
+    }
+    
+    let data_path = data_dir.as_ref().to_path_buf();
+    let timeframes: Vec<String> = timeframes.iter().map(|s| s.to_string()).collect();
+    let primary_tf = primary_timeframe.to_string();
+    
+    // Load data for all symbol-timeframe combinations in parallel
+    let results: Vec<_> = symbols
+        .par_iter()
+        .map(|symbol| {
+            let mut mtf_data = MultiTimeframeData::new(&primary_tf);
+            let mut loaded_any = false;
+            
+            for timeframe in &timeframes {
+                let filename = format!("{}_{}.csv", symbol.as_str(), timeframe);
+                let path = data_path.join(&filename);
+                
+                if !path.exists() {
+                    warn!(
+                        "Data file not found: {} (symbol: {}, timeframe: {})",
+                        path.display(),
+                        symbol,
+                        timeframe
+                    );
+                    continue;
+                }
+                
+                match load_csv(&path) {
+                    Ok(candles) => {
+                        let original_len = candles.len();
+                        let candles = filter_candles_by_date(candles, start, end);
+                        
+                        if !candles.is_empty() {
+                            if start.is_some() || end.is_some() {
+                                info!(
+                                    "Loaded {} candles for {} {} (filtered from {} total)",
+                                    candles.len(),
+                                    symbol,
+                                    timeframe,
+                                    original_len
+                                );
+                            } else {
+                                info!("Loaded {} candles for {} {}", candles.len(), symbol, timeframe);
+                            }
+                            mtf_data.add_timeframe(timeframe, candles);
+                            loaded_any = true;
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to load {} {}: {}", symbol, timeframe, e);
+                    }
+                }
+            }
+            
+            if loaded_any {
+                Some((symbol.clone(), mtf_data))
+            } else {
+                None
+            }
+        })
+        .collect();
+    
+    // Filter out None values and collect into HashMap
+    let data: crate::MultiSymbolMultiTimeframeData = results
+        .into_iter()
+        .flatten()
+        .collect();
+    
+    if data.is_empty() {
+        anyhow::bail!("No data loaded for any symbol-timeframe combination");
+    }
+    
+    Ok(data)
+}
+
 /// Get the date range covered by a data file
 pub fn get_data_date_range(
     path: impl AsRef<Path>,
