@@ -593,13 +593,19 @@ impl Backtester {
             0.0
         };
 
-        // Calculate expectancy: (Win Rate × Avg Win) - (Loss Rate × Avg Loss)
-        // Expectancy is the average amount you can expect to win/lose per trade
-        // Positive expectancy indicates a profitable strategy over time
-        let expectancy = if !trades.is_empty() {
+        // Calculate expectancy as a dimensionless R-multiple (risk units)
+        // Formula: (Win Rate × Avg Win R-multiple) - (Loss Rate × 1R)
+        // Where Avg Win R-multiple = Avg Win / Avg Loss (reward-to-risk ratio)
+        // This makes expectancy currency-independent and comparable across strategies
+        // Positive value means profitable; e.g., 0.4R = gain 0.4 units of risk per trade
+        let expectancy = if !trades.is_empty() && avg_loss > 0.0 {
             let win_rate_decimal = win_rate / 100.0;
             let loss_rate_decimal = 1.0 - win_rate_decimal;
-            (win_rate_decimal * avg_win) - (loss_rate_decimal * avg_loss)
+            let reward_risk_ratio = avg_win / avg_loss; // R-multiple for wins
+            (win_rate_decimal * reward_risk_ratio) - loss_rate_decimal
+        } else if !trades.is_empty() && avg_loss == 0.0 && avg_win > 0.0 {
+            // All wins, no losses - infinite expectancy, cap at high value
+            f64::INFINITY
         } else {
             0.0
         };

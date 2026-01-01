@@ -154,7 +154,7 @@ pub fn run(
     println!("Max Drawdown:       {:.2}%", result.metrics.max_drawdown);
     println!("Win Rate:           {:.2}%", result.metrics.win_rate);
     println!("Profit Factor:      {:.2}", result.metrics.profit_factor);
-    println!("Expectancy:         ₹{:.2}", result.metrics.expectancy);
+    println!("Expectancy:         {:.2}R", result.metrics.expectancy);
     println!("Total Trades:       {}", result.metrics.total_trades);
     println!("Winning Trades:     {}", result.metrics.winning_trades);
     println!("Losing Trades:      {}", result.metrics.losing_trades);
