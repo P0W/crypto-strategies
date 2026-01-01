@@ -263,9 +263,9 @@ pub struct PerformanceMetrics {
     pub max_drawdown: f64,
     pub win_rate: f64,
     pub profit_factor: f64,
-    /// Trading expectancy in R-multiples (dimensionless risk units)
-    /// Formula: (Win Rate × Reward/Risk Ratio) - Loss Rate
-    /// Positive value indicates profitable edge (e.g., 0.4 = +0.4R per trade)
+    /// Trading expectancy: average profit/loss per trade (in currency)
+    /// Formula: (Win Rate × Avg Win) - (Loss Rate × Avg Loss)
+    /// Matches Backtrader and standard trading platforms
     pub expectancy: f64,
     pub total_trades: usize,
     pub winning_trades: usize,
