@@ -76,16 +76,13 @@
 //! - [`client`]: Main API client implementation
 
 pub mod auth;
-pub mod circuit_breaker;
 pub mod client;
-pub mod rate_limiter;
 pub mod types;
 
 // Re-export main types for convenience
 pub use auth::Credentials;
-pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
+pub use crate::common::{CircuitBreaker, CircuitBreakerConfig, CircuitState, RateLimiter, RateLimiterConfig};
 pub use client::{ClientConfig, CoinDCXClient, API_BASE_URL, PUBLIC_BASE_URL};
-pub use rate_limiter::{RateLimiter, RateLimiterConfig};
 
 // Re-export commonly used types
 pub use types::{
