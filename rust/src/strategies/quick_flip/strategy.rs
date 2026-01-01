@@ -49,18 +49,23 @@ impl QuickFlipStrategy {
         let lower_wick = candle.open.min(candle.close) - candle.low;
         let upper_wick = candle.high - candle.open.max(candle.close);
 
-        if total_range == 0.0 {
+        if total_range <= 0.0 {
             return false;
         }
 
-        // Body is small (< 30% of range)
+        // Body must be small (<= 35% of range)
         let body_ratio = body / total_range;
-        // Lower wick is long (> 60% of range)
+        // Lower wick must be long (>= 55% of range)
         let lower_wick_ratio = lower_wick / total_range;
-        // Upper wick is small (< 20% of range)
+        // Upper wick must be small (<= 20% of range)
         let upper_wick_ratio = upper_wick / total_range;
+        // Candle must close in upper half of body or be neutral (bullish tendency)
+        let closes_not_too_low = candle.close >= candle.open * 0.998;
 
-        body_ratio < 0.30 && lower_wick_ratio > 0.60 && upper_wick_ratio < 0.20
+        body_ratio <= 0.35
+            && lower_wick_ratio >= 0.55
+            && upper_wick_ratio <= 0.20
+            && closes_not_too_low
     }
 
     /// Check if candle is an inverted hammer pattern
@@ -85,14 +90,27 @@ impl QuickFlipStrategy {
 
     /// Check if current candle is a bullish engulfing pattern
     fn is_bullish_engulfing(&self, prev: &Candle, current: &Candle) -> bool {
-        // Previous candle is bearish (red)
+        // Previous candle must be bearish (red)
         let prev_bearish = prev.close < prev.open;
-        // Current candle is bullish (green)
+        let prev_body = (prev.open - prev.close).abs();
+        let prev_range = prev.high - prev.low;
+        
+        // Current candle must be bullish (green)
         let current_bullish = current.close > current.open;
-        // Current candle body engulfs previous candle body
+        let current_body = (current.close - current.open).abs();
+        let current_range = current.high - current.low;
+        
+        // Both candles must have reasonable bodies (not dojis)
+        let prev_has_body = prev_range > 0.0 && prev_body / prev_range > 0.3;
+        let current_has_body = current_range > 0.0 && current_body / current_range > 0.3;
+        
+        // Current candle body must fully engulf previous candle body
         let engulfs = current.open <= prev.close && current.close >= prev.open;
+        
+        // Current body should be at least as large as previous body
+        let current_adequate = current_body >= prev_body * 0.9;
 
-        prev_bearish && current_bullish && engulfs
+        prev_bearish && current_bullish && prev_has_body && current_has_body && engulfs && current_adequate
     }
 
     /// Check if current candle is a bearish engulfing pattern
@@ -215,7 +233,15 @@ impl Strategy for QuickFlipStrategy {
         let prev = &candles[candles.len() - 2];
 
         // BULLISH ENTRY: Price below range low (outside the box)
+        // AND showing reversal pattern
         if current.close < range_low {
+            // Additional filter: price must be reasonably below range low (but not too far)
+            let breakout_distance = (range_low - current.close) / atr_val;
+            if breakout_distance < 0.3 || breakout_distance > 2.0 {
+                // Either too close or too far from range
+                return Signal::Flat;
+            }
+            
             // Signal 1: Hammer pattern
             if self.is_hammer(current) {
                 return Signal::Long;
