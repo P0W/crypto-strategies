@@ -7,6 +7,7 @@
 
 pub mod mean_reversion;
 pub mod momentum_scalper;
+pub mod quick_flip;
 pub mod range_breakout;
 pub mod volatility_regime;
 pub mod vwap_scalper;
@@ -120,6 +121,7 @@ fn get_registry() -> &'static RwLock<HashMap<&'static str, StrategyFactory>> {
         );
         map.insert("range_breakout", range_breakout::create as StrategyFactory);
         map.insert("vwap_scalper", vwap_scalper::create as StrategyFactory);
+        map.insert("quick_flip", quick_flip::create as StrategyFactory);
         RwLock::new(map)
     })
 }
