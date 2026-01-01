@@ -82,7 +82,9 @@ impl ZerodhaClient {
             .expect("Failed to create HTTP client");
 
         let rate_limiter = RateLimiter::new(config.rate_limiter.clone());
-        let circuit_breaker = Arc::new(Mutex::new(CircuitBreaker::new(config.circuit_breaker.clone())));
+        let circuit_breaker = Arc::new(Mutex::new(CircuitBreaker::new(
+            config.circuit_breaker.clone(),
+        )));
 
         Self {
             client,
@@ -127,16 +129,24 @@ impl ZerodhaClient {
 
         let url = format!(
             "{}/instruments/historical/{}/{}",
-            API_BASE_URL,
-            instrument,
-            interval
+            API_BASE_URL, instrument, interval
         );
 
         let response = self
             .client
             .get(&url)
             .header("X-Kite-Version", "3")
-            .header("Authorization", format!("token {}:{}", self.credentials.api_key, self.credentials.access_token.as_ref().unwrap_or(&String::new())))
+            .header(
+                "Authorization",
+                format!(
+                    "token {}:{}",
+                    self.credentials.api_key,
+                    self.credentials
+                        .access_token
+                        .as_ref()
+                        .unwrap_or(&String::new())
+                ),
+            )
             .query(&[
                 ("from", from_date.format("%Y-%m-%d").to_string()),
                 ("to", to_date.format("%Y-%m-%d").to_string()),
@@ -149,14 +159,19 @@ impl ZerodhaClient {
             cb.record_success();
 
             // Parse response
-            let candles: Vec<Candle> = response.json().await
+            let candles: Vec<Candle> = response
+                .json()
+                .await
                 .map_err(|e| ZerodhaError::ParseError(e.to_string()))?;
             Ok(candles)
         } else {
             let mut cb = self.circuit_breaker.lock().await;
             cb.record_failure();
 
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
             Err(ZerodhaError::ApiError(error_text))
         }
     }
@@ -177,7 +192,17 @@ impl ZerodhaClient {
             .client
             .get(&url)
             .header("X-Kite-Version", "3")
-            .header("Authorization", format!("token {}:{}", self.credentials.api_key, self.credentials.access_token.as_ref().unwrap_or(&String::new())))
+            .header(
+                "Authorization",
+                format!(
+                    "token {}:{}",
+                    self.credentials.api_key,
+                    self.credentials
+                        .access_token
+                        .as_ref()
+                        .unwrap_or(&String::new())
+                ),
+            )
             .query(&[("i", instrument)])
             .send()
             .await?;
@@ -186,14 +211,21 @@ impl ZerodhaClient {
             let mut cb = self.circuit_breaker.lock().await;
             cb.record_success();
 
-            let quote: Quote = response.json().await
+            let quote: Quote = response
+                .json()
+                .await
                 .map_err(|e| ZerodhaError::ParseError(e.to_string()))?;
             Ok(quote)
         } else {
             let mut cb = self.circuit_breaker.lock().await;
             cb.record_failure();
 
-            Err(ZerodhaError::ApiError(response.text().await.unwrap_or_else(|_| "Unknown error".to_string())))
+            Err(ZerodhaError::ApiError(
+                response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string()),
+            ))
         }
     }
 
@@ -216,13 +248,16 @@ impl ZerodhaClient {
         self.rate_limiter.acquire().await;
 
         let url = format!("{}/orders", API_BASE_URL);
-        
+
         let mut params = vec![
             ("exchange", exchange.to_string()),
             ("tradingsymbol", tradingsymbol.to_string()),
             ("transaction_type", transaction_type.to_string()),
             ("quantity", quantity.to_string()),
-            ("order_type", if price.is_some() { "LIMIT" } else { "MARKET" }.to_string()),
+            (
+                "order_type",
+                if price.is_some() { "LIMIT" } else { "MARKET" }.to_string(),
+            ),
             ("product", "MIS".to_string()), // Intraday
             ("validity", "DAY".to_string()),
         ];
@@ -235,7 +270,17 @@ impl ZerodhaClient {
             .client
             .post(&url)
             .header("X-Kite-Version", "3")
-            .header("Authorization", format!("token {}:{}", self.credentials.api_key, self.credentials.access_token.as_ref().unwrap_or(&String::new())))
+            .header(
+                "Authorization",
+                format!(
+                    "token {}:{}",
+                    self.credentials.api_key,
+                    self.credentials
+                        .access_token
+                        .as_ref()
+                        .unwrap_or(&String::new())
+                ),
+            )
             .form(&params)
             .send()
             .await?;
@@ -244,14 +289,21 @@ impl ZerodhaClient {
             let mut cb = self.circuit_breaker.lock().await;
             cb.record_success();
 
-            let order: Order = response.json().await
+            let order: Order = response
+                .json()
+                .await
                 .map_err(|e| ZerodhaError::ParseError(e.to_string()))?;
             Ok(order)
         } else {
             let mut cb = self.circuit_breaker.lock().await;
             cb.record_failure();
 
-            Err(ZerodhaError::ApiError(response.text().await.unwrap_or_else(|_| "Unknown error".to_string())))
+            Err(ZerodhaError::ApiError(
+                response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string()),
+            ))
         }
     }
 
@@ -271,7 +323,17 @@ impl ZerodhaClient {
             .client
             .get(&url)
             .header("X-Kite-Version", "3")
-            .header("Authorization", format!("token {}:{}", self.credentials.api_key, self.credentials.access_token.as_ref().unwrap_or(&String::new())))
+            .header(
+                "Authorization",
+                format!(
+                    "token {}:{}",
+                    self.credentials.api_key,
+                    self.credentials
+                        .access_token
+                        .as_ref()
+                        .unwrap_or(&String::new())
+                ),
+            )
             .send()
             .await?;
 
@@ -279,14 +341,21 @@ impl ZerodhaClient {
             let mut cb = self.circuit_breaker.lock().await;
             cb.record_success();
 
-            let positions: Vec<Position> = response.json().await
+            let positions: Vec<Position> = response
+                .json()
+                .await
                 .map_err(|e| ZerodhaError::ParseError(e.to_string()))?;
             Ok(positions)
         } else {
             let mut cb = self.circuit_breaker.lock().await;
             cb.record_failure();
 
-            Err(ZerodhaError::ApiError(response.text().await.unwrap_or_else(|_| "Unknown error".to_string())))
+            Err(ZerodhaError::ApiError(
+                response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unknown error".to_string()),
+            ))
         }
     }
 }

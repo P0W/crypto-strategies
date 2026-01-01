@@ -4,7 +4,7 @@
     "data_dir": "../data",
     "end_date": "2025-12-31",
     "results_dir": "../results",
-    "start_date": "2025-01-01"
+    "start_date": "2022-01-02"
   },
   "exchange": {
     "assumed_slippage": 0.001,
@@ -13,6 +13,24 @@
     "taker_fee": 0.001
   },
   "grid": {
+    "_optimization": [
+      {
+        "calmar_ratio": 1.39,
+        "expectancy": 1852.73,
+        "max_drawdown": 13.6,
+        "optimized_at": "2026-01-01 22:41:43",
+        "sharpe_ratio": 0.92,
+        "symbols": [
+          "MATICINR",
+          "BNBINR",
+          "BTCINR",
+          "SOLINR"
+        ],
+        "total_return": 100.2,
+        "total_trades": 55,
+        "win_rate": 47.3
+      }
+    ],
     "adx_threshold": [
       20.0,
       25.0,
@@ -41,17 +59,8 @@
     ]
   },
   "strategy": {
-    "_optimization": {
-      "calmar_ratio": 2.02,
-      "max_drawdown": 5.6,
-      "optimized_at": "2025-12-31 20:43:00",
-      "sharpe_ratio": 0.29,
-      "total_return": 11.2,
-      "total_trades": 15,
-      "win_rate": 46.7
-    },
     "adx_period": 14,
-    "adx_threshold": 25,
+    "adx_threshold": 20,
     "atr_period": 14,
     "breakout_atr_multiple": 1.5,
     "compression_threshold": 0.6,
@@ -59,8 +68,8 @@
     "ema_slow": 21,
     "expansion_threshold": 1.5,
     "extreme_threshold": 2.5,
-    "stop_atr_multiple": 2,
-    "target_atr_multiple": 4,
+    "stop_atr_multiple": 3,
+    "target_atr_multiple": 6,
     "timeframe": "1d",
     "trailing_activation": 0.5,
     "trailing_atr_multiple": 1.5,

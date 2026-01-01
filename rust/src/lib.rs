@@ -70,7 +70,9 @@ pub mod types;
 pub mod zerodha;
 
 pub use config::Config;
-pub use multi_timeframe::{MultiSymbolMultiTimeframeData, MultiTimeframeCandles, MultiTimeframeData};
+pub use multi_timeframe::{
+    MultiSymbolMultiTimeframeData, MultiTimeframeCandles, MultiTimeframeData,
+};
 pub use strategies::Strategy;
 pub use types::*;
 

@@ -710,7 +710,7 @@ impl Backtester {
     }
 
     /// Run backtest on multi-timeframe data
-    /// 
+    ///
     /// This method supports strategies that need multiple timeframes.
     /// Currently wraps the single-timeframe engine - full MTF engine coming in future update.
     pub fn run_multi_timeframe(
@@ -720,12 +720,12 @@ impl Backtester {
         // For now, extract primary timeframe and use existing single-TF engine
         // TODO: Implement full multi-timeframe backtest loop
         tracing::info!("Running backtest using primary timeframe (full MTF engine in development)");
-        
+
         let single_tf_data: HashMap<Symbol, Vec<Candle>> = mtf_data
             .into_iter()
             .map(|(symbol, mtf)| (symbol, mtf.primary().to_vec()))
             .collect();
-            
+
         self.run(single_tf_data)
     }
 }
@@ -769,18 +769,17 @@ mod tests {
         let sharpe = excess_return / std_dev * (365.0_f64).sqrt();
 
         println!("Total returns count (including zeros): {}", returns.len());
-        println!("Zero-return days: {}", returns.iter().filter(|&&r| r == 0.0).count());
+        println!(
+            "Zero-return days: {}",
+            returns.iter().filter(|&&r| r == 0.0).count()
+        );
         println!("Mean return: {:.6}", mean_return);
         println!("Std dev: {:.6}", std_dev);
         println!("Sharpe ratio: {:.2}", sharpe);
 
         // Verify the formula produces consistent results
-        assert!(
-            std_dev > 0.0,
-            "Std dev should be positive: got {}",
-            std_dev
-        );
-        
+        assert!(std_dev > 0.0, "Std dev should be positive: got {}", std_dev);
+
         // Verify mean includes all data (if we excluded zeros, mean would be different)
         let non_zero_returns: Vec<f64> = returns.iter().filter(|&&r| r != 0.0).copied().collect();
         let non_zero_mean = non_zero_returns.iter().sum::<f64>() / non_zero_returns.len() as f64;
@@ -791,7 +790,10 @@ mod tests {
 
         // With positive mean return and reasonable volatility, Sharpe should be reasonable
         if mean_return > risk_free_daily {
-            assert!(sharpe > 0.0, "Sharpe should be positive for positive excess returns");
+            assert!(
+                sharpe > 0.0,
+                "Sharpe should be positive for positive excess returns"
+            );
         }
     }
 

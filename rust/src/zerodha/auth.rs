@@ -20,7 +20,7 @@ impl Credentials {
             access_token: None,
         }
     }
-    
+
     pub fn with_access_token(mut self, token: String) -> Self {
         self.access_token = Some(token);
         self
@@ -30,8 +30,8 @@ impl Credentials {
 /// Generate checksum for login/session APIs
 pub fn generate_checksum(api_key: &str, request_token: &str, api_secret: &str) -> String {
     let data = format!("{}{}", api_key, request_token);
-    let mut mac = HmacSha256::new_from_slice(api_secret.as_bytes())
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(api_secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(data.as_bytes());
     let result = mac.finalize();
     hex::encode(result.into_bytes())
@@ -40,8 +40,8 @@ pub fn generate_checksum(api_key: &str, request_token: &str, api_secret: &str) -
 /// Sign request for authenticated endpoints
 pub fn sign_request(method: &str, path: &str, body: &str, api_secret: &str) -> String {
     let message = format!("{}{}{}", method, path, body);
-    let mut mac = HmacSha256::new_from_slice(api_secret.as_bytes())
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(api_secret.as_bytes()).expect("HMAC can take key of any size");
     mac.update(message.as_bytes());
     let result = mac.finalize();
     hex::encode(result.into_bytes())
@@ -61,8 +61,7 @@ mod tests {
 
     #[test]
     fn test_credentials_with_token() {
-        let creds = Credentials::new("key", "secret")
-            .with_access_token("token123".to_string());
+        let creds = Credentials::new("key", "secret").with_access_token("token123".to_string());
         assert_eq!(creds.access_token, Some("token123".to_string()));
     }
 }

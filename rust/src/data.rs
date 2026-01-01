@@ -279,7 +279,7 @@ pub fn load_multi_symbol_with_range(
 }
 
 /// Load data for multiple symbols and multiple timeframes from CSV files
-/// 
+///
 /// # Arguments
 /// * `data_dir` - Directory containing CSV files
 /// * `symbols` - Symbols to load
@@ -300,11 +300,11 @@ pub fn load_multi_timeframe(
 ) -> Result<crate::MultiSymbolMultiTimeframeData> {
     use crate::MultiTimeframeData;
     use rayon::prelude::*;
-    
+
     if timeframes.is_empty() {
         anyhow::bail!("At least one timeframe must be specified");
     }
-    
+
     if !timeframes.contains(&primary_timeframe) {
         anyhow::bail!(
             "Primary timeframe '{}' must be in timeframes list: {:?}",
@@ -312,22 +312,22 @@ pub fn load_multi_timeframe(
             timeframes
         );
     }
-    
+
     let data_path = data_dir.as_ref().to_path_buf();
     let timeframes: Vec<String> = timeframes.iter().map(|s| s.to_string()).collect();
     let primary_tf = primary_timeframe.to_string();
-    
+
     // Load data for all symbol-timeframe combinations in parallel
     let results: Vec<_> = symbols
         .par_iter()
         .map(|symbol| {
             let mut mtf_data = MultiTimeframeData::new(&primary_tf);
             let mut loaded_any = false;
-            
+
             for timeframe in &timeframes {
                 let filename = format!("{}_{}.csv", symbol.as_str(), timeframe);
                 let path = data_path.join(&filename);
-                
+
                 if !path.exists() {
                     warn!(
                         "Data file not found: {} (symbol: {}, timeframe: {})",
@@ -337,12 +337,12 @@ pub fn load_multi_timeframe(
                     );
                     continue;
                 }
-                
+
                 match load_csv(&path) {
                     Ok(candles) => {
                         let original_len = candles.len();
                         let candles = filter_candles_by_date(candles, start, end);
-                        
+
                         if !candles.is_empty() {
                             if start.is_some() || end.is_some() {
                                 info!(
@@ -353,7 +353,12 @@ pub fn load_multi_timeframe(
                                     original_len
                                 );
                             } else {
-                                info!("Loaded {} candles for {} {}", candles.len(), symbol, timeframe);
+                                info!(
+                                    "Loaded {} candles for {} {}",
+                                    candles.len(),
+                                    symbol,
+                                    timeframe
+                                );
                             }
                             mtf_data.add_timeframe(timeframe, candles);
                             loaded_any = true;
@@ -364,7 +369,7 @@ pub fn load_multi_timeframe(
                     }
                 }
             }
-            
+
             if loaded_any {
                 Some((symbol.clone(), mtf_data))
             } else {
@@ -372,17 +377,14 @@ pub fn load_multi_timeframe(
             }
         })
         .collect();
-    
+
     // Filter out None values and collect into HashMap
-    let data: crate::MultiSymbolMultiTimeframeData = results
-        .into_iter()
-        .flatten()
-        .collect();
-    
+    let data: crate::MultiSymbolMultiTimeframeData = results.into_iter().flatten().collect();
+
     if data.is_empty() {
         anyhow::bail!("No data loaded for any symbol-timeframe combination");
     }
-    
+
     Ok(data)
 }
 
