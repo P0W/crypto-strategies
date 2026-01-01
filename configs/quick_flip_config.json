@@ -26,17 +26,17 @@
 
     "strategy": {
         "timeframe": "5m",
-        "atr_period": 96,
+        "atr_period": 14,
         "min_range_pct": 0.25,
-        "opening_bars": 6,
+        "opening_bars": 1,
         "cooldown_bars": 6,
         "conservative_target": false
     },
 
     "grid": {
-        "atr_period": [72, 96],
-        "min_range_pct": [0.15, 0.25],
-        "opening_bars": [6, 8],
+        "atr_period": [14],
+        "min_range_pct": [0.20, 0.25, 0.30],
+        "opening_bars": [1, 2, 3],
         "conservative_target": [false, true]
     },
 
