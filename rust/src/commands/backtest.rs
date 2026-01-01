@@ -117,24 +117,51 @@ pub fn run(
         println!("{}\n", "=".repeat(60));
     }
 
-    let data = data::load_multi_symbol_with_range(
-        &config.backtest.data_dir,
-        &symbols,
-        &timeframe,
-        start_date,
-        end_date,
-    )?;
-
-    info!("Loaded data for {} symbols", data.len());
-
     // Create strategy based on config
     info!("Creating strategy: {}", config.strategy_name);
     let strategy = strategies::create_strategy(&config)?;
 
+    // Check if strategy requires multiple timeframes
+    let required_tfs = strategy.required_timeframes();
+    
     let mut backtester = Backtester::new(config.clone(), strategy);
 
     info!("Running backtest...");
-    let result = backtester.run(data);
+    let result = if !required_tfs.is_empty() {
+        // Multi-timeframe strategy
+        info!("Multi-timeframe strategy detected, loading timeframes: {:?}", required_tfs);
+        
+        // Build timeframes list: required TFs + primary timeframe
+        let mut all_timeframes: Vec<&str> = required_tfs.clone();
+        if !all_timeframes.contains(&timeframe.as_str()) {
+            all_timeframes.push(&timeframe);
+        }
+        
+        // Load multi-timeframe data
+        let mtf_data = data::load_multi_timeframe(
+            &config.backtest.data_dir,
+            &symbols,
+            &all_timeframes,
+            &timeframe,
+            start_date,
+            end_date,
+        )?;
+        
+        info!("Loaded multi-timeframe data for {} symbols", mtf_data.len());
+        backtester.run_multi_timeframe(mtf_data)
+    } else {
+        // Single-timeframe strategy (backward compatibility)
+        let data = data::load_multi_symbol_with_range(
+            &config.backtest.data_dir,
+            &symbols,
+            &timeframe,
+            start_date,
+            end_date,
+        )?;
+        
+        info!("Loaded data for {} symbols", data.len());
+        backtester.run(data)
+    };
 
     // Print results
     println!("\n{}", "=".repeat(60));

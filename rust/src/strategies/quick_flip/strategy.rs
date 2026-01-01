@@ -177,12 +177,135 @@ impl Strategy for QuickFlipStrategy {
         "quick_flip"
     }
 
+    /// Quick Flip can use 1d and 15m if available, but works with just 5m too
+    fn required_timeframes(&self) -> Vec<&'static str> {
+        // Return empty to indicate single-TF mode for now
+        // TODO: Uncomment when 15m data is available: vec!["1d", "15m"]
+        vec![]
+    }
+
+    /// Multi-timeframe signal generation
+    /// Uses: 1d for ATR, 15m for range box, 5m (primary) for pattern detection
+    fn generate_signal_mtf(
+        &self,
+        _symbol: &Symbol,
+        mtf_candles: &crate::MultiTimeframeCandles,
+        position: Option<&Position>,
+    ) -> Signal {
+        // Get all required timeframes
+        let candles_5m = mtf_candles.primary(); // 5m for pattern detection
+        let candles_15m = match mtf_candles.get("15m") {
+            Some(c) => c,
+            None => {
+                // Fallback to single-timeframe mode if 15m not available
+                tracing::warn!("15m data not available, falling back to single-TF mode");
+                return self.generate_signal(_symbol, candles_5m, position);
+            }
+        };
+        let candles_1d = match mtf_candles.get("1d") {
+            Some(c) => c,
+            None => {
+                tracing::warn!("1d data not available, falling back to single-TF mode");
+                return self.generate_signal(_symbol, candles_5m, position);
+            }
+        };
+
+        // Need minimum data
+        if candles_5m.len() < 20 || candles_15m.len() < 5 || candles_1d.len() < 14 {
+            return Signal::Flat;
+        }
+
+        let current_bar = candles_5m.len();
+
+        // If already in position, hold
+        if position.is_some() {
+            return Signal::Long;
+        }
+
+        // Cooldown check
+        {
+            let state = self.state.read().unwrap();
+            if current_bar - state.last_trade_bar < self.config.cooldown_bars {
+                return Signal::Flat;
+            }
+        }
+
+        // Calculate daily ATR (14 period on 1d chart)
+        let daily_atr = {
+            let high: Vec<f64> = candles_1d.iter().map(|c| c.high).collect();
+            let low: Vec<f64> = candles_1d.iter().map(|c| c.low).collect();
+            let close: Vec<f64> = candles_1d.iter().map(|c| c.close).collect();
+            let atr_vals = atr(&high, &low, &close, 14);
+            match atr_vals.last() {
+                Some(&Some(val)) => val,
+                _ => return Signal::Flat,
+            }
+        };
+
+        // Get 15m range box (first N bars, or latest N bars for rolling window)
+        let (range_high, range_low) = {
+            if candles_15m.len() < self.config.opening_bars {
+                return Signal::Flat;
+            }
+            
+            // Use latest N bars on 15m as the range
+            let window_start = candles_15m.len().saturating_sub(self.config.opening_bars);
+            let window = &candles_15m[window_start..];
+            
+            let high = window.iter().map(|c| c.high).fold(None, |max, h| {
+                Some(max.map_or(h, |m: f64| m.max(h)))
+            });
+            let low = window.iter().map(|c| c.low).fold(None, |min, l| {
+                Some(min.map_or(l, |m: f64| m.min(l)))
+            });
+            
+            match (high, low) {
+                (Some(h), Some(l)) => (h, l),
+                _ => return Signal::Flat,
+            }
+        };
+
+        // Check ATR filter: range must be >= 25% of daily ATR
+        let range_size = range_high - range_low;
+        let min_required = daily_atr * self.config.min_range_pct;
+        if range_size < min_required {
+            return Signal::Flat;
+        }
+
+        // Pattern detection on 5m chart
+        if candles_5m.len() < 2 {
+            return Signal::Flat;
+        }
+
+        let current = candles_5m.last().unwrap();
+        let prev = &candles_5m[candles_5m.len() - 2];
+
+        // BULLISH ENTRY: Price below 15m range low
+        if current.close < range_low {
+            if self.is_hammer(current) || self.is_bullish_engulfing(prev, current) {
+                self.state.write().unwrap().last_signal = Signal::Long;
+                return Signal::Long;
+            }
+        }
+
+        // BEARISH ENTRY: Price above 15m range high
+        if current.close > range_high {
+            if self.is_inverted_hammer(current) || self.is_bearish_engulfing(prev, current) {
+                self.state.write().unwrap().last_signal = Signal::Short;
+                return Signal::Short;
+            }
+        }
+
+        Signal::Flat
+    }
+
     fn generate_signal(
         &self,
         _symbol: &Symbol,
         candles: &[Candle],
         position: Option<&Position>,
     ) -> Signal {
+        // Single-timeframe fallback mode
         // Need enough data for ATR calculation and range window
         if candles.len() < self.config.atr_period + self.config.opening_bars + 10 {
             return Signal::Flat;
