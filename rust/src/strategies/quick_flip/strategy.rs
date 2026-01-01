@@ -214,6 +214,11 @@ impl QuickFlipStrategy {
         // Calculate average volume over lookback period (excluding current)
         let start_idx = candles.len().saturating_sub(self.config.volume_lookback + 1);
         let end_idx = candles.len() - 1;
+        
+        if start_idx >= end_idx {
+            return false; // Not enough data
+        }
+        
         let volume_window = &candles[start_idx..end_idx];
         
         let avg_volume = volume_window.iter()
@@ -322,8 +327,7 @@ impl Strategy for QuickFlipStrategy {
             return Signal::Flat;
         }
 
-        // Check trend filter using 1h chart if available, otherwise 5m
-        // For multi-TF: ideally use 1h, for now use 5m as proxy
+        // Check trend filter using 5m chart (ideally would use 1h for longer-term trend, but using 5m as proxy)
         let trend_bullish = match self.check_trend(candles_5m) {
             Some(bullish) => bullish,
             None => return Signal::Flat, // Not enough data for trend
@@ -346,6 +350,7 @@ impl Strategy for QuickFlipStrategy {
         if current.close < range_low && trend_bullish {
             if self.is_hammer(current) || self.is_bullish_engulfing(prev, current) {
                 self.state.write().unwrap().last_signal = Signal::Long;
+                self.state.write().unwrap().last_trade_bar = candles_5m.len();
                 return Signal::Long;
             }
         }
@@ -354,6 +359,7 @@ impl Strategy for QuickFlipStrategy {
         if current.close > range_high && !trend_bullish {
             if self.is_inverted_hammer(current) || self.is_bearish_engulfing(prev, current) {
                 self.state.write().unwrap().last_signal = Signal::Short;
+                self.state.write().unwrap().last_trade_bar = candles_5m.len();
                 return Signal::Short;
             }
         }

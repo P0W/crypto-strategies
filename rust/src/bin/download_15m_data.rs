@@ -31,7 +31,8 @@ async fn download_candles(
         .build()?;
 
     // CoinDCX public API endpoint for candles
-    // Note: Adjust URL based on actual CoinDCX API documentation
+    // TODO: Update URL based on actual CoinDCX API documentation
+    // Current endpoint is placeholder - verify at https://docs.coindcx.com/
     let url = format!(
         "https://public.coindcx.com/market_data/candles?pair={}&interval=15m&startTime={}&endTime={}",
         symbol,
