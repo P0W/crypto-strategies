@@ -26,20 +26,17 @@
 
     "strategy": {
         "timeframe": "5m",
-        "atr_period": 288,
+        "atr_period": 96,
         "min_range_pct": 0.25,
-        "opening_bars": 3,
-        "validity_window_bars": 18,
-        "cooldown_bars": 12,
-        "conservative_target": false,
-        "session_start_hour": 0
+        "opening_bars": 6,
+        "cooldown_bars": 6,
+        "conservative_target": false
     },
 
     "grid": {
-        "atr_period": [216, 288, 360],
-        "min_range_pct": [0.20, 0.25, 0.30],
-        "opening_bars": [2, 3, 4],
-        "validity_window_bars": [12, 18, 24],
+        "atr_period": [72, 96],
+        "min_range_pct": [0.15, 0.25],
+        "opening_bars": [6, 8],
         "conservative_target": [false, true]
     },
 
