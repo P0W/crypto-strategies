@@ -20,11 +20,15 @@ use super::config::QuickFlipConfig;
 #[derive(Debug, Clone)]
 struct TradeState {
     last_trade_bar: usize,
+    last_signal: Signal,
 }
 
 impl Default for TradeState {
     fn default() -> Self {
-        Self { last_trade_bar: 0 }
+        Self {
+            last_trade_bar: 0,
+            last_signal: Signal::Flat,
+        }
     }
 }
 
@@ -70,7 +74,6 @@ impl QuickFlipStrategy {
 
     /// Check if candle is an inverted hammer pattern
     /// Inverted Hammer: small body at bottom, long upper wick (bearish reversal)
-    #[allow(dead_code)]
     fn is_inverted_hammer(&self, candle: &Candle) -> bool {
         let body = (candle.close - candle.open).abs();
         let total_range = candle.high - candle.low;
@@ -114,7 +117,6 @@ impl QuickFlipStrategy {
     }
 
     /// Check if current candle is a bearish engulfing pattern
-    #[allow(dead_code)]
     fn is_bearish_engulfing(&self, prev: &Candle, current: &Candle) -> bool {
         // Previous candle is bullish (green)
         let prev_bullish = prev.close > prev.open;
@@ -244,11 +246,35 @@ impl Strategy for QuickFlipStrategy {
             
             // Signal 1: Hammer pattern
             if self.is_hammer(current) {
+                self.state.write().unwrap().last_signal = Signal::Long;
                 return Signal::Long;
             }
             // Signal 2: Bullish engulfing
             if self.is_bullish_engulfing(prev, current) {
+                self.state.write().unwrap().last_signal = Signal::Long;
                 return Signal::Long;
+            }
+        }
+
+        // BEARISH ENTRY: Price above range high (outside the box)
+        // AND showing reversal pattern
+        if current.close > range_high {
+            // Additional filter: price must be reasonably above range high (but not too far)
+            let breakout_distance = (current.close - range_high) / atr_val;
+            if breakout_distance < 0.3 || breakout_distance > 2.0 {
+                // Either too close or too far from range
+                return Signal::Flat;
+            }
+            
+            // Signal 1: Inverted Hammer pattern
+            if self.is_inverted_hammer(current) {
+                self.state.write().unwrap().last_signal = Signal::Short;
+                return Signal::Short;
+            }
+            // Signal 2: Bearish engulfing
+            if self.is_bearish_engulfing(prev, current) {
+                self.state.write().unwrap().last_signal = Signal::Short;
+                return Signal::Short;
             }
         }
 
@@ -256,22 +282,50 @@ impl Strategy for QuickFlipStrategy {
     }
 
     fn calculate_stop_loss(&self, candles: &[Candle], _entry_price: f64) -> f64 {
-        // Stop at the low of the signal candle
+        // Stop at the low of the signal candle for Long, high for Short
         let signal_candle = candles.last().unwrap();
-        signal_candle.low
+        let last_signal = self.state.read().unwrap().last_signal;
+        
+        match last_signal {
+            Signal::Long => signal_candle.low,
+            Signal::Short => signal_candle.high,
+            Signal::Flat => signal_candle.low, // Default to long logic
+        }
     }
 
     fn calculate_take_profit(&self, candles: &[Candle], _entry_price: f64) -> f64 {
         // Target is the opposite side of the range (or 50% mid-point if conservative)
         let range_high = self.get_range_high(candles).unwrap_or(_entry_price * 1.02);
         let range_low = self.get_range_low(candles).unwrap_or(_entry_price * 0.98);
+        let last_signal = self.state.read().unwrap().last_signal;
         
-        if self.config.conservative_target {
-            // Conservative: mid-point (50%) of range
-            (range_high + range_low) / 2.0
-        } else {
-            // Primary: opposite side of range (range high for long entries)
-            range_high
+        match last_signal {
+            Signal::Long => {
+                if self.config.conservative_target {
+                    // Conservative: mid-point (50%) of range
+                    (range_high + range_low) / 2.0
+                } else {
+                    // Primary: opposite side of range (range high for long entries)
+                    range_high
+                }
+            }
+            Signal::Short => {
+                if self.config.conservative_target {
+                    // Conservative: mid-point (50%) of range
+                    (range_high + range_low) / 2.0
+                } else {
+                    // Primary: opposite side of range (range low for short entries)
+                    range_low
+                }
+            }
+            Signal::Flat => {
+                // Default to long logic
+                if self.config.conservative_target {
+                    (range_high + range_low) / 2.0
+                } else {
+                    range_high
+                }
+            }
         }
     }
 
@@ -286,10 +340,21 @@ impl Strategy for QuickFlipStrategy {
         let range_low = self.get_range_low(candles)?;
         let mid_point = (range_high + range_low) / 2.0;
         
-        // If we've reached the mid-point or moved back inside the range, move to break-even
-        if current_price >= mid_point || (current_price >= range_low && current_price <= range_high) {
-            // Move to break-even (entry price)
-            return Some(position.entry_price);
+        match position.side {
+            crate::Side::Buy => {
+                // For Long: If we've reached the mid-point or moved back inside the range, move to break-even
+                if current_price >= mid_point || (current_price >= range_low && current_price <= range_high) {
+                    // Move to break-even (entry price)
+                    return Some(position.entry_price);
+                }
+            }
+            crate::Side::Sell => {
+                // For Short: If we've reached the mid-point or moved back inside the range, move to break-even
+                if current_price <= mid_point || (current_price >= range_low && current_price <= range_high) {
+                    // Move to break-even (entry price)
+                    return Some(position.entry_price);
+                }
+            }
         }
         
         None
