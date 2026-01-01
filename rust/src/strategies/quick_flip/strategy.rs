@@ -177,11 +177,9 @@ impl Strategy for QuickFlipStrategy {
         "quick_flip"
     }
 
-    /// Quick Flip can use 1d and 15m if available, but works with just 5m too
+    /// Quick Flip uses 1d and 15m timeframes in addition to the primary 5m
     fn required_timeframes(&self) -> Vec<&'static str> {
-        // Return empty to indicate single-TF mode for now
-        // TODO: Uncomment when 15m data is available: vec!["1d", "15m"]
-        vec![]
+        vec!["1d", "15m"]
     }
 
     /// Multi-timeframe signal generation
