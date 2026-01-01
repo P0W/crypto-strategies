@@ -34,10 +34,9 @@
     },
 
     "grid": {
-        "range_lookback": [3, 5, 10],
-        "atr_period": [10, 14, 20],
-        "min_range_pct": [0.15, 0.20, 0.25, 0.30],
-        "cooldown_bars": [3, 5, 10],
+        "range_lookback": [3, 5],
+        "min_range_pct": [0.20, 0.30],
+        "cooldown_bars": [5, 10],
         "conservative_target": [false, true]
     },
 
