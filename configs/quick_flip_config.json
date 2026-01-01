@@ -25,17 +25,12 @@
     },
 
     "strategy": {
-        "timeframe": "15m",
+        "timeframe": "5m",
         "atr_period": 14,
         "min_range_pct": 0.25,
         "opening_bars": 1,
         "cooldown_bars": 6,
-        "conservative_target": false,
-        "use_trend_filter": true,
-        "trend_ema_period": 20,
-        "use_volume_filter": true,
-        "volume_lookback": 20,
-        "min_volume_multiplier": 1.2
+        "conservative_target": false
     },
 
     "grid": {
@@ -43,12 +38,7 @@
         "min_range_pct": [0.15, 0.20, 0.25, 0.30],
         "opening_bars": [1, 2, 3],
         "cooldown_bars": [6, 12, 18],
-        "conservative_target": [false, true],
-        "use_trend_filter": [true, false],
-        "trend_ema_period": [20],
-        "use_volume_filter": [true, false],
-        "volume_lookback": [20],
-        "min_volume_multiplier": [1.0, 1.2, 1.5]
+        "conservative_target": [false, true]
     },
 
     "tax": {
