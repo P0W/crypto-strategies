@@ -21,6 +21,7 @@ pub struct OptimizationResult {
     pub total_trades: usize,
     pub calmar_ratio: f64,
     pub profit_factor: f64,
+    pub expectancy: f64,
 }
 
 /// Generic optimizer that works with any strategy
@@ -66,6 +67,7 @@ impl Optimizer {
                     total_trades: result.metrics.total_trades,
                     calmar_ratio: result.metrics.calmar_ratio,
                     profit_factor: result.metrics.profit_factor,
+                    expectancy: result.metrics.expectancy,
                 }
             })
             .collect();
@@ -107,6 +109,7 @@ impl Optimizer {
                     total_trades: result.metrics.total_trades,
                     calmar_ratio: result.metrics.calmar_ratio,
                     profit_factor: result.metrics.profit_factor,
+                    expectancy: result.metrics.expectancy,
                 }
             })
             .collect();
@@ -146,6 +149,7 @@ impl Optimizer {
                     total_trades: result.metrics.total_trades,
                     calmar_ratio: result.metrics.calmar_ratio,
                     profit_factor: result.metrics.profit_factor,
+                    expectancy: result.metrics.expectancy,
                 }
             })
             .collect()
@@ -172,6 +176,11 @@ impl Optimizer {
             "profit_factor" => results.sort_by(|a, b| {
                 b.profit_factor
                     .partial_cmp(&a.profit_factor)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }),
+            "expectancy" => results.sort_by(|a, b| {
+                b.expectancy
+                    .partial_cmp(&a.expectancy)
                     .unwrap_or(std::cmp::Ordering::Equal)
             }),
             _ => results.sort_by(|a, b| {

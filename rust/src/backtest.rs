@@ -593,6 +593,17 @@ impl Backtester {
             0.0
         };
 
+        // Calculate expectancy: (Win Rate × Avg Win) - (Loss Rate × Avg Loss)
+        // Expectancy is the average amount you can expect to win/lose per trade
+        // Positive expectancy indicates a profitable strategy over time
+        let expectancy = if !trades.is_empty() {
+            let win_rate_decimal = win_rate / 100.0;
+            let loss_rate_decimal = 1.0 - win_rate_decimal;
+            (win_rate_decimal * avg_win) - (loss_rate_decimal * avg_loss)
+        } else {
+            0.0
+        };
+
         let largest_win = winning_trades.iter().map(|t| t.net_pnl).fold(0.0, f64::max);
         let largest_loss = losing_trades.iter().map(|t| t.net_pnl).fold(0.0, f64::min);
 
@@ -684,6 +695,7 @@ impl Backtester {
             max_drawdown: max_dd * 100.0,
             win_rate,
             profit_factor,
+            expectancy,
             total_trades: trades.len(),
             winning_trades: winning_trades.len(),
             losing_trades: losing_trades.len(),
