@@ -9,10 +9,10 @@
     },
 
     "trading": {
-        "pairs": ["BTCINR", "ETHINR", "SOLINR"],
+        "pairs": ["BTCINR", "ETHINR", "SOLINR", "XRPINR", "BNBINR"],
         "initial_capital": 100000,
         "risk_per_trade": 0.10,
-        "max_positions": 3,
+        "max_positions": 5,
         "max_portfolio_heat": 0.30,
         "max_position_pct": 0.15,
         "max_drawdown": 0.15,
@@ -30,14 +30,25 @@
         "min_range_pct": 0.25,
         "opening_bars": 1,
         "cooldown_bars": 6,
-        "conservative_target": false
+        "conservative_target": false,
+        "use_trend_filter": true,
+        "trend_ema_period": 20,
+        "use_volume_filter": true,
+        "volume_lookback": 20,
+        "min_volume_multiplier": 1.2
     },
 
     "grid": {
         "atr_period": [14],
-        "min_range_pct": [0.20, 0.25, 0.30],
+        "min_range_pct": [0.15, 0.20, 0.25, 0.30],
         "opening_bars": [1, 2, 3],
-        "conservative_target": [false, true]
+        "cooldown_bars": [6, 12, 18],
+        "conservative_target": [false, true],
+        "use_trend_filter": [true, false],
+        "trend_ema_period": [20],
+        "use_volume_filter": [true, false],
+        "volume_lookback": [20],
+        "min_volume_multiplier": [1.0, 1.2, 1.5]
     },
 
     "tax": {

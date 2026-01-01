@@ -1,16 +1,23 @@
 //! Quick Flip (Pattern Scalp) Strategy
 //!
-//! Rolling range breakout strategy adapted for crypto 24/7 markets.
+//! Multi-timeframe range breakout strategy with trend and volume confirmation.
 //! 
-//! Core Logic:
-//! 1. Use ATR for volatility measurement (default: 96 bars = ~8 hours on 5m)
-//! 2. Establish range from rolling N-bar window (default: 6 bars = 30 min on 5m)
-//! 3. Range must be >= min % of ATR to be valid (default: 25%)
-//! 4. Wait for price to break outside the range
-//! 5. Enter on pattern confirmation (Hammer/Inverted Hammer or Engulfing)
-//! 6. Stop at signal candle extreme, target at opposite side of range
+//! Core Logic (Multi-Timeframe):
+//! 1. Calculate daily ATR from 1d chart (14 period) for volatility measurement
+//! 2. Establish range from 15m chart (N bars, default 1 for original Quick Flip spec)
+//! 3. Range must be >= min % of daily ATR to be valid (default: 25%)
+//! 4. Wait for price to break outside the range on 5m chart
+//! 5. Check trend filter: only trade in direction of 1h EMA trend (optional)
+//! 6. Check volume filter: require above-average volume (optional)
+//! 7. Enter on pattern confirmation (Hammer/Inverted Hammer or Engulfing)
+//! 8. Stop at signal candle extreme, target at opposite side of range
+//!
+//! Enhancements:
+//! - Trend filter (EMA-based) to reduce counter-trend losses
+//! - Volume confirmation to ensure commitment behind moves
+//! - Adaptive parameters via configuration
 
-use crate::indicators::atr;
+use crate::indicators::{atr, ema};
 use crate::strategies::Strategy;
 use crate::{Candle, Position, Signal, Symbol};
 use std::sync::RwLock;
@@ -159,7 +166,7 @@ impl QuickFlipStrategy {
         prev_bearish && current_bullish && prev_has_body && current_has_body && engulfs && current_adequate
     }
 
-    /// Check if current candle is a bearish engulfing pattern
+    /// Check if candle is a bearish engulfing pattern
     fn is_bearish_engulfing(&self, prev: &Candle, current: &Candle) -> bool {
         // Previous candle is bullish (green)
         let prev_bullish = prev.close > prev.open;
@@ -169,6 +176,51 @@ impl QuickFlipStrategy {
         let engulfs = current.open >= prev.close && current.close <= prev.open;
 
         prev_bullish && current_bearish && engulfs
+    }
+
+    /// Check trend direction using EMA on 1h timeframe (or primary if 1h unavailable)
+    /// Returns: Some(true) for bullish trend, Some(false) for bearish trend, None if insufficient data
+    fn check_trend(&self, candles: &[Candle]) -> Option<bool> {
+        if !self.config.use_trend_filter {
+            return Some(true); // Always pass if filter disabled
+        }
+
+        if candles.len() < self.config.trend_ema_period + 1 {
+            return None;
+        }
+
+        let closes: Vec<f64> = candles.iter().map(|c| c.close).collect();
+        let ema_vals = ema(&closes, self.config.trend_ema_period);
+        
+        let current_price = candles.last()?.close;
+        let current_ema = ema_vals.last()?.as_ref()?;
+
+        // Bullish if price > EMA, bearish if price < EMA
+        Some(current_price > *current_ema)
+    }
+
+    /// Check if current candle has above-average volume
+    fn check_volume(&self, candles: &[Candle]) -> bool {
+        if !self.config.use_volume_filter {
+            return true; // Always pass if filter disabled
+        }
+
+        if candles.len() < self.config.volume_lookback + 1 {
+            return false;
+        }
+
+        let current_volume = candles.last().map(|c| c.volume).unwrap_or(0.0);
+        
+        // Calculate average volume over lookback period (excluding current)
+        let start_idx = candles.len().saturating_sub(self.config.volume_lookback + 1);
+        let end_idx = candles.len() - 1;
+        let volume_window = &candles[start_idx..end_idx];
+        
+        let avg_volume = volume_window.iter()
+            .map(|c| c.volume)
+            .sum::<f64>() / volume_window.len() as f64;
+
+        current_volume >= avg_volume * self.config.min_volume_multiplier
     }
 }
 
@@ -270,6 +322,18 @@ impl Strategy for QuickFlipStrategy {
             return Signal::Flat;
         }
 
+        // Check trend filter using 1h chart if available, otherwise 5m
+        // For multi-TF: ideally use 1h, for now use 5m as proxy
+        let trend_bullish = match self.check_trend(candles_5m) {
+            Some(bullish) => bullish,
+            None => return Signal::Flat, // Not enough data for trend
+        };
+
+        // Check volume filter on 5m chart
+        if !self.check_volume(candles_5m) {
+            return Signal::Flat;
+        }
+
         // Pattern detection on 5m chart
         if candles_5m.len() < 2 {
             return Signal::Flat;
@@ -278,16 +342,16 @@ impl Strategy for QuickFlipStrategy {
         let current = candles_5m.last().unwrap();
         let prev = &candles_5m[candles_5m.len() - 2];
 
-        // BULLISH ENTRY: Price below 15m range low
-        if current.close < range_low {
+        // BULLISH ENTRY: Price below 15m range low + bullish pattern + bullish trend
+        if current.close < range_low && trend_bullish {
             if self.is_hammer(current) || self.is_bullish_engulfing(prev, current) {
                 self.state.write().unwrap().last_signal = Signal::Long;
                 return Signal::Long;
             }
         }
 
-        // BEARISH ENTRY: Price above 15m range high
-        if current.close > range_high {
+        // BEARISH ENTRY: Price above 15m range high + bearish pattern + bearish trend
+        if current.close > range_high && !trend_bullish {
             if self.is_inverted_hammer(current) || self.is_bearish_engulfing(prev, current) {
                 self.state.write().unwrap().last_signal = Signal::Short;
                 return Signal::Short;
@@ -340,6 +404,17 @@ impl Strategy for QuickFlipStrategy {
             return Signal::Flat;
         }
 
+        // Check trend filter
+        let trend_bullish = match self.check_trend(candles) {
+            Some(bullish) => bullish,
+            None => return Signal::Flat,
+        };
+
+        // Check volume filter
+        if !self.check_volume(candles) {
+            return Signal::Flat;
+        }
+
         // Need at least 2 candles for pattern detection
         if candles.len() < 2 {
             return Signal::Flat;
@@ -348,30 +423,34 @@ impl Strategy for QuickFlipStrategy {
         let current = candles.last().unwrap();
         let prev = &candles[candles.len() - 2];
 
-        // BULLISH ENTRY: Price below range low (outside the box)
-        if current.close < range_low {
+        // BULLISH ENTRY: Price below range low + bullish pattern + bullish trend
+        if current.close < range_low && trend_bullish {
             // Signal 1: Hammer pattern
             if self.is_hammer(current) {
                 self.state.write().unwrap().last_signal = Signal::Long;
+                self.state.write().unwrap().last_trade_bar = current_bar;
                 return Signal::Long;
             }
             // Signal 2: Bullish engulfing
             if self.is_bullish_engulfing(prev, current) {
                 self.state.write().unwrap().last_signal = Signal::Long;
+                self.state.write().unwrap().last_trade_bar = current_bar;
                 return Signal::Long;
             }
         }
 
-        // BEARISH ENTRY: Price above range high (outside the box)
-        if current.close > range_high {
+        // BEARISH ENTRY: Price above range high + bearish pattern + bearish trend
+        if current.close > range_high && !trend_bullish {
             // Signal 1: Inverted Hammer pattern
             if self.is_inverted_hammer(current) {
                 self.state.write().unwrap().last_signal = Signal::Short;
+                self.state.write().unwrap().last_trade_bar = current_bar;
                 return Signal::Short;
             }
             // Signal 2: Bearish engulfing
             if self.is_bearish_engulfing(prev, current) {
                 self.state.write().unwrap().last_signal = Signal::Short;
+                self.state.write().unwrap().last_trade_bar = current_bar;
                 return Signal::Short;
             }
         }
