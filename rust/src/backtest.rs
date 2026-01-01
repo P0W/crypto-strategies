@@ -708,6 +708,26 @@ impl Backtester {
             tax_amount,
         }
     }
+
+    /// Run backtest on multi-timeframe data
+    /// 
+    /// This method supports strategies that need multiple timeframes.
+    /// Currently wraps the single-timeframe engine - full MTF engine coming in future update.
+    pub fn run_multi_timeframe(
+        &mut self,
+        mtf_data: crate::MultiSymbolMultiTimeframeData,
+    ) -> BacktestResult {
+        // For now, extract primary timeframe and use existing single-TF engine
+        // TODO: Implement full multi-timeframe backtest loop
+        tracing::info!("Running backtest using primary timeframe (full MTF engine in development)");
+        
+        let single_tf_data: HashMap<Symbol, Vec<Candle>> = mtf_data
+            .into_iter()
+            .map(|(symbol, mtf)| (symbol, mtf.primary().to_vec()))
+            .collect();
+            
+        self.run(single_tf_data)
+    }
 }
 
 #[derive(Debug, Default)]
