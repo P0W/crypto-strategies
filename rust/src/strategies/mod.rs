@@ -29,13 +29,37 @@ pub trait Strategy: Send + Sync {
     /// Strategy identifier (must match config's strategy_name)
     fn name(&self) -> &'static str;
 
+    /// Declare required timeframes (default: empty = use primary only)
+    /// Return vector of timeframes this strategy needs (e.g., vec!["1d", "15m"])
+    /// Empty vector means single-timeframe strategy (backward compatible)
+    fn required_timeframes(&self) -> Vec<&'static str> {
+        vec![]
+    }
+
     /// Generate trading signal for the given candle data
+    /// 
+    /// **DEPRECATED in multi-timeframe mode** - Override `generate_signal_mtf` instead
+    /// This is called for single-timeframe strategies (when required_timeframes() is empty)
     fn generate_signal(
         &self,
         symbol: &Symbol,
         candles: &[Candle],
         position: Option<&Position>,
     ) -> Signal;
+
+    /// Generate trading signal using multi-timeframe data
+    /// 
+    /// Override this for multi-timeframe strategies. Default implementation
+    /// calls `generate_signal()` with primary timeframe for backward compatibility.
+    fn generate_signal_mtf(
+        &self,
+        symbol: &Symbol,
+        mtf_candles: &crate::MultiTimeframeCandles,
+        position: Option<&Position>,
+    ) -> Signal {
+        // Backward compatibility: call single-TF generate_signal with primary timeframe
+        self.generate_signal(symbol, mtf_candles.primary(), position)
+    }
 
     /// Calculate stop loss price for entry
     fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64;
