@@ -1,0 +1,55 @@
+{
+    "strategy_name": "quick_flip",
+
+    "exchange": {
+        "maker_fee": 0.001,
+        "taker_fee": 0.001,
+        "assumed_slippage": 0.001,
+        "rate_limit": 10
+    },
+
+    "trading": {
+        "pairs": ["BTCINR", "ETHINR", "SOLINR"],
+        "initial_capital": 100000,
+        "risk_per_trade": 0.10,
+        "max_positions": 3,
+        "max_portfolio_heat": 0.30,
+        "max_position_pct": 0.15,
+        "max_drawdown": 0.15,
+        "drawdown_warning": 0.08,
+        "drawdown_critical": 0.12,
+        "drawdown_warning_multiplier": 0.50,
+        "drawdown_critical_multiplier": 0.25,
+        "consecutive_loss_limit": 3,
+        "consecutive_loss_multiplier": 0.75
+    },
+
+    "strategy": {
+        "timeframe": "5m",
+        "daily_atr_period": 14,
+        "min_range_pct": 0.25,
+        "session_start_minutes": 570,
+        "validity_window_minutes": 90,
+        "entry_timeframe_minutes": 5,
+        "conservative_target": false
+    },
+
+    "grid": {
+        "min_range_pct": [0.20, 0.25, 0.30],
+        "validity_window_minutes": [60, 90, 120],
+        "entry_timeframe_minutes": [1, 5],
+        "conservative_target": [false, true]
+    },
+
+    "tax": {
+        "tax_rate": 0.30,
+        "tds_rate": 0.01,
+        "loss_offset_allowed": false
+    },
+
+    "backtest": {
+        "data_dir": "../data",
+        "results_dir": "../results",
+        "commission": 0.001
+    }
+}
