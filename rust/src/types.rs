@@ -263,6 +263,9 @@ pub struct PerformanceMetrics {
     pub max_drawdown: f64,
     pub win_rate: f64,
     pub profit_factor: f64,
+    /// Trading expectancy: average expected profit/loss per trade
+    /// Formula: (Win Rate × Avg Win) - (Loss Rate × Avg Loss)
+    pub expectancy: f64,
     pub total_trades: usize,
     pub winning_trades: usize,
     pub losing_trades: usize,

@@ -445,10 +445,10 @@ pub fn run(
     println!("  Top {} results (sorted by {})", display_count, sort_by);
     println!();
     println!(
-        "  {:<3} {:>7} {:>8} {:>7} {:>6} {:>5}  {:<12} {:>3}  Grid Parameters",
-        "#", "Sharpe", "Return", "MaxDD", "WinR", "Trd", "Symbols", "TF"
+        "  {:<3} {:>7} {:>8} {:>7} {:>6} {:>8} {:>5}  {:<12} {:>3}  Grid Parameters",
+        "#", "Sharpe", "Return", "MaxDD", "WinR", "Expect", "Trd", "Symbols", "TF"
     );
-    println!("  {}", "-".repeat(90));
+    println!("  {}", "-".repeat(100));
 
     for (i, result) in all_results.iter().take(top).enumerate() {
         let group_idx = *result.params.get("_group_idx").unwrap_or(&0.0) as usize;
@@ -488,12 +488,13 @@ pub fn run(
             .join(" ");
 
         println!(
-            "  {:<3} {:>7.2} {:>7.1}% {:>6.1}% {:>5.0}% {:>5}  {:<12} {:>3}  {}",
+            "  {:<3} {:>7.2} {:>7.1}% {:>6.1}% {:>5.0}% {:>8.2} {:>5}  {:<12} {:>3}  {}",
             i + 1,
             result.sharpe_ratio,
             result.total_return,
             result.max_drawdown,
             result.win_rate,
+            result.expectancy,
             result.total_trades,
             symbols_str,
             tf,
@@ -607,6 +608,7 @@ fn get_metric_value(result: &OptimizationResult, sort_by: &str) -> f64 {
         "calmar" => result.calmar_ratio,
         "win_rate" => result.win_rate,
         "profit_factor" => result.profit_factor,
+        "expectancy" => result.expectancy,
         _ => result.sharpe_ratio,
     }
 }
@@ -626,6 +628,7 @@ fn get_saved_optimization_metric(config: &Config, sort_by: &str) -> Option<f64> 
         "calmar" => "calmar_ratio",
         "win_rate" => "win_rate",
         "profit_factor" => "profit_factor",
+        "expectancy" => "expectancy",
         _ => "sharpe_ratio",
     };
     opt.get(metric_name)?.as_f64()
@@ -665,6 +668,7 @@ fn run_baseline_backtest(
         "calmar" => result.metrics.calmar_ratio,
         "win_rate" => result.metrics.win_rate,
         "profit_factor" => result.metrics.profit_factor,
+        "expectancy" => result.metrics.expectancy,
         _ => result.metrics.sharpe_ratio,
     })
 }
@@ -718,6 +722,7 @@ fn update_config_with_best(
                 "win_rate": (best.win_rate * 10.0).round() / 10.0,
                 "total_trades": best.total_trades,
                 "calmar_ratio": (best.calmar_ratio * 100.0).round() / 100.0,
+                "expectancy": (best.expectancy * 100.0).round() / 100.0,
                 "optimized_at": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             });
             obj.insert("_optimization".to_string(), optimization_meta);
@@ -815,6 +820,7 @@ fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<Optimiza
         total_trades: result.metrics.total_trades,
         calmar_ratio: result.metrics.calmar_ratio,
         profit_factor: result.metrics.profit_factor,
+        expectancy: result.metrics.expectancy,
     })
 }
 
@@ -826,6 +832,7 @@ fn sort_results(results: &mut [OptimizationResult], sort_by: &str) {
             "calmar" => a.calmar_ratio,
             "win_rate" => a.win_rate,
             "profit_factor" => a.profit_factor,
+            "expectancy" => a.expectancy,
             _ => a.sharpe_ratio,
         };
         let val_b = match sort_by {
@@ -834,6 +841,7 @@ fn sort_results(results: &mut [OptimizationResult], sort_by: &str) {
             "calmar" => b.calmar_ratio,
             "win_rate" => b.win_rate,
             "profit_factor" => b.profit_factor,
+            "expectancy" => b.expectancy,
             _ => b.sharpe_ratio,
         };
         val_b
