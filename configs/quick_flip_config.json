@@ -26,18 +26,18 @@
 
     "strategy": {
         "timeframe": "5m",
-        "daily_atr_period": 14,
+        "range_lookback": 3,
+        "atr_period": 14,
         "min_range_pct": 0.25,
-        "session_start_minutes": 570,
-        "validity_window_minutes": 90,
-        "entry_timeframe_minutes": 5,
+        "cooldown_bars": 5,
         "conservative_target": false
     },
 
     "grid": {
-        "min_range_pct": [0.20, 0.25, 0.30],
-        "validity_window_minutes": [60, 90, 120],
-        "entry_timeframe_minutes": [1, 5],
+        "range_lookback": [3, 5, 10],
+        "atr_period": [10, 14, 20],
+        "min_range_pct": [0.15, 0.20, 0.25, 0.30],
+        "cooldown_bars": [3, 5, 10],
         "conservative_target": [false, true]
     },
 

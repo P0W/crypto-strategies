@@ -1,54 +1,43 @@
 //! Quick Flip (Pattern Scalp) Strategy
 //!
-//! Time-of-day range breakout with pattern confirmation.
+//! Range breakout with candlestick pattern confirmation.
+//! Adapted for 24/7 crypto markets using rolling range windows.
 //! 
 //! Core Logic:
-//! 1. Define opening range using first 15-minute candle after NY open (9:30 AM EST)
-//! 2. Filter by daily ATR (range must be >= 25% of daily ATR)
+//! 1. Define range using N-bar high/low lookback (default: 3 bars = 15 minutes on 5m chart)
+//! 2. Filter by ATR (range must be >= min % of ATR)
 //! 3. Wait for price to move outside the range
-//! 4. Enter on pattern confirmation (Hammer/Inverted Hammer or Engulfing)
-//! 5. Exit at opposite side of range or 50% mid-point
+//! 4. Enter on pattern confirmation (Hammer or Bullish Engulfing)
+//! 5. Stop at signal candle low, target at range high
 
 use crate::indicators::atr;
 use crate::strategies::Strategy;
 use crate::{Candle, Position, Signal, Symbol};
-use chrono::Timelike;
 use std::sync::RwLock;
 
 use super::config::QuickFlipConfig;
 
 #[derive(Debug, Clone)]
-struct SessionState {
-    range_high: Option<f64>,
-    range_low: Option<f64>,
-    range_date: Option<chrono::NaiveDate>,
-    daily_atr_value: Option<f64>,
-    entry_triggered: bool,
+struct TradeState {
+    last_trade_bar: usize,
 }
 
-impl Default for SessionState {
+impl Default for TradeState {
     fn default() -> Self {
-        Self {
-            range_high: None,
-            range_low: None,
-            range_date: None,
-            daily_atr_value: None,
-            entry_triggered: false,
-        }
+        Self { last_trade_bar: 0 }
     }
 }
 
 pub struct QuickFlipStrategy {
     config: QuickFlipConfig,
-    // Session state (reset each day) - using RwLock for thread safety
-    state: RwLock<SessionState>,
+    state: RwLock<TradeState>,
 }
 
 impl QuickFlipStrategy {
     pub fn new(config: QuickFlipConfig) -> Self {
         Self {
             config,
-            state: RwLock::new(SessionState::default()),
+            state: RwLock::new(TradeState::default()),
         }
     }
 
@@ -119,12 +108,9 @@ impl QuickFlipStrategy {
         prev_bullish && current_bearish && engulfs
     }
 
-    /// Calculate daily ATR from daily candles
-    /// Note: In backtesting, we need daily data loaded separately or calculated from intraday
-    fn calculate_daily_atr(&self, candles: &[Candle]) -> Option<f64> {
-        // For simplicity, we'll calculate ATR from the provided candles
-        // In production, you'd load daily data separately
-        if candles.len() < self.config.daily_atr_period + 1 {
+    /// Calculate ATR for volatility measurement
+    fn get_current_atr(&self, candles: &[Candle]) -> Option<f64> {
+        if candles.len() < self.config.atr_period + 1 {
             return None;
         }
 
@@ -132,92 +118,42 @@ impl QuickFlipStrategy {
         let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
         let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
 
-        let atr_vals = atr(&high, &low, &close, self.config.daily_atr_period);
+        let atr_vals = atr(&high, &low, &close, self.config.atr_period);
         atr_vals.last().and_then(|&x| x)
     }
 
-    /// Check if we're within the validity window
-    fn is_within_validity_window(&self, candle: &Candle) -> bool {
-        let time = candle.datetime.time();
-        let minutes_from_midnight = time.hour() as usize * 60 + time.minute() as usize;
-        
-        // Convert EST to UTC offset (EST = UTC-5, but crypto runs 24/7 so we'll use a simpler approach)
-        // For crypto markets, we'll treat this as relative to market open time
-        let session_end = self.config.session_start_minutes + self.config.validity_window_minutes;
-        
-        minutes_from_midnight >= self.config.session_start_minutes
-            && minutes_from_midnight <= session_end
+    /// Get the range high from lookback period
+    fn get_range_high(&self, candles: &[Candle]) -> Option<f64> {
+        if candles.len() < self.config.range_lookback + 1 {
+            return None;
+        }
+        // Exclude current bar, look at previous N bars
+        let start = candles.len() - self.config.range_lookback - 1;
+        let end = candles.len() - 1;
+        candles[start..end]
+            .iter()
+            .map(|c| c.high)
+            .fold(None, |max, h| Some(max.map_or(h, |m: f64| m.max(h))))
     }
 
-    /// Update the opening range if needed
-    fn update_range(&self, candles: &[Candle]) {
-        if candles.is_empty() {
-            return;
+    /// Get the range low from lookback period
+    fn get_range_low(&self, candles: &[Candle]) -> Option<f64> {
+        if candles.len() < self.config.range_lookback + 1 {
+            return None;
         }
-
-        let current = candles.last().unwrap();
-        let current_date = current.datetime.date_naive();
-
-        let mut state = self.state.write().unwrap();
-
-        // Reset range for new day
-        if state.range_date != Some(current_date) {
-            state.range_high = None;
-            state.range_low = None;
-            state.range_date = Some(current_date);
-            state.entry_triggered = false;
-            state.daily_atr_value = self.calculate_daily_atr(candles);
-        }
-
-        // Set range from first 15-minute candle after session start
-        // For this implementation, we'll use the high/low of candles in the first 15 minutes
-        if state.range_high.is_none() {
-            let time = current.datetime.time();
-            let minutes_from_midnight = time.hour() as usize * 60 + time.minute() as usize;
-            
-            // Check if we're in the first 15 minutes after session start
-            if minutes_from_midnight >= self.config.session_start_minutes
-                && minutes_from_midnight < self.config.session_start_minutes + 15
-            {
-                // Find all candles in the opening 15-minute window
-                let opening_candles: Vec<&Candle> = candles
-                    .iter()
-                    .rev()
-                    .take_while(|c| {
-                        c.datetime.date_naive() == current_date
-                            && {
-                                let t = c.datetime.time();
-                                let m = t.hour() as usize * 60 + t.minute() as usize;
-                                m >= self.config.session_start_minutes
-                                    && m < self.config.session_start_minutes + 15
-                            }
-                    })
-                    .collect();
-
-                if !opening_candles.is_empty() {
-                    state.range_high = opening_candles.iter().map(|c| c.high).fold(None, |max, h| {
-                        Some(max.map_or(h, |m: f64| m.max(h)))
-                    });
-                    state.range_low = opening_candles.iter().map(|c| c.low).fold(None, |min, l| {
-                        Some(min.map_or(l, |m: f64| m.min(l)))
-                    });
-                }
-            }
-        }
+        let start = candles.len() - self.config.range_lookback - 1;
+        let end = candles.len() - 1;
+        candles[start..end]
+            .iter()
+            .map(|c| c.low)
+            .fold(None, |min, l| Some(min.map_or(l, |m: f64| m.min(l))))
     }
 
     /// Check if the range passes ATR filter
-    fn passes_atr_filter(&self) -> bool {
-        let state = self.state.read().unwrap();
-        if let (Some(high), Some(low), Some(daily_atr)) =
-            (state.range_high, state.range_low, state.daily_atr_value)
-        {
-            let range_size = high - low;
-            let min_required = daily_atr * self.config.min_range_pct;
-            range_size >= min_required
-        } else {
-            false
-        }
+    fn passes_atr_filter(&self, range_high: f64, range_low: f64, atr_val: f64) -> bool {
+        let range_size = range_high - range_low;
+        let min_required = atr_val * self.config.min_range_pct;
+        range_size >= min_required
     }
 }
 
@@ -233,43 +169,41 @@ impl Strategy for QuickFlipStrategy {
         position: Option<&Position>,
     ) -> Signal {
         // Need enough data
-        if candles.len() < 50 {
+        let min_bars = self.config.range_lookback.max(self.config.atr_period) + 10;
+        if candles.len() < min_bars {
             return Signal::Flat;
         }
-
-        // Update range state
-        self.update_range(candles);
 
         // If already in position, hold
         if position.is_some() {
             return Signal::Long;
         }
 
-        // If entry already triggered today, no new entries
-        {
-            let state = self.state.read().unwrap();
-            if state.entry_triggered {
-                return Signal::Flat;
-            }
+        // Cooldown: prevent too frequent trading
+        let state = self.state.read().unwrap();
+        if candles.len() - state.last_trade_bar < self.config.cooldown_bars {
+            return Signal::Flat;
         }
+        drop(state);
 
         let current = candles.last().unwrap();
         
-        // Check if range is set and passes ATR filter
-        let (_range_high, range_low) = {
-            let state = self.state.read().unwrap();
-            if state.range_high.is_none() || state.range_low.is_none() {
-                return Signal::Flat;
-            }
-            (state.range_high.unwrap(), state.range_low.unwrap())
+        // Get range and ATR
+        let range_high = match self.get_range_high(candles) {
+            Some(h) => h,
+            None => return Signal::Flat,
+        };
+        let range_low = match self.get_range_low(candles) {
+            Some(l) => l,
+            None => return Signal::Flat,
+        };
+        let atr_val = match self.get_current_atr(candles) {
+            Some(a) => a,
+            None => return Signal::Flat,
         };
 
-        if !self.passes_atr_filter() {
-            return Signal::Flat;
-        }
-
-        // Check validity window
-        if !self.is_within_validity_window(current) {
+        // Check ATR filter
+        if !self.passes_atr_filter(range_high, range_low, atr_val) {
             return Signal::Flat;
         }
 
@@ -280,7 +214,7 @@ impl Strategy for QuickFlipStrategy {
 
         let prev = &candles[candles.len() - 2];
 
-        // BULLISH ENTRY: Price below range low
+        // BULLISH ENTRY: Price below range low (outside the box)
         if current.close < range_low {
             // Signal 1: Hammer pattern
             if self.is_hammer(current) {
@@ -292,18 +226,6 @@ impl Strategy for QuickFlipStrategy {
             }
         }
 
-        // BEARISH ENTRY: Price above range high
-        // Note: Current implementation only supports Long positions in the backtest engine
-        // For short positions, you would return Signal::Short here
-        // if current.close > range_high {
-        //     if self.is_inverted_hammer(current) {
-        //         return Signal::Short;
-        //     }
-        //     if self.is_bearish_engulfing(prev, current) {
-        //         return Signal::Short;
-        //     }
-        // }
-
         Signal::Flat
     }
 
@@ -313,20 +235,17 @@ impl Strategy for QuickFlipStrategy {
         signal_candle.low
     }
 
-    fn calculate_take_profit(&self, _candles: &[Candle], _entry_price: f64) -> f64 {
+    fn calculate_take_profit(&self, candles: &[Candle], _entry_price: f64) -> f64 {
         // Target is the opposite side of the range (or 50% mid-point if conservative)
-        let state = self.state.read().unwrap();
-        if let (Some(high), Some(low)) = (state.range_high, state.range_low) {
-            if self.config.conservative_target {
-                // Conservative: mid-point (50%) of range
-                (high + low) / 2.0
-            } else {
-                // Primary: opposite side of range (range high for long entries)
-                high
-            }
+        let range_high = self.get_range_high(candles).unwrap_or(_entry_price * 1.02);
+        let range_low = self.get_range_low(candles).unwrap_or(_entry_price * 0.98);
+        
+        if self.config.conservative_target {
+            // Conservative: mid-point (50%) of range
+            (range_high + range_low) / 2.0
         } else {
-            // Fallback: 2% profit target
-            _entry_price * 1.02
+            // Primary: opposite side of range (range high for long entries)
+            range_high
         }
     }
 
@@ -334,24 +253,36 @@ impl Strategy for QuickFlipStrategy {
         &self,
         position: &Position,
         current_price: f64,
-        _candles: &[Candle],
+        candles: &[Candle],
     ) -> Option<f64> {
         // Move stop to break-even once price moves back inside the box or reaches 50% target
-        let state = self.state.read().unwrap();
-        if let (Some(high), Some(low)) = (state.range_high, state.range_low) {
-            let mid_point = (high + low) / 2.0;
-            
-            // If we've reached the mid-point or moved back inside the range, move to break-even
-            if current_price >= mid_point || (current_price >= low && current_price <= high) {
-                // Move to break-even (entry price)
-                return Some(position.entry_price);
-            }
+        let range_high = self.get_range_high(candles)?;
+        let range_low = self.get_range_low(candles)?;
+        let mid_point = (range_high + range_low) / 2.0;
+        
+        // If we've reached the mid-point or moved back inside the range, move to break-even
+        if current_price >= mid_point || (current_price >= range_low && current_price <= range_high) {
+            // Move to break-even (entry price)
+            return Some(position.entry_price);
         }
         
         None
     }
 
+    fn notify_trade(&mut self, trade: &crate::Trade) {
+        // Update last trade bar to prevent immediate re-entry
+        if let Ok(mut state) = self.state.write() {
+            // We don't have access to current bar index here, so we'll use a simple counter
+            state.last_trade_bar += self.config.cooldown_bars;
+        }
+        tracing::debug!(
+            symbol = %trade.symbol,
+            pnl = format!("{:.2}", trade.net_pnl),
+            "Quick flip trade"
+        );
+    }
+
     fn init(&mut self) {
-        *self.state.write().unwrap() = SessionState::default();
+        *self.state.write().unwrap() = TradeState::default();
     }
 }
