@@ -38,9 +38,8 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 use super::auth::{sign_request, Credentials};
-use super::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
-use super::rate_limiter::{RateLimiter, RateLimiterConfig};
 use super::types::*;
+use crate::common::{CircuitBreaker, CircuitBreakerConfig, RateLimiter, RateLimiterConfig};
 
 /// Base URL for CoinDCX API
 pub const API_BASE_URL: &str = "https://api.coindcx.com";
@@ -532,7 +531,7 @@ impl CoinDCXClient {
     }
 
     /// Get the current circuit breaker state
-    pub async fn circuit_breaker_state(&self) -> super::circuit_breaker::CircuitState {
+    pub async fn circuit_breaker_state(&self) -> crate::common::CircuitState {
         let cb = self.circuit_breaker.lock().await;
         cb.state()
     }

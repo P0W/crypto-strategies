@@ -1,6 +1,6 @@
-//! Crypto Trading Strategies
+//! Trading Strategies System
 //!
-//! An automated trading system for cryptocurrency markets,
+//! An automated trading system for cryptocurrency and equity markets,
 //! featuring volatility-based strategies, comprehensive backtesting, and
 //! parameter optimization.
 //!
@@ -8,7 +8,10 @@
 //!
 //! This crate includes standalone API clients for:
 //! - **Binance** (default): Public market data, no API key required
-//! - **CoinDCX**: Full trading support with circuit breaker and rate limiting
+//! - **CoinDCX**: Indian crypto exchange with full trading support
+//! - **Zerodha Kite**: Indian equity/F&O exchange (NSE, BSE)
+//!
+//! All clients include circuit breaker, rate limiting, and retry logic.
 //!
 //! ## Binance Example (Market Data)
 //! ```no_run
@@ -23,9 +26,9 @@
 //! }
 //! ```
 //!
-//! ## CoinDCX Example (Trading)
+//! ## CoinDCX Example (Crypto Trading)
 //! ```no_run
-//! use crypto_strategies::coindcx::{CoinDCXClient, OrderRequest, OrderSide};
+//! use crypto_strategies::coindcx::CoinDCXClient;
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
@@ -35,10 +38,25 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! ## Zerodha Example (Equity Trading)
+//! ```no_run
+//! use crypto_strategies::zerodha::ZerodhaClient;
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     let client = ZerodhaClient::new("api_key", "api_secret")
+//!         .with_access_token("access_token".to_string());
+//!     let quote = client.get_quote("NSE:RELIANCE").await?;
+//!     println!("LTP: {}", quote.last_price);
+//!     Ok(())
+//! }
+//! ```
 
 pub mod backtest;
 pub mod binance;
 pub mod coindcx;
+pub mod common;
 pub mod config;
 pub mod data;
 pub mod grid;
@@ -49,6 +67,7 @@ pub mod risk;
 pub mod state_manager;
 pub mod strategies;
 pub mod types;
+pub mod zerodha;
 
 pub use config::Config;
 pub use multi_timeframe::{MultiSymbolMultiTimeframeData, MultiTimeframeCandles, MultiTimeframeData};
@@ -57,4 +76,5 @@ pub use types::*;
 
 // Re-export exchange clients for convenience
 pub use binance::BinanceClient;
-pub use coindcx::{ClientConfig, CoinDCXClient};
+pub use coindcx::CoinDCXClient;
+pub use zerodha::ZerodhaClient;
