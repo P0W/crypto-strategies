@@ -43,6 +43,7 @@ pub mod config;
 pub mod data;
 pub mod grid;
 pub mod indicators;
+pub mod multi_timeframe;
 pub mod optimizer;
 pub mod risk;
 pub mod state_manager;
@@ -50,6 +51,7 @@ pub mod strategies;
 pub mod types;
 
 pub use config::Config;
+pub use multi_timeframe::{MultiSymbolMultiTimeframeData, MultiTimeframeCandles, MultiTimeframeData};
 pub use strategies::Strategy;
 pub use types::*;
 
