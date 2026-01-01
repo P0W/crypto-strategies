@@ -1,19 +1,20 @@
 # Crypto Strategies - Rust Implementation
 
-High-performance Rust implementation of trading strategies for CoinDCX.
+High-performance Rust implementation of trading strategies for CoinDCX and Zerodha.
 
 ## Features
 
 - **Performance**: 10-100x faster backtests enabling thorough optimization
 - **Type Safety**: Compile-time guarantees eliminate runtime type errors
-- **Production Ready**: Memory safety, graceful error handling
-- **Parallel Optimization**: Safe parallelization with Rayon
-- **Generic Strategy Framework**: Add new strategies with minimal boilerplate
+- **Multi-Timeframe**: Strategies can use multiple timeframes (1d ATR + 15m range + 5m patterns)
+- **Parallel Optimization**: Rayon-based grid search across all CPU cores
+- **Production Ready**: Circuit breakers, rate limiting, state persistence
+- **Multiple Exchanges**: CoinDCX (crypto) and Zerodha Kite (equity) integrations
 
 ## Prerequisites
 
 - [Rust toolchain](https://rustup.rs/) (1.70+)
-- CoinDCX API credentials (for live trading)
+- API credentials (CoinDCX for crypto, Zerodha for equity)
 
 ## Quick Start
 
@@ -36,50 +37,86 @@ cargo test
 # Create .env from template (in repo root)
 copy ..\.env.example ..\.env  # Windows
 
-# Add CoinDCX credentials
+# Add credentials
 COINDCX_API_KEY=your_api_key_here
 COINDCX_API_SECRET=your_api_secret_here
+ZERODHA_API_KEY=your_kite_api_key
+ZERODHA_ACCESS_TOKEN=your_access_token
 ```
 
-## Usage
+## Commands
+
+### Download Historical Data
+
+```bash
+# Download from Binance (default, no auth required)
+cargo run -- download --symbols BTC,ETH,SOL --timeframes 5m,15m,1h,1d --days 180
+
+# Download from CoinDCX
+cargo run -- download --symbols BTC,ETH --timeframes 1h,1d --days 90 --source coindcx
+
+# Download specific date range
+cargo run -- download --symbols BTC --timeframes 1d --start 2023-01-01 --end 2024-01-01
+```
 
 ### Backtesting
 
 ```bash
-# Run with default config
-cargo run --release -- backtest --config ../configs/sample_config.json
+# Run backtest
+cargo run -- backtest --config ../configs/btc_eth_sol_bnb_xrp_1d.json
 
-# Override parameters
-cargo run --release -- backtest --capital 100000
+# With date range filter
+cargo run -- backtest --config ../configs/sample_config.json --start 2024-01-01 --end 2024-12-31
+
+# Override capital
+cargo run -- backtest --config ../configs/sample_config.json --capital 50000
 
 # Verbose output
-cargo run --release -- backtest -v
+cargo run -- backtest -v
 ```
 
 ### Optimization
 
-Grid search parameters are defined in your JSON config file under the `grid` section:
+Grid parameters are defined in your config's `grid` section:
 
 ```json
 {
-  "strategy": { ... },
   "grid": {
-    "atr_period": [14],
+    "_optimization": [{
+      "sharpe_ratio": 0.96,
+      "total_return": 100.2,
+      "max_drawdown": 13.6,
+      "win_rate": 47.3,
+      "total_trades": 55,
+      "calmar_ratio": 1.39,
+      "expectancy": 1853.29,
+      "symbols": ["BTCINR", "ETHINR", "SOLINR"],
+      "optimized_at": "2026-01-01 22:10:06"
+    }],
     "ema_fast": [8, 13],
     "ema_slow": [21, 34],
-    "adx_threshold": [20.0, 25.0, 30.0],
-    "stop_atr_multiple": [2.0, 2.5, 3.0],
-    "target_atr_multiple": [4.0, 5.0, 6.0]
+    "stop_atr_multiple": [2.0, 2.5, 3.0]
   }
 }
 ```
+
+The `_optimization` field is auto-updated when better results are found, storing metrics and the exact symbols used.
 
 ```bash
 # Run optimization (uses grid from config)
 cargo run --release -- optimize --config ../configs/sample_config.json
 
+# Test multiple coin combinations
+cargo run --release -- optimize --coins BTC,ETH,SOL,BNB --min-combo 2
+
+# Test specific symbol groups
+cargo run --release -- optimize --symbols "BTC,ETH;SOL,BNB,XRP"
+
+# Test multiple timeframes
+cargo run --release -- optimize --timeframes 1h,4h,1d
+
 # Override grid params via CLI
-cargo run --release -- optimize -O "adx_threshold=20,25,30,35" -O "ema_fast=5,8,13"
+cargo run --release -- optimize -O "adx_threshold=20,25,30" -O "ema_fast=5,8,13"
 
 # Sort by different metrics
 cargo run --release -- optimize --sort-by calmar
@@ -88,8 +125,8 @@ cargo run --release -- optimize --sort-by return
 # Show top N results
 cargo run --release -- optimize --top 20
 
-# Test multiple coin combinations
-cargo run --release -- optimize --coins BTC,ETH,SOL
+# Skip auto-update of config
+cargo run --release -- optimize --no-update
 ```
 
 **Sorting Options:**
@@ -101,50 +138,103 @@ cargo run --release -- optimize --coins BTC,ETH,SOL
 | `return` | Raw total return |
 | `profit_factor` | Gross profits / Gross losses |
 | `win_rate` | Winning trades % |
+| `expectancy` | Average trade expectancy |
 
 ### Live Trading
 
 ```bash
 # Paper trading (safe, simulated)
-cargo run --release -- live --paper
+cargo run -- live --config ../configs/sample_config.json --paper
 
 # Custom cycle interval (seconds)
-cargo run --release -- live --paper --interval 300
+cargo run -- live --paper --interval 300
 
 # Live trading with real money (CAUTION!)
-cargo run --release -- live --live
+cargo run -- live --live
 ```
 
 ## Architecture
 
 ```
 src/
-├── main.rs              # CLI dispatch
-├── lib.rs               # Library exports
-├── commands/            # Command implementations
-│   ├── backtest.rs
-│   ├── optimize.rs
-│   ├── live.rs
-│   └── download.rs
-├── strategies/          # Strategy implementations
-│   ├── mod.rs           # Strategy trait + registry
-│   ├── volatility_regime/
-│   ├── mean_reversion/
-│   ├── momentum_scalper/
-│   ├── range_breakout/
-│   └── vwap_scalper/
-├── backtest.rs          # Simulation engine
-├── grid.rs              # Generic grid search
-├── risk.rs              # Position sizing
-├── indicators.rs        # Technical indicators
-├── config.rs            # Configuration parsing
-├── types.rs             # Domain model
-└── data.rs              # Data loading
+├── main.rs                  # CLI entry point
+├── lib.rs                   # Library exports
+│
+├── commands/                # Command implementations
+│   ├── backtest.rs          # Historical simulation
+│   ├── optimize.rs          # Grid search optimization
+│   ├── live.rs              # Real-time trading
+│   └── download.rs          # Data fetching
+│
+├── strategies/              # Strategy implementations
+│   ├── mod.rs               # Strategy trait + registry
+│   ├── volatility_regime/   # ATR regime classification
+│   ├── quick_flip/          # Multi-TF range breakout
+│   ├── vwap_scalper/        # VWAP crossover scalping
+│   ├── mean_reversion/      # Bollinger + RSI reversion
+│   ├── momentum_scalper/    # EMA crossover momentum
+│   └── range_breakout/      # N-bar high/low breakout
+│
+├── binance/                 # Binance API (data only)
+│   ├── client.rs
+│   └── types.rs
+│
+├── coindcx/                 # CoinDCX API (trading)
+│   ├── client.rs            # REST client
+│   ├── auth.rs              # HMAC-SHA256 signing
+│   ├── circuit_breaker.rs   # Fault tolerance
+│   └── rate_limiter.rs      # Token bucket
+│
+├── zerodha/                 # Zerodha Kite API (equity)
+│   ├── client.rs            # HFT-grade client
+│   ├── auth.rs              # OAuth handling
+│   └── types.rs
+│
+├── common/                  # Shared utilities
+│   ├── circuit_breaker.rs
+│   └── rate_limiter.rs
+│
+├── backtest.rs              # Simulation engine
+├── grid.rs                  # Grid generation
+├── optimizer.rs             # Parallel optimization
+├── risk.rs                  # Position sizing
+├── indicators.rs            # 25+ technical indicators
+├── config.rs                # Configuration parsing
+├── types.rs                 # Domain model
+├── data.rs                  # Data loading
+├── state_manager.rs         # SQLite persistence
+└── multi_timeframe.rs       # Multi-TF data management
 ```
 
-## Creating a New Strategy
+## Available Strategies
 
-The strategy framework uses a trait-based plugin architecture. To add a new strategy:
+| Strategy | Description | Best Timeframe | Key Feature |
+|----------|-------------|----------------|-------------|
+| `volatility_regime` | ATR-based regime classification | 1d | Volatility clustering |
+| `quick_flip` | Multi-TF range breakout | 5m (uses 1d, 15m) | Pattern recognition |
+| `vwap_scalper` | VWAP crossover scalping | 5m, 15m | Mean reversion |
+| `mean_reversion` | Bollinger Band + RSI | 1h, 4h | Oversold bounces |
+| `momentum_scalper` | EMA crossover + MACD | 5m, 15m | Trend following |
+| `range_breakout` | N-bar high/low breakout | 1h, 4h | Breakout trading |
+
+### Quick Flip Strategy
+
+Multi-timeframe pattern scalper:
+- **1d**: ATR for volatility context
+- **15m**: Range box detection (opening bars high/low)
+- **5m**: Entry patterns (Hammer, Engulfing)
+- **Filters**: Trend EMA, volume confirmation
+- **Exit**: Signal candle extreme (stop), range boundary (target)
+
+### VWAP Scalper Strategy
+
+Price-to-VWAP mean reversion:
+- **Entry**: Price crosses above VWAP
+- **Filter**: Max distance from VWAP, volume spike optional
+- **Exit**: ATR-based stops, max hold bars
+- **Features**: Cooldown between trades, trailing stop
+
+## Creating a New Strategy
 
 ### Step 1: Create Strategy Directory
 
@@ -164,15 +254,11 @@ use serde::{Deserialize, Serialize};
 pub struct MyStrategyConfig {
     pub param1: usize,
     pub param2: f64,
-    // ... your parameters
 }
 
 impl Default for MyStrategyConfig {
     fn default() -> Self {
-        Self {
-            param1: 14,
-            param2: 2.5,
-        }
+        Self { param1: 14, param2: 2.5 }
     }
 }
 ```
@@ -182,184 +268,75 @@ impl Default for MyStrategyConfig {
 ```rust
 use crate::strategies::Strategy;
 use crate::{Candle, Position, Signal, Symbol};
-use super::config::MyStrategyConfig;
 
 pub struct MyStrategy {
     config: MyStrategyConfig,
 }
 
-impl MyStrategy {
-    pub fn new(config: MyStrategyConfig) -> Self {
-        Self { config }
-    }
-}
-
 impl Strategy for MyStrategy {
-    // REQUIRED: Strategy identifier
-    fn name(&self) -> &'static str {
-        "my_strategy"
-    }
+    fn name(&self) -> &'static str { "my_strategy" }
 
-    // REQUIRED: Generate trading signal
     fn generate_signal(
         &self,
         symbol: &Symbol,
         candles: &[Candle],
         position: Option<&Position>,
     ) -> Signal {
-        // Your signal logic here
+        // Your logic here
         Signal::Flat
     }
 
-    // REQUIRED: Calculate stop loss
     fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64 {
-        entry_price * 0.95  // Example: 5% stop
+        entry_price * 0.95
     }
 
-    // REQUIRED: Calculate take profit
     fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64) -> f64 {
-        entry_price * 1.10  // Example: 10% target
+        entry_price * 1.10
     }
 
-    // REQUIRED: Update trailing stop
     fn update_trailing_stop(
         &self,
         position: &Position,
         current_price: f64,
         candles: &[Candle],
     ) -> Option<f64> {
-        None  // No trailing stop
-    }
-
-    // OPTIONAL: Regime-based position sizing (default: 1.0)
-    fn get_regime_score(&self, candles: &[Candle]) -> f64 {
-        1.0
+        None
     }
 }
 ```
 
-### Step 4: Create Module (`mod.rs`)
+### Step 4: Register in `src/strategies/mod.rs`
 
 ```rust
-mod config;
-mod strategy;
-
-pub use config::MyStrategyConfig;
-pub use strategy::MyStrategy;
-
-use crate::{Config, Strategy};
-use anyhow::Result;
-
-/// Factory function called by registry
-pub fn create(config: &Config) -> Result<Box<dyn Strategy>> {
-    let strategy_config: MyStrategyConfig = serde_json::from_value(config.strategy.clone())
-        .map_err(|e| anyhow::anyhow!("Failed to parse my_strategy config: {}", e))?;
-    Ok(Box::new(MyStrategy::new(strategy_config)))
-}
-```
-
-### Step 5: Register Strategy
-
-In `src/strategies/mod.rs`, add your strategy:
-
-```rust
-// Add module declaration
 pub mod my_strategy;
 
-// Add to registry (in get_registry function)
-fn get_registry() -> &'static RwLock<HashMap<&'static str, StrategyFactory>> {
-    REGISTRY.get_or_init(|| {
-        let mut map = HashMap::new();
-        map.insert("volatility_regime", volatility_regime::create as StrategyFactory);
-        map.insert("mean_reversion", mean_reversion::create as StrategyFactory);
-        map.insert("momentum_scalper", momentum_scalper::create as StrategyFactory);
-        map.insert("range_breakout", range_breakout::create as StrategyFactory);
-        map.insert("my_strategy", my_strategy::create as StrategyFactory);  // <-- Add this
-        RwLock::new(map)
-    })
-}
+// In get_registry():
+map.insert("my_strategy", my_strategy::create as StrategyFactory);
 ```
 
-### Step 6: Create Config File
+## Multi-Timeframe Support
 
-```json
-{
-  "strategy_name": "my_strategy",
-  "strategy": {
-    "timeframe": "1h",
-    "param1": 14,
-    "param2": 2.5
-  },
-  "grid": {
-    "param1": [10, 14, 20],
-    "param2": [2.0, 2.5, 3.0]
-  },
-  ...
-}
-```
-
-### Step 7: Test
-
-```bash
-# Backtest
-cargo run -- backtest --config ../configs/my_strategy.json
-
-# Optimize
-cargo run -- optimize --config ../configs/my_strategy.json
-```
-
-## Strategy Trait Reference
+Strategies can declare required timeframes:
 
 ```rust
-pub trait Strategy: Send + Sync {
-    /// Strategy identifier (must match config's strategy_name)
-    fn name(&self) -> &'static str;
+impl Strategy for QuickFlipStrategy {
+    fn required_timeframes(&self) -> Vec<String> {
+        vec!["1d".to_string(), "15m".to_string(), "5m".to_string()]
+    }
 
-    /// Generate trading signal
-    fn generate_signal(
+    fn generate_signal_mtf(
         &self,
         symbol: &Symbol,
-        candles: &[Candle],
+        mtf_candles: &MultiTimeframeCandles,
         position: Option<&Position>,
-    ) -> Signal;
-
-    /// Calculate stop loss price for entry
-    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64;
-
-    /// Calculate take profit price for entry
-    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64) -> f64;
-
-    /// Update trailing stop (return None if not using trailing)
-    fn update_trailing_stop(
-        &self,
-        position: &Position,
-        current_price: f64,
-        candles: &[Candle],
-    ) -> Option<f64>;
-
-    /// Position sizing multiplier based on market regime (default: 1.0)
-    fn get_regime_score(&self, candles: &[Candle]) -> f64 { 1.0 }
-
-    /// Called when order status changes (default: logging)
-    fn notify_order(&mut self, order: &Order) { ... }
-
-    /// Called when trade closes (default: logging)
-    fn notify_trade(&mut self, trade: &Trade) { ... }
-
-    /// Called once before trading starts
-    fn init(&mut self) { }
+    ) -> Signal {
+        let daily = mtf_candles.get("1d").unwrap();
+        let m15 = mtf_candles.get("15m").unwrap();
+        let m5 = mtf_candles.get("5m").unwrap();
+        // Use all timeframes for decision
+    }
 }
 ```
-
-## Available Strategies
-
-| Strategy | Description | Best Timeframe |
-|----------|-------------|----------------|
-| `volatility_regime` | Volatility clustering breakouts | 1d |
-| `mean_reversion` | Bollinger Band + RSI reversion | 5m, 15m, 1h |
-| `momentum_scalper` | EMA crossover momentum | 5m, 15m |
-| `range_breakout` | N-bar high/low breakouts | 1h, 4h |
-| `vwap_scalper` | VWAP crossover price action | 5m, 15m |
 
 ## Configuration Structure
 
@@ -368,36 +345,80 @@ pub trait Strategy: Send + Sync {
   "exchange": {
     "maker_fee": 0.001,
     "taker_fee": 0.001,
-    "assumed_slippage": 0.001
+    "assumed_slippage": 0.001,
+    "rate_limit": 10
   },
   "trading": {
     "pairs": ["BTCINR", "ETHINR"],
     "initial_capital": 100000,
     "risk_per_trade": 0.15,
     "max_positions": 5,
-    "max_drawdown": 0.20
+    "max_portfolio_heat": 0.30,
+    "max_position_pct": 0.20,
+    "max_drawdown": 0.20,
+    "drawdown_warning": 0.10,
+    "drawdown_critical": 0.15,
+    "consecutive_loss_limit": 3,
+    "consecutive_loss_multiplier": 0.75
   },
   "strategy_name": "volatility_regime",
   "strategy": {
     "timeframe": "1d",
     "atr_period": 14,
-    ...
+    "ema_fast": 8,
+    "ema_slow": 21
   },
   "tax": {
     "tax_rate": 0.30,
-    "tds_rate": 0.01
+    "tds_rate": 0.01,
+    "loss_offset_allowed": false
   },
   "backtest": {
     "data_dir": "../data",
     "results_dir": "../results",
-    "commission": 0.001
+    "start_date": "2022-01-01",
+    "end_date": "2025-12-31"
   },
   "grid": {
-    "param1": [10, 14, 20],
-    "param2": [2.0, 2.5, 3.0]
+    "_optimization": [{ "sharpe_ratio": 0.96, "symbols": [...], ... }],
+    "ema_fast": [8, 13],
+    "ema_slow": [21, 34]
   }
 }
 ```
+
+## Risk Management
+
+The risk manager enforces:
+
+| Rule | Default | Description |
+|------|---------|-------------|
+| Max Drawdown | 20% | Hard halt on trading |
+| Drawdown Warning | 10% | 50% position size reduction |
+| Drawdown Critical | 15% | 25% position size reduction |
+| Consecutive Losses | 3 | 75% position size reduction |
+| Max Positions | 5 | Concurrent open positions |
+| Max Position % | 20% | Single position capital limit |
+| Portfolio Heat | 30% | Total risk exposure limit |
+
+## Exchange Integrations
+
+### CoinDCX (Crypto)
+- HMAC-SHA256 authentication
+- Circuit breaker for fault tolerance
+- Rate limiting (token bucket)
+- Exponential backoff retries
+
+### Zerodha Kite (Equity)
+- OAuth authentication
+- HFT-grade optimizations
+- NSE/BSE support
+- Production-ready, fully decoupled
+
+### Binance (Data Only)
+- Public API, no auth required
+- Historical kline fetching
+- Auto-pagination for large ranges
 
 ## Testing
 
@@ -407,6 +428,13 @@ cargo test --release          # With optimizations
 cargo test -- --nocapture     # Show output
 cargo test strategies::       # Test strategies module
 ```
+
+## Performance
+
+- **Backtest Speed**: 10-100x faster than Python
+- **Parallelization**: Automatic across all CPU cores
+- **Memory**: Windowed history (300-bar lookback)
+- **Release Build**: LTO enabled, single codegen unit
 
 ## License
 
