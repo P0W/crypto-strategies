@@ -40,16 +40,16 @@ pub struct QuickFlipConfig {
 impl Default for QuickFlipConfig {
     fn default() -> Self {
         Self {
-            atr_period: 14,              // 14 days on 1d chart (multi-TF) or 96 bars (single-TF)
-            min_range_pct: 0.25,         // 25% of ATR
-            opening_bars: 1,             // 1x 15m bar (original spec)
-            cooldown_bars: 6,            // 30 minutes on 5m
-            conservative_target: false,  // Use full range
-            use_trend_filter: true,      // Enable trend filter
-            trend_ema_period: 20,        // 20-period EMA
-            use_volume_filter: true,     // Enable volume filter
-            volume_lookback: 20,         // 20 bars for volume average
-            min_volume_multiplier: 1.2,  // 20% above average
+            atr_period: 14,             // 14 days on 1d chart (multi-TF) or 96 bars (single-TF)
+            min_range_pct: 0.25,        // 25% of ATR
+            opening_bars: 1,            // 1x 15m bar (original spec)
+            cooldown_bars: 6,           // 30 minutes on 5m
+            conservative_target: false, // Use full range
+            use_trend_filter: true,     // Enable trend filter
+            trend_ema_period: 20,       // 20-period EMA
+            use_volume_filter: true,    // Enable volume filter
+            volume_lookback: 20,        // 20 bars for volume average
+            min_volume_multiplier: 1.2, // 20% above average
         }
     }
 }

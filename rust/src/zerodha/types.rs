@@ -40,7 +40,7 @@ pub struct Order {
     pub exchange: String,
     pub tradingsymbol: String,
     pub transaction_type: String, // BUY or SELL
-    pub order_type: String, // MARKET, LIMIT, etc.
+    pub order_type: String,       // MARKET, LIMIT, etc.
     pub quantity: i32,
     pub price: Option<f64>,
     pub trigger_price: Option<f64>,

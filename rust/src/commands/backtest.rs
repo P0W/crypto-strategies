@@ -123,20 +123,23 @@ pub fn run(
 
     // Check if strategy requires multiple timeframes
     let required_tfs = strategy.required_timeframes();
-    
+
     let mut backtester = Backtester::new(config.clone(), strategy);
 
     info!("Running backtest...");
     let result = if !required_tfs.is_empty() {
         // Multi-timeframe strategy
-        info!("Multi-timeframe strategy detected, loading timeframes: {:?}", required_tfs);
-        
+        info!(
+            "Multi-timeframe strategy detected, loading timeframes: {:?}",
+            required_tfs
+        );
+
         // Build timeframes list: required TFs + primary timeframe
         let mut all_timeframes: Vec<&str> = required_tfs.clone();
         if !all_timeframes.contains(&timeframe.as_str()) {
             all_timeframes.push(&timeframe);
         }
-        
+
         // Load multi-timeframe data
         let mtf_data = data::load_multi_timeframe(
             &config.backtest.data_dir,
@@ -146,7 +149,7 @@ pub fn run(
             start_date,
             end_date,
         )?;
-        
+
         info!("Loaded multi-timeframe data for {} symbols", mtf_data.len());
         backtester.run_multi_timeframe(mtf_data)
     } else {
@@ -158,7 +161,7 @@ pub fn run(
             start_date,
             end_date,
         )?;
-        
+
         info!("Loaded data for {} symbols", data.len());
         backtester.run(data)
     };

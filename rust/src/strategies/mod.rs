@@ -37,7 +37,7 @@ pub trait Strategy: Send + Sync {
     }
 
     /// Generate trading signal for the given candle data
-    /// 
+    ///
     /// **DEPRECATED in multi-timeframe mode** - Override `generate_signal_mtf` instead
     /// This is called for single-timeframe strategies (when required_timeframes() is empty)
     fn generate_signal(
@@ -48,7 +48,7 @@ pub trait Strategy: Send + Sync {
     ) -> Signal;
 
     /// Generate trading signal using multi-timeframe data
-    /// 
+    ///
     /// Override this for multi-timeframe strategies. Default implementation
     /// calls `generate_signal()` with primary timeframe for backward compatibility.
     fn generate_signal_mtf(

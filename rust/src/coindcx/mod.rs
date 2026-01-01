@@ -80,8 +80,10 @@ pub mod client;
 pub mod types;
 
 // Re-export main types for convenience
+pub use crate::common::{
+    CircuitBreaker, CircuitBreakerConfig, CircuitState, RateLimiter, RateLimiterConfig,
+};
 pub use auth::Credentials;
-pub use crate::common::{CircuitBreaker, CircuitBreakerConfig, CircuitState, RateLimiter, RateLimiterConfig};
 pub use client::{ClientConfig, CoinDCXClient, API_BASE_URL, PUBLIC_BASE_URL};
 
 // Re-export commonly used types

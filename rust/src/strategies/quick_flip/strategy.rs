@@ -1,7 +1,7 @@
 //! Quick Flip (Pattern Scalp) Strategy
 //!
 //! Multi-timeframe range breakout strategy with trend and volume confirmation.
-//! 
+//!
 //! Core Logic (Multi-Timeframe):
 //! 1. Calculate daily ATR from 1d chart (14 period) for volatility measurement
 //! 2. Establish range from 15m chart (N bars, default 1 for original Quick Flip spec)
@@ -58,19 +58,21 @@ impl QuickFlipStrategy {
         if candles.len() < self.config.opening_bars + 1 {
             return (None, None);
         }
-        
+
         // Look at the previous opening_bars (not including current bar)
         let start_idx = candles.len() - self.config.opening_bars - 1;
         let end_idx = candles.len() - 1;
         let window = &candles[start_idx..end_idx];
-        
-        let range_high = window.iter().map(|c| c.high).fold(None, |max, h| {
-            Some(max.map_or(h, |m: f64| m.max(h)))
-        });
-        let range_low = window.iter().map(|c| c.low).fold(None, |min, l| {
-            Some(min.map_or(l, |m: f64| m.min(l)))
-        });
-        
+
+        let range_high = window
+            .iter()
+            .map(|c| c.high)
+            .fold(None, |max, h| Some(max.map_or(h, |m: f64| m.max(h))));
+        let range_low = window
+            .iter()
+            .map(|c| c.low)
+            .fold(None, |min, l| Some(min.map_or(l, |m: f64| m.min(l))));
+
         (range_high, range_low)
     }
 
@@ -147,23 +149,28 @@ impl QuickFlipStrategy {
         let prev_bearish = prev.close < prev.open;
         let prev_body = (prev.open - prev.close).abs();
         let prev_range = prev.high - prev.low;
-        
+
         // Current candle must be bullish (green)
         let current_bullish = current.close > current.open;
         let current_body = (current.close - current.open).abs();
         let current_range = current.high - current.low;
-        
+
         // Both candles must have reasonable bodies (not dojis)
         let prev_has_body = prev_range > 0.0 && prev_body / prev_range > 0.3;
         let current_has_body = current_range > 0.0 && current_body / current_range > 0.3;
-        
+
         // Current candle body must fully engulf previous candle body
         let engulfs = current.open <= prev.close && current.close >= prev.open;
-        
+
         // Current body should be at least as large as previous body
         let current_adequate = current_body >= prev_body * 0.9;
 
-        prev_bearish && current_bullish && prev_has_body && current_has_body && engulfs && current_adequate
+        prev_bearish
+            && current_bullish
+            && prev_has_body
+            && current_has_body
+            && engulfs
+            && current_adequate
     }
 
     /// Check if candle is a bearish engulfing pattern
@@ -191,7 +198,7 @@ impl QuickFlipStrategy {
 
         let closes: Vec<f64> = candles.iter().map(|c| c.close).collect();
         let ema_vals = ema(&closes, self.config.trend_ema_period);
-        
+
         let current_price = candles.last()?.close;
         let current_ema = ema_vals.last()?.as_ref()?;
 
@@ -210,20 +217,21 @@ impl QuickFlipStrategy {
         }
 
         let current_volume = candles.last().map(|c| c.volume).unwrap_or(0.0);
-        
+
         // Calculate average volume over lookback period (excluding current)
-        let start_idx = candles.len().saturating_sub(self.config.volume_lookback + 1);
+        let start_idx = candles
+            .len()
+            .saturating_sub(self.config.volume_lookback + 1);
         let end_idx = candles.len() - 1;
-        
+
         if start_idx >= end_idx {
             return false; // Not enough data
         }
-        
+
         let volume_window = &candles[start_idx..end_idx];
-        
-        let avg_volume = volume_window.iter()
-            .map(|c| c.volume)
-            .sum::<f64>() / volume_window.len() as f64;
+
+        let avg_volume =
+            volume_window.iter().map(|c| c.volume).sum::<f64>() / volume_window.len() as f64;
 
         current_volume >= avg_volume * self.config.min_volume_multiplier
     }
@@ -302,18 +310,20 @@ impl Strategy for QuickFlipStrategy {
             if candles_15m.len() < self.config.opening_bars {
                 return Signal::Flat;
             }
-            
+
             // Use latest N bars on 15m as the range
             let window_start = candles_15m.len().saturating_sub(self.config.opening_bars);
             let window = &candles_15m[window_start..];
-            
-            let high = window.iter().map(|c| c.high).fold(None, |max, h| {
-                Some(max.map_or(h, |m: f64| m.max(h)))
-            });
-            let low = window.iter().map(|c| c.low).fold(None, |min, l| {
-                Some(min.map_or(l, |m: f64| m.min(l)))
-            });
-            
+
+            let high = window
+                .iter()
+                .map(|c| c.high)
+                .fold(None, |max, h| Some(max.map_or(h, |m: f64| m.max(h))));
+            let low = window
+                .iter()
+                .map(|c| c.low)
+                .fold(None, |min, l| Some(min.map_or(l, |m: f64| m.min(l))));
+
             match (high, low) {
                 (Some(h), Some(l)) => (h, l),
                 _ => return Signal::Flat,
@@ -347,22 +357,20 @@ impl Strategy for QuickFlipStrategy {
         let prev = &candles_5m[candles_5m.len() - 2];
 
         // BULLISH ENTRY: Price below 15m range low + bullish pattern + bullish trend
-        if current.close < range_low && trend_bullish {
-            if self.is_hammer(current) || self.is_bullish_engulfing(prev, current) {
+        if current.close < range_low && trend_bullish
+            && (self.is_hammer(current) || self.is_bullish_engulfing(prev, current)) {
                 self.state.write().unwrap().last_signal = Signal::Long;
                 self.state.write().unwrap().last_trade_bar = candles_5m.len();
                 return Signal::Long;
             }
-        }
 
         // BEARISH ENTRY: Price above 15m range high + bearish pattern + bearish trend
-        if current.close > range_high && !trend_bullish {
-            if self.is_inverted_hammer(current) || self.is_bearish_engulfing(prev, current) {
+        if current.close > range_high && !trend_bullish
+            && (self.is_inverted_hammer(current) || self.is_bearish_engulfing(prev, current)) {
                 self.state.write().unwrap().last_signal = Signal::Short;
                 self.state.write().unwrap().last_trade_bar = candles_5m.len();
                 return Signal::Short;
             }
-        }
 
         Signal::Flat
     }
@@ -468,7 +476,7 @@ impl Strategy for QuickFlipStrategy {
         // Stop at the low of the signal candle for Long, high for Short
         let signal_candle = candles.last().unwrap();
         let last_signal = self.state.read().unwrap().last_signal;
-        
+
         match last_signal {
             Signal::Long => signal_candle.low,
             Signal::Short => signal_candle.high,
@@ -481,13 +489,13 @@ impl Strategy for QuickFlipStrategy {
         let state = self.state.read().unwrap();
         let last_signal = state.last_signal;
         drop(state);
-        
+
         // Get current range from rolling window
         let (range_high, range_low) = match self.get_range_from_window(candles) {
             (Some(h), Some(l)) => (h, l),
             _ => return _entry_price * 1.02, // Fallback
         };
-        
+
         match last_signal {
             Signal::Long => {
                 if self.config.conservative_target {
@@ -524,24 +532,28 @@ impl Strategy for QuickFlipStrategy {
             (Some(h), Some(l)) => (h, l),
             _ => return None,
         };
-        
+
         let mid_point = (range_high + range_low) / 2.0;
-        
+
         match position.side {
             crate::Side::Buy => {
                 // For Long: If we've reached the mid-point or moved back inside the range, move to break-even
-                if current_price >= mid_point || (current_price >= range_low && current_price <= range_high) {
+                if current_price >= mid_point
+                    || (current_price >= range_low && current_price <= range_high)
+                {
                     return Some(position.entry_price);
                 }
             }
             crate::Side::Sell => {
                 // For Short: If we've reached the mid-point or moved back inside the range, move to break-even
-                if current_price <= mid_point || (current_price >= range_low && current_price <= range_high) {
+                if current_price <= mid_point
+                    || (current_price >= range_low && current_price <= range_high)
+                {
                     return Some(position.entry_price);
                 }
             }
         }
-        
+
         None
     }
 

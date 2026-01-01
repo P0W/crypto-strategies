@@ -577,18 +577,21 @@ pub fn run(
             };
 
             if should_update {
-                match update_config_with_best(&config_path, best, &grid_keys, start_date, end_date)
-                {
-                    Ok(backup_path) => {
-                        println!("  Config updated: {}", config_path);
-                        if start_date.is_some() || end_date.is_some() {
-                            println!("  Date range saved to backtest section");
-                        }
-                        println!("  Backup saved:   {}", backup_path);
-                    }
-                    Err(e) => {
-                        println!("  Warning: Failed to update config: {}", e);
-                    }
+                let group_idx = *best.params.get("_group_idx").unwrap_or(&0.0) as usize;
+                let symbols: Vec<String> = symbol_groups
+                    .get(group_idx)
+                    .cloned()
+                    .unwrap_or_else(|| config.trading.pairs.clone());
+                match update_config_with_best(
+                    &config_path,
+                    best,
+                    &grid_keys,
+                    &symbols,
+                    start_date,
+                    end_date,
+                ) {
+                    Ok(()) => println!("  Config updated: {}", config_path),
+                    Err(e) => println!("  Warning: Failed to update config: {}", e),
                 }
             }
             println!();
@@ -613,15 +616,14 @@ fn get_metric_value(result: &OptimizationResult, sort_by: &str) -> f64 {
     }
 }
 
-/// Get saved optimization metric from config's _optimization field
+/// Get saved optimization metric from config's grid._optimization field
 fn get_saved_optimization_metric(config: &Config, sort_by: &str) -> Option<f64> {
-    // The _optimization field is stored in the raw JSON, not parsed into Config
-    // We need to read it from the strategy value which contains the full JSON
-    // Actually, we store it at root level, so we need to check the original file
-    // For now, return None - the update function will save metrics for future comparisons
+    // Read from grid._optimization (where optimization metadata is stored)
+    let grid = config.grid.as_ref()?;
+    let opt_value = grid.get("_optimization")?;
+    // The value is stored as Vec<serde_json::Value>, take first element
+    let opt = opt_value.first()?.as_object()?;
 
-    // Try to get from the config's strategy field (where we might have stored it)
-    let opt = config.strategy.get("_optimization")?;
     let metric_name = match sort_by {
         "sharpe" => "sharpe_ratio",
         "return" => "total_return",
@@ -673,49 +675,42 @@ fn run_baseline_backtest(
     })
 }
 
-/// Update config file with best parameters, creating a backup first
+/// Update config file with best parameters
 fn update_config_with_best(
     config_path: &str,
     best: &OptimizationResult,
     grid_keys: &[String],
+    symbols: &[String],
     start_date: Option<DateTime<Utc>>,
     end_date: Option<DateTime<Utc>>,
-) -> Result<String> {
+) -> Result<()> {
     use std::fs;
-    use std::path::Path;
 
-    // Read original config
-    let original_content = fs::read_to_string(config_path)?;
-    let mut config_json: serde_json::Value = serde_json::from_str(&original_content)?;
+    let mut config_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(config_path)?)?;
 
-    // Create backup with timestamp
-    let path = Path::new(config_path);
-    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-    let ext = path.extension().unwrap_or_default().to_string_lossy();
-    let parent = path.parent().unwrap_or(Path::new("."));
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let backup_name = format!("{}_backup_{}.{}", stem, timestamp, ext);
-    let backup_path = parent.join(&backup_name);
-
-    fs::write(&backup_path, &original_content)?;
-
-    // Update strategy section with best params
-    if let Some(strategy) = config_json.get_mut("strategy") {
-        if let Some(obj) = strategy.as_object_mut() {
-            for key in grid_keys {
-                if let Some(value) = best.params.get(key) {
-                    // Preserve integer types where appropriate
-                    if value.fract() == 0.0 && *value >= 0.0 && *value < i64::MAX as f64 {
-                        obj.insert(key.clone(), serde_json::json!(*value as i64));
-                    } else {
-                        obj.insert(key.clone(), serde_json::json!(*value));
-                    }
-                }
+    // Update strategy params
+    if let Some(obj) = config_json
+        .get_mut("strategy")
+        .and_then(|s| s.as_object_mut())
+    {
+        for key in grid_keys {
+            if let Some(&value) = best.params.get(key) {
+                let json_val = if value.fract() == 0.0 && value >= 0.0 && value < i64::MAX as f64 {
+                    serde_json::json!(value as i64)
+                } else {
+                    serde_json::json!(value)
+                };
+                obj.insert(key.clone(), json_val);
             }
+        }
+    }
 
-            // Save optimization metrics for future comparisons
-            // Using _optimization prefix to indicate metadata (won't affect strategy parsing)
-            let optimization_meta = serde_json::json!({
+    // Save optimization metadata in grid section
+    if let Some(obj) = config_json.get_mut("grid").and_then(|g| g.as_object_mut()) {
+        obj.insert(
+            "_optimization".to_string(),
+            serde_json::json!([{
                 "sharpe_ratio": (best.sharpe_ratio * 100.0).round() / 100.0,
                 "total_return": (best.total_return * 10.0).round() / 10.0,
                 "max_drawdown": (best.max_drawdown * 10.0).round() / 10.0,
@@ -723,39 +718,35 @@ fn update_config_with_best(
                 "total_trades": best.total_trades,
                 "calmar_ratio": (best.calmar_ratio * 100.0).round() / 100.0,
                 "expectancy": (best.expectancy * 100.0).round() / 100.0,
+                "symbols": symbols,
                 "optimized_at": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-            });
-            obj.insert("_optimization".to_string(), optimization_meta);
-        }
+            }]),
+        );
     }
 
-    // Update backtest section with date range (if filters were used)
-    if let Some(backtest) = config_json.get_mut("backtest") {
-        if let Some(obj) = backtest.as_object_mut() {
-            if let Some(start) = start_date {
-                obj.insert(
-                    "start_date".to_string(),
-                    serde_json::json!(start.format("%Y-%m-%d").to_string()),
-                );
-            } else {
-                obj.remove("start_date");
-            }
-            if let Some(end) = end_date {
-                obj.insert(
-                    "end_date".to_string(),
-                    serde_json::json!(end.format("%Y-%m-%d").to_string()),
-                );
-            } else {
-                obj.remove("end_date");
-            }
-        }
+    // Update backtest date range
+    if let Some(obj) = config_json
+        .get_mut("backtest")
+        .and_then(|b| b.as_object_mut())
+    {
+        match start_date {
+            Some(d) => obj.insert(
+                "start_date".to_string(),
+                serde_json::json!(d.format("%Y-%m-%d").to_string()),
+            ),
+            None => obj.remove("start_date"),
+        };
+        match end_date {
+            Some(d) => obj.insert(
+                "end_date".to_string(),
+                serde_json::json!(d.format("%Y-%m-%d").to_string()),
+            ),
+            None => obj.remove("end_date"),
+        };
     }
 
-    // Write updated config with pretty formatting
-    let updated_content = serde_json::to_string_pretty(&config_json)?;
-    fs::write(config_path, updated_content)?;
-
-    Ok(backup_path.to_string_lossy().to_string())
+    fs::write(config_path, serde_json::to_string_pretty(&config_json)?)?;
+    Ok(())
 }
 
 #[derive(Clone)]

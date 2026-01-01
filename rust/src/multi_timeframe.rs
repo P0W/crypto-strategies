@@ -14,7 +14,7 @@ pub struct MultiTimeframeData {
     /// Key: timeframe string (e.g., "1d", "15m", "5m")
     /// Value: Vector of candles for that timeframe
     timeframes: HashMap<String, Vec<Candle>>,
-    
+
     /// Primary timeframe used for iteration (typically the finest granularity)
     primary_timeframe: String,
 }
@@ -81,20 +81,17 @@ pub struct MultiTimeframeCandles<'a> {
     /// Map of timeframe to candle slices
     /// These are windowed slices, not the full history
     timeframes: HashMap<String, &'a [Candle]>,
-    
+
     /// Primary timeframe
     primary_timeframe: String,
-    
+
     /// Current datetime (from primary timeframe's last candle)
     current_datetime: DateTime<Utc>,
 }
 
 impl<'a> MultiTimeframeCandles<'a> {
     /// Create new multi-timeframe candles view
-    pub fn new(
-        primary_timeframe: impl Into<String>,
-        current_datetime: DateTime<Utc>,
-    ) -> Self {
+    pub fn new(primary_timeframe: impl Into<String>, current_datetime: DateTime<Utc>) -> Self {
         Self {
             timeframes: HashMap::new(),
             primary_timeframe: primary_timeframe.into(),
@@ -210,20 +207,13 @@ mod tests {
     #[test]
     fn test_multi_timeframe_data() {
         let mut mtf = MultiTimeframeData::new("5m");
-        
+
         let candles_5m = vec![
-            Candle::new(
-                chrono::Utc::now(),
-                100.0,
-                110.0,
-                90.0,
-                105.0,
-                1000.0,
-            ).unwrap(), // Unwrap the Result
+            Candle::new(chrono::Utc::now(), 100.0, 110.0, 90.0, 105.0, 1000.0).unwrap(), // Unwrap the Result
         ];
-        
+
         mtf.add_timeframe("5m", candles_5m);
-        
+
         assert_eq!(mtf.len(), 1);
         assert!(mtf.has_timeframe("5m"));
         assert!(!mtf.has_timeframe("1d"));

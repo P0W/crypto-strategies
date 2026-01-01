@@ -25,7 +25,7 @@
     },
 
     "strategy": {
-        "timeframe": "5m",
+        "timeframe": "15m",
         "atr_period": 14,
         "min_range_pct": 0.25,
         "opening_bars": 1,
