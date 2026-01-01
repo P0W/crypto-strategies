@@ -1,25 +1,23 @@
 //! Quick Flip (Pattern Scalp) Configuration
 //!
-//! Minimal parameters for a simple time-of-day range breakout strategy
+//! Minimal parameters for range breakout with pattern confirmation
+//! Adapted for 24/7 crypto markets
 
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuickFlipConfig {
-    /// Daily ATR period for volatility filter (default: 14)
-    pub daily_atr_period: usize,
+    /// Range lookback period in bars (default: 3 = 15 min on 5m chart)
+    pub range_lookback: usize,
 
-    /// Minimum range as percentage of daily ATR (default: 0.25 = 25%)
+    /// ATR period for volatility measurement (default: 14)
+    pub atr_period: usize,
+
+    /// Minimum range as percentage of ATR (default: 0.25 = 25%)
     pub min_range_pct: f64,
 
-    /// Session start time in minutes from midnight EST (9:30 AM EST = 570)
-    pub session_start_minutes: usize,
-
-    /// Validity window in minutes from session start (default: 90)
-    pub validity_window_minutes: usize,
-
-    /// Entry timeframe in minutes (1 or 5 minutes)
-    pub entry_timeframe_minutes: usize,
+    /// Cooldown bars between trades (default: 5)
+    pub cooldown_bars: usize,
 
     /// Use conservative target (50% of range) vs full range (default: false = full range)
     pub conservative_target: bool,
@@ -28,11 +26,10 @@ pub struct QuickFlipConfig {
 impl Default for QuickFlipConfig {
     fn default() -> Self {
         Self {
-            daily_atr_period: 14,
+            range_lookback: 3,
+            atr_period: 14,
             min_range_pct: 0.25,
-            session_start_minutes: 570, // 9:30 AM EST
-            validity_window_minutes: 90,
-            entry_timeframe_minutes: 5,
+            cooldown_bars: 5,
             conservative_target: false,
         }
     }
