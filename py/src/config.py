@@ -130,11 +130,7 @@ class Config:
             if "strategy" in data:
                 # Handle strategy config
                 strat_data = data["strategy"]
-                # Backward compatibility: check for old 'strategy_name' at root level
-                strategy_name = strat_data.get("name")
-                if not strategy_name and "strategy_name" in data:
-                    strategy_name = data["strategy_name"]
-                config.strategy.name = strategy_name or "default"
+                config.strategy.name = strat_data.get("name", "default")
 
                 # Load defaults for this strategy
                 defaults = get_strategy_defaults(config.strategy.name)
