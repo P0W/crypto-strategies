@@ -40,6 +40,7 @@
     ]
   },
   "strategy": {
+    "name": "vwap_scalper",
     "allow_short": false,
     "atr_period": 14,
     "cooldown_bars": 2,
@@ -54,7 +55,6 @@
     "volume_period": 20,
     "volume_threshold": 1.0
   },
-  "strategy_name": "vwap_scalper",
   "tax": {
     "loss_offset_allowed": false,
     "tax_rate": 0.3,

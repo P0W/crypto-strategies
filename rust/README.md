@@ -361,8 +361,8 @@ impl Strategy for QuickFlipStrategy {
     "consecutive_loss_limit": 3,
     "consecutive_loss_multiplier": 0.75
   },
-  "strategy_name": "volatility_regime",
   "strategy": {
+    "name": "volatility_regime",
     "timeframe": "1d",
     "atr_period": 14,
     "ema_fast": 8,

@@ -1,8 +1,6 @@
 {
     "_comment": "Momentum Scalper - Optimized for short timeframes (5m, 15m, 1h)",
 
-    "strategy_name": "momentum_scalper",
-
     "exchange": {
         "maker_fee": 0.001,
         "taker_fee": 0.001,
@@ -30,6 +28,7 @@
     },
 
     "strategy": {
+        "name": "momentum_scalper",
         "timeframe": "15m",
         "ema_fast": 9,
         "ema_slow": 21,

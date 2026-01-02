@@ -181,8 +181,7 @@ pub trait Strategy: Send + Sync {
 - JSON-based config structure:
   - `exchange`: fees, slippage, rate limits
   - `trading`: pairs, capital, risk limits, drawdown thresholds
-  - `strategy_name`: which strategy to use
-  - `strategy`: strategy-specific parameters (parsed into concrete types)
+  - `strategy`: strategy-specific parameters (parsed into concrete types), including `name` field
   - `tax`: India-specific tax rules (30% flat tax, 1% TDS)
   - `backtest`: data paths, date range
 

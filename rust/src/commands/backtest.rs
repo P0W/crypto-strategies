@@ -22,7 +22,10 @@ pub fn run(
     // Apply overrides
     if let Some(strategy) = strategy_override {
         info!("Overriding strategy to: {}", strategy);
-        config.strategy_name = strategy;
+        // Update the strategy name in the strategy object
+        if let Some(obj) = config.strategy.as_object_mut() {
+            obj.insert("name".to_string(), serde_json::json!(strategy));
+        }
     }
 
     if let Some(capital) = capital_override {
@@ -118,7 +121,7 @@ pub fn run(
     }
 
     // Create strategy based on config
-    info!("Creating strategy: {}", config.strategy_name);
+    info!("Creating strategy: {}", config.strategy_name());
     let strategy = strategies::create_strategy(&config)?;
 
     // Check if strategy requires multiple timeframes

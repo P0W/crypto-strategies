@@ -154,11 +154,12 @@ fn get_registry() -> &'static RwLock<HashMap<&'static str, StrategyFactory>> {
 pub fn create_strategy(config: &Config) -> Result<Box<dyn Strategy>> {
     let registry = get_registry().read().unwrap();
 
-    let factory = registry.get(config.strategy_name.as_str()).ok_or_else(|| {
+    let strategy_name = config.strategy_name();
+    let factory = registry.get(strategy_name.as_str()).ok_or_else(|| {
         let available: Vec<_> = registry.keys().copied().collect();
         anyhow::anyhow!(
             "Unknown strategy: '{}'. Available: {}",
-            config.strategy_name,
+            strategy_name,
             available.join(", ")
         )
     })?;
