@@ -44,12 +44,12 @@ impl Config {
     }
 
     /// Get strategy name from strategy config
-    /// Returns the strategy name from the strategy.name field, or "volatility_regime" as default
+    /// Panics if name is not set in the strategy section
     pub fn strategy_name(&self) -> String {
         self.strategy
             .get("name")
             .and_then(|v| v.as_str())
-            .unwrap_or("volatility_regime")
+            .expect("FATAL: 'name' is required in the 'strategy' section of config. Example: \"strategy\": { \"name\": \"volatility_regime\", ... }")
             .to_string()
     }
 
