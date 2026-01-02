@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use crypto_strategies::monthly_pnl::MonthlyPnLMatrix;
 use crypto_strategies::strategies;
 use crypto_strategies::{backtest::Backtester, data, Config};
 use tracing::{debug, info};
@@ -202,6 +203,12 @@ pub fn run(
     );
     println!("Tax (30%):          ₹{:.2}", result.metrics.tax_amount);
     println!("{}", "=".repeat(60));
+
+    // Generate and display monthly P&L matrix
+    let monthly_matrix = MonthlyPnLMatrix::from_trades(&result.trades);
+    
+    // Use colored output for terminal display
+    print!("{}", monthly_matrix.render_colored());
 
     info!("Backtest completed successfully");
 
