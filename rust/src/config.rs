@@ -16,8 +16,6 @@ use crate::Symbol;
 pub struct Config {
     pub exchange: ExchangeConfig,
     pub trading: TradingConfig,
-    #[serde(default = "default_strategy_name")]
-    pub strategy_name: String,
     pub strategy: serde_json::Value,
     pub tax: TaxConfig,
     pub backtest: BacktestConfig,
@@ -25,10 +23,6 @@ pub struct Config {
     /// Each key is a strategy param name, value is array of values to test
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid: Option<HashMap<String, Vec<serde_json::Value>>>,
-}
-
-fn default_strategy_name() -> String {
-    "volatility_regime".to_string()
 }
 
 impl Config {
@@ -47,6 +41,16 @@ impl Config {
         }
 
         Ok(config)
+    }
+
+    /// Get strategy name from strategy config
+    /// Returns the strategy name from the strategy.name field, or "volatility_regime" as default
+    pub fn strategy_name(&self) -> String {
+        self.strategy
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("volatility_regime")
+            .to_string()
     }
 
     /// Get timeframe from strategy config
@@ -72,8 +76,7 @@ impl Default for Config {
         Config {
             exchange: ExchangeConfig::default(),
             trading: TradingConfig::default(),
-            strategy_name: "volatility_regime".to_string(),
-            strategy: serde_json::json!({}),
+            strategy: serde_json::json!({"name": "volatility_regime"}),
             tax: TaxConfig::default(),
             backtest: BacktestConfig::default(),
             grid: None,

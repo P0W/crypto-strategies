@@ -543,7 +543,7 @@ fn test_trade_return_pct() {
 fn test_default_config() {
     let config = Config::default();
 
-    assert_eq!(config.strategy_name, "volatility_regime");
+    assert_eq!(config.strategy_name(), "volatility_regime");
     assert!(config.trading.initial_capital > 0.0);
     assert!(config.trading.risk_per_trade > 0.0);
 }

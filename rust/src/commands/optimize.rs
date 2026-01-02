@@ -137,7 +137,7 @@ pub fn run(
         timeframes_parsed.unwrap_or_else(|| vec![config.timeframe()]);
 
     info!("Timeframes to test: {:?}", timeframes_to_test);
-    info!("Strategy: {}", config.strategy_name);
+    info!("Strategy: {}", config.strategy_name());
 
     // Collect all unique symbols across all groups
     let all_symbols: Vec<Symbol> = symbol_groups
@@ -351,7 +351,7 @@ pub fn run(
 
     // Print summary
     println!();
-    println!("  Strategy      {}", config.strategy_name);
+    println!("  Strategy      {}", config.strategy_name());
     println!("  Symbols       {} group(s)", symbol_groups.len());
     println!("  Timeframes    {}", timeframes_to_test.join(", "));
     if let Some(ref start) = start_date {

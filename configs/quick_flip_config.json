@@ -1,6 +1,4 @@
 {
-    "strategy_name": "quick_flip",
-
     "exchange": {
         "maker_fee": 0.001,
         "taker_fee": 0.001,
@@ -25,6 +23,7 @@
     },
 
     "strategy": {
+        "name": "quick_flip",
         "timeframe": "5m",
         "atr_period": 14,
         "min_range_pct": 0.25,

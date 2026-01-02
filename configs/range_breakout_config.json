@@ -1,6 +1,4 @@
 {
-    "strategy_name": "range_breakout",
-
     "exchange": {
         "maker_fee": 0.001,
         "taker_fee": 0.001,
@@ -25,6 +23,7 @@
     },
 
     "strategy": {
+        "name": "range_breakout",
         "timeframe": "15m",
         "lookback": 20,
         "atr_period": 14,

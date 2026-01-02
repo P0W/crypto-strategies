@@ -616,7 +616,7 @@ async fn run_async(
         mode_str
     );
     info!("╠══════════════════════════════════════════════════════════════╣");
-    info!("║ Strategy: {:<50} ║", config.strategy_name);
+    info!("║ Strategy: {:<50} ║", config.strategy_name());
     info!("║ Pairs: {:<53} ║", config.trading.pairs.join(", "));
     info!("║ Timeframe: {:<49} ║", config.timeframe());
     info!(

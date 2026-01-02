@@ -59,6 +59,7 @@
     ]
   },
   "strategy": {
+    "name": "volatility_regime",
     "adx_period": 14,
     "adx_threshold": 20,
     "atr_period": 14,
@@ -75,7 +76,6 @@
     "trailing_atr_multiple": 1.5,
     "volatility_lookback": 20
   },
-  "strategy_name": "volatility_regime",
   "tax": {
     "loss_offset_allowed": false,
     "tax_rate": 0.3,

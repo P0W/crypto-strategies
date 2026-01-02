@@ -8,8 +8,6 @@
         "total_trades": 61
     },
 
-    "strategy_name": "mean_reversion",
-
     "exchange": {
         "maker_fee": 0.001,
         "taker_fee": 0.001,
@@ -37,6 +35,7 @@
     },
 
     "strategy": {
+        "name": "mean_reversion",
         "timeframe": "4h",
         "bb_period": 25,
         "bb_std": 1.5,
