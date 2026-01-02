@@ -539,23 +539,6 @@ fn test_trade_return_pct() {
 // Config Tests
 // =============================================================================
 
-#[test]
-fn test_default_config() {
-    let config = Config::default();
-
-    assert_eq!(config.strategy_name(), "volatility_regime");
-    assert!(config.trading.initial_capital > 0.0);
-    assert!(config.trading.risk_per_trade > 0.0);
-}
-
-#[test]
-fn test_trading_config_symbols() {
-    let config = Config::default();
-    let symbols = config.trading.symbols();
-
-    assert!(!symbols.is_empty());
-}
-
 // =============================================================================
 // Cache Tests
 // =============================================================================
@@ -1146,7 +1129,7 @@ async fn test_download_and_analyze() {
 #[tokio::test]
 async fn test_sharpe_ratio_excludes_zero_return_days() {
     use crypto_strategies::backtest::Backtester;
-    use crypto_strategies::config::Config;
+    use crypto_strategies::config::{BacktestConfig, Config, ExchangeConfig, TaxConfig, TradingConfig};
     use crypto_strategies::data::CoinDCXDataFetcher;
     use crypto_strategies::strategies::volatility_regime::{
         VolatilityRegimeConfig, VolatilityRegimeStrategy,
@@ -1180,7 +1163,14 @@ async fn test_sharpe_ratio_excludes_zero_return_days() {
     }
 
     // Create config and strategy with less restrictive params to get more trades
-    let mut config = Config::default();
+    let mut config = Config {
+        exchange: ExchangeConfig::default(),
+        trading: TradingConfig::default(),
+        strategy: serde_json::json!({"name": "volatility_regime", "timeframe": "1d"}),
+        tax: TaxConfig::default(),
+        backtest: BacktestConfig::default(),
+        grid: None,
+    };
     config.trading.initial_capital = 100_000.0;
     config.trading.risk_per_trade = 0.02;
 
