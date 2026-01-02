@@ -71,19 +71,6 @@ impl Config {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            exchange: ExchangeConfig::default(),
-            trading: TradingConfig::default(),
-            strategy: serde_json::json!({"name": "volatility_regime"}),
-            tax: TaxConfig::default(),
-            backtest: BacktestConfig::default(),
-            grid: None,
-        }
-    }
-}
-
 /// Exchange configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExchangeConfig {
