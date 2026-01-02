@@ -75,6 +75,27 @@ cargo run -- backtest --config ../configs/sample_config.json --capital 50000
 cargo run -- backtest -v
 ```
 
+**Monthly P&L Matrix**: The backtest output now includes a professional month-on-month profit/loss matrix, displaying:
+- Monthly P&L for each year in tabular format
+- Color-coded profits (green) and losses (red) 
+- Yearly totals and monthly win rate statistics
+- Easy visualization of seasonal patterns and consistency
+
+Example output:
+```
+========================================================================================================================
+MONTHLY P&L MATRIX (₹)
+========================================================================================================================
+  Year │        Jan │        Feb │        Mar │        Apr │        May │        Jun │        Jul │        Aug │        Sep │        Oct │        Nov │        Dec │        Total
+------------------------------------------------------------------------------------------------------------------------
+  2023 │     910.62 │    -484.15 │    1562.64 │            │            │            │            │            │    -651.66 │    -536.11 │    2331.11 │            │      3132.45
+  2024 │            │            │            │            │            │            │            │            │    1245.24 │            │     189.38 │            │      1434.63
+========================================================================================================================
+Total P&L: ₹4567.08
+Monthly Win Rate: 66.7% (6 profitable / 3 losing / 9 total months)
+========================================================================================================================
+```
+
 ### Optimization
 
 Grid parameters are defined in your config's `grid` section:
