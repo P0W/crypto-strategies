@@ -591,7 +591,7 @@ mod tests {
     async fn test_circuit_breaker_state() {
         let client = CoinDCXClient::new("test_key", "test_secret");
         let state = client.circuit_breaker_state().await;
-        assert_eq!(state, super::super::circuit_breaker::CircuitState::Closed);
+        assert_eq!(state, crate::common::CircuitState::Closed);
     }
 
     #[tokio::test]
@@ -611,7 +611,7 @@ mod tests {
 
         // Should be closed again
         let state = client.circuit_breaker_state().await;
-        assert_eq!(state, super::super::circuit_breaker::CircuitState::Closed);
+        assert_eq!(state, crate::common::CircuitState::Closed);
     }
 
     #[test]

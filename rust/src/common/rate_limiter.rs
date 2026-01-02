@@ -45,7 +45,7 @@ impl RateLimiterConfig {
 /// # Example
 ///
 /// ```
-/// use crypto_strategies::coindcx::rate_limiter::{RateLimiter, RateLimiterConfig};
+/// use crypto_strategies::common::{RateLimiter, RateLimiterConfig};
 ///
 /// #[tokio::main]
 /// async fn main() {

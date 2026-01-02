@@ -72,7 +72,7 @@
     "max_portfolio_heat": 0.2,
     "max_position_pct": 0.12,
     "max_positions": 3,
-    "pairs": [
+    "symbols": [
       "BTCINR",
       "ETHINR",
       "SOLINR",

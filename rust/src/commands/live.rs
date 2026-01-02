@@ -167,7 +167,7 @@ impl LiveTrader {
     }
 
     async fn fetch_candles(&mut self) -> Result<()> {
-        for pair in &self.config.trading.pairs {
+        for pair in &self.config.trading.symbols {
             let symbol = Symbol::new(pair);
 
             match self.exchange.get_ticker(pair).await {
@@ -216,7 +216,7 @@ impl LiveTrader {
 
         let mut total_value = self.paper_cash;
 
-        for pair in self.config.trading.pairs.clone() {
+        for pair in self.config.trading.symbols.clone() {
             let symbol = Symbol::new(&pair);
 
             let candles = match self.candle_cache.get(&symbol) {
@@ -537,7 +537,7 @@ impl LiveTrader {
             cash: self.paper_cash,
             positions_value: portfolio_value - self.paper_cash,
             open_positions: self.positions.len() as i32,
-            last_processed_symbols: self.config.trading.pairs.clone(),
+            last_processed_symbols: self.config.trading.symbols.clone(),
             drawdown_pct: self.risk_manager.current_drawdown() * 100.0,
             consecutive_losses: self.risk_manager.consecutive_losses as i32,
             paper_mode: self.paper_mode,
@@ -617,7 +617,7 @@ async fn run_async(
     );
     info!("╠══════════════════════════════════════════════════════════════╣");
     info!("║ Strategy: {:<50} ║", config.strategy_name());
-    info!("║ Pairs: {:<53} ║", config.trading.pairs.join(", "));
+    info!("║ Symbols: {:<51} ║", config.trading.symbols.join(", "));
     info!("║ Timeframe: {:<49} ║", config.timeframe());
     info!(
         "║ Initial Capital: Rs {:<39.2} ║",

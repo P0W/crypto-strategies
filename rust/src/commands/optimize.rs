@@ -265,7 +265,7 @@ pub fn run(
         symbol_groups_flat.push(group_name.clone());
 
         let mut task_config = config.clone();
-        task_config.trading.pairs = symbols_vec.clone();
+        task_config.trading.symbols = symbols_vec.clone();
 
         for timeframe in &timeframes_to_test {
             task_config.set_timeframe(timeframe);
@@ -581,7 +581,7 @@ pub fn run(
                 let symbols: Vec<String> = symbol_groups
                     .get(group_idx)
                     .cloned()
-                    .unwrap_or_else(|| config.trading.pairs.clone());
+                    .unwrap_or_else(|| config.trading.symbols.clone());
                 match update_config_with_best(
                     &config_path,
                     best,
@@ -704,6 +704,15 @@ fn update_config_with_best(
                 obj.insert(key.clone(), json_val);
             }
         }
+    }
+
+    // Update trading.symbols with best symbols (also remove old "pairs" key if present)
+    if let Some(obj) = config_json
+        .get_mut("trading")
+        .and_then(|t| t.as_object_mut())
+    {
+        obj.remove("pairs"); // Remove old key if present
+        obj.insert("symbols".to_string(), serde_json::json!(symbols));
     }
 
     // Save optimization metadata in grid section

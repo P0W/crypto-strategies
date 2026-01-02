@@ -10,7 +10,7 @@ use crypto_strategies::strategies::volatility_regime::{
     VolatilityRegimeConfig, VolatilityRegimeStrategy,
 };
 use crypto_strategies::strategies::Strategy;
-use crypto_strategies::{Candle, Config, Position, Side, Signal, Symbol, Trade};
+use crypto_strategies::{Candle, Position, Side, Signal, Symbol, Trade};
 
 // =============================================================================
 // Test Utilities
@@ -1129,7 +1129,9 @@ async fn test_download_and_analyze() {
 #[tokio::test]
 async fn test_sharpe_ratio_excludes_zero_return_days() {
     use crypto_strategies::backtest::Backtester;
-    use crypto_strategies::config::{BacktestConfig, Config, ExchangeConfig, TaxConfig, TradingConfig};
+    use crypto_strategies::config::{
+        BacktestConfig, Config, ExchangeConfig, TaxConfig, TradingConfig,
+    };
     use crypto_strategies::data::CoinDCXDataFetcher;
     use crypto_strategies::strategies::volatility_regime::{
         VolatilityRegimeConfig, VolatilityRegimeStrategy,

@@ -1,13 +1,5 @@
 {
     "_comment": "Mean Reversion Scalper - Optimized for daily timeframes. For shorter timeframes (1h, 4h), consider tighter bb_std (1.5-2.0) and higher rsi_oversold (35-40) to reduce false signals. 15m timeframe not recommended due to high transaction costs and noise.",
-    "_performance": {
-        "sharpe_ratio": -0.38,
-        "total_return": "4.51%",
-        "max_drawdown": "7.59%",
-        "win_rate": "59.02%",
-        "total_trades": 61
-    },
-
     "exchange": {
         "maker_fee": 0.001,
         "taker_fee": 0.001,
@@ -16,7 +8,7 @@
     },
 
     "trading": {
-        "pairs": ["BTCINR", "ETHINR", "SOLINR", "BNBINR", "XRPINR"],
+        "symbols": ["BTCINR", "ETHINR", "SOLINR", "BNBINR", "XRPINR"],
         "initial_capital": 100000,
 
         "risk_per_trade": 0.10,

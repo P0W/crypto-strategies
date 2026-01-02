@@ -93,13 +93,12 @@
     "max_portfolio_heat": 0.3,
     "max_position_pct": 0.2,
     "max_positions": 5,
-    "pairs": [
-      "BTCINR",
-      "ETHINR",
-      "SOLINR",
-      "BNBINR",
-      "XRPINR"
-    ],
+        "symbols": [
+          "MATICINR",
+          "BNBINR",
+          "BTCINR",
+          "SOLINR"
+        ],
     "risk_per_trade": 0.15
   }
 }

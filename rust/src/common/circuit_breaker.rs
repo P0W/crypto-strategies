@@ -70,7 +70,7 @@ impl CircuitBreakerConfig {
 ///
 /// ```
 /// use std::time::Duration;
-/// use crypto_strategies::coindcx::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
+/// use crypto_strategies::common::{CircuitBreaker, CircuitBreakerConfig, CircuitState};
 ///
 /// let config = CircuitBreakerConfig::default()
 ///     .with_failure_threshold(3)

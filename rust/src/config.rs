@@ -100,7 +100,7 @@ impl Default for ExchangeConfig {
 /// Trading configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingConfig {
-    pub pairs: Vec<String>,
+    pub symbols: Vec<String>,
     pub initial_capital: f64,
     pub risk_per_trade: f64,
     pub max_positions: usize,
@@ -118,7 +118,7 @@ pub struct TradingConfig {
 impl Default for TradingConfig {
     fn default() -> Self {
         TradingConfig {
-            pairs: vec![
+            symbols: vec![
                 "BTCINR".to_string(),
                 "ETHINR".to_string(),
                 "SOLINR".to_string(),
@@ -143,7 +143,10 @@ impl Default for TradingConfig {
 
 impl TradingConfig {
     pub fn symbols(&self) -> Vec<Symbol> {
-        self.pairs.iter().map(|s| Symbol::new(s.clone())).collect()
+        self.symbols
+            .iter()
+            .map(|s| Symbol::new(s.clone()))
+            .collect()
     }
 }
 

@@ -7,7 +7,7 @@
     },
 
     "trading": {
-        "pairs": ["BTCINR", "ETHINR", "SOLINR", "BNBINR", "XRPINR"],
+        "symbols": ["BTCINR", "ETHINR", "SOLINR", "BNBINR", "XRPINR"],
         "initial_capital": 100000,
         "risk_per_trade": 0.05,
         "max_positions": 3,
