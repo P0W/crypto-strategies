@@ -270,15 +270,23 @@ impl Strategy for MomentumScalperStrategy {
             return Signal::Long;
         }
 
-        // Entry logic - check EMA crossover
+        // Entry logic - check EMA crossover OR strong alignment
         let crossover = self.check_ema_crossover(candles);
+        let alignment = self.check_ema_alignment(candles);
 
-        // Only enter on fresh crossover
-        if crossover.is_none() {
+        // Enter on crossover, or if already in strong trend alignment
+        let signal = if let Some(cross_signal) = crossover {
+            cross_signal
+        } else if let Some(align_signal) = alignment {
+            // Enter on strong alignment if ADX is high (trending market)
+            if self.check_adx_strength(candles) {
+                align_signal
+            } else {
+                return Signal::Flat;
+            }
+        } else {
             return Signal::Flat;
-        }
-
-        let signal = crossover.unwrap();
+        };
 
         // Filter: trade with trend
         if self.config.trade_with_trend {
