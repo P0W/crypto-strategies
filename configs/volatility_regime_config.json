@@ -15,20 +15,19 @@
   "grid": {
     "_optimization": [
       {
-        "calmar_ratio": 1.39,
-        "expectancy": 1852.73,
+        "calmar_ratio": 0.86,
+        "expectancy": 1154.98,
         "max_drawdown": 13.6,
-        "optimized_at": "2026-01-01 22:41:43",
-        "sharpe_ratio": 0.92,
+        "optimized_at": "2026-01-03 07:56:56",
+        "sharpe_ratio": 0.55,
         "symbols": [
-          "MATICINR",
           "BNBINR",
           "BTCINR",
           "SOLINR"
         ],
-        "total_return": 100.2,
-        "total_trades": 55,
-        "win_rate": 47.3
+        "total_return": 55.36,
+        "total_trades": 49,
+        "win_rate": 44.9
       }
     ],
     "adx_threshold": [
@@ -94,7 +93,6 @@
     "max_position_pct": 0.2,
     "max_positions": 5,
         "symbols": [
-          "MATICINR",
           "BNBINR",
           "BTCINR",
           "SOLINR"

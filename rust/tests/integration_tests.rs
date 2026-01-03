@@ -1138,6 +1138,7 @@ async fn test_sharpe_ratio_excludes_zero_return_days() {
     };
     use std::collections::HashMap;
     use std::env::temp_dir;
+    use crypto_strategies::multi_timeframe::MultiTimeframeData;
 
     let temp_data_dir = temp_dir().join("crypto_test_sharpe");
     let _guard = TempDirGuard(temp_data_dir.clone());
@@ -1184,11 +1185,15 @@ async fn test_sharpe_ratio_excludes_zero_return_days() {
     };
     let strategy = VolatilityRegimeStrategy::new(strategy_config);
 
-    // Run backtest
+    // Run backtest using MultiTimeframeData
     let mut backtester = Backtester::new(config, Box::new(strategy));
     let symbol = Symbol::new("BTCINR");
     let mut data = HashMap::new();
-    data.insert(symbol.clone(), candles.clone());
+    
+    // Create MultiTimeframeData for the symbol
+    let mut mtf_data = MultiTimeframeData::new("1d");
+    mtf_data.add_timeframe("1d", candles.clone());
+    data.insert(symbol.clone(), mtf_data);
 
     let result = backtester.run(data);
 
