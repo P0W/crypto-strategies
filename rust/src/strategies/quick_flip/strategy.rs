@@ -275,9 +275,27 @@ impl Strategy for QuickFlipStrategy {
         let curr = &candles[candles.len() - 1];
         let prev = &candles[candles.len() - 2];
 
-        let touch_threshold = range_size * 0.20;
+        // STRATEGY: Quick Flip = trade BOTH reversals AND breakouts
+        // This generates more trades by capturing both mean reversion and momentum
+        
+        // BREAKOUT LONG: Price breaks above range high with momentum
+        let breakout_long = curr.close > range_high && Self::is_bullish(curr) && Self::is_strong_candle(curr);
+        if breakout_long {
+            self.state.last_signal.set(Signal::Long);
+            self.state.last_trade_bar.set(current_bar);
+            return Signal::Long;
+        }
 
-        // BULLISH: Near range low with bullish pattern
+        // BREAKOUT SHORT: Price breaks below range low with momentum
+        let breakout_short = curr.close < range_low && Self::is_bearish(curr) && Self::is_strong_candle(curr);
+        if breakout_short {
+            self.state.last_signal.set(Signal::Short);
+            self.state.last_trade_bar.set(current_bar);
+            return Signal::Short;
+        }
+
+        // REVERSAL LONG: Price near/below range low, bullish candle
+        let touch_threshold = range_size * 0.30;  // 30% threshold for more signals
         let near_low = curr.close <= range_low + touch_threshold || curr.low <= range_low;
         if near_low && Self::is_bullish_pattern(prev, curr) {
             self.state.last_signal.set(Signal::Long);
@@ -285,7 +303,7 @@ impl Strategy for QuickFlipStrategy {
             return Signal::Long;
         }
 
-        // BEARISH: Near range high with bearish pattern
+        // REVERSAL SHORT: Price near/above range high, bearish candle
         let near_high = curr.close >= range_high - touch_threshold || curr.high >= range_high;
         if near_high && Self::is_bearish_pattern(prev, curr) {
             self.state.last_signal.set(Signal::Short);
