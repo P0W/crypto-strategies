@@ -1,5 +1,5 @@
 {
-  "_comment": "VWAP Scalper - Simple price action around VWAP for short timeframes",
+  "_comment": "VWAP Scalper - STRATEGY NOT PROFITABLE on crypto data. Tested on 1d, 4h with various parameters. Best Sharpe: -0.86. Strategy works better in high-volume equity markets with clear intraday trends.",
   "backtest": {
     "commission": 0.001,
     "data_dir": "../data",
@@ -49,7 +49,7 @@
     "require_volume": false,
     "stop_atr_multiple": 1.5,
     "target_atr_multiple": 3,
-    "timeframe": "15m",
+    "timeframe": "5m",
     "trailing_activation": 1.0,
     "trailing_atr_multiple": 1.0,
     "volume_period": 20,

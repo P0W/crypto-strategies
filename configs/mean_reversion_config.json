@@ -1,5 +1,5 @@
 {
-    "_comment": "Mean Reversion Scalper - Optimized for daily timeframes. For shorter timeframes (1h, 4h), consider tighter bb_std (1.5-2.0) and higher rsi_oversold (35-40) to reduce false signals. 15m timeframe not recommended due to high transaction costs and noise.",
+    "_comment": "Mean Reversion Scalper - STRATEGY NOT PROFITABLE on crypto data. Tested on 1d and 4h with various parameters. Best Sharpe: -1.20. Consider for sideways/ranging markets only. For shorter timeframes (1h, 4h), consider tighter bb_std (1.5-2.0) and higher rsi_oversold (35-40) to reduce false signals. 15m timeframe not recommended due to high transaction costs and noise.",
     "exchange": {
         "maker_fee": 0.001,
         "taker_fee": 0.001,
@@ -69,14 +69,14 @@
     },
 
     "grid": {
-        "bb_period": [15, 20, 25],
+        "bb_period": [20],
         "bb_std": [1.5, 2.0, 2.5],
-        "bb_penetration": [0.0, 0.1, 0.2],
-        "rsi_period": [10, 14, 21],
-        "rsi_oversold": [30.0, 35.0, 40.0],
-        "rsi_overbought": [60.0, 65.0, 70.0],
-        "atr_period": [10, 14, 20],
-        "stop_atr_multiple": [1.5, 2.0, 2.5],
-        "trailing_atr_multiple": [0.75, 1.0, 1.5]
+        "bb_penetration": [0.0, 0.1],
+        "rsi_period": [14],
+        "rsi_oversold": [30.0, 35.0],
+        "rsi_overbought": [65.0, 70.0],
+        "atr_period": [14],
+        "stop_atr_multiple": [1.5, 2.0],
+        "trailing_atr_multiple": [1.0, 1.5]
     }
 }
