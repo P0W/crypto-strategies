@@ -300,17 +300,6 @@ impl Backtester {
                         }
                     }
 
-                    // Debug: log once per 1000 bars for first symbol
-                    if bar_idx % 1000 == 0 && symbol.0.contains("BTC") {
-                        tracing::debug!(
-                            "MTF data at bar {}: 5m={}, 1h={}, 1d={}",
-                            bar_idx,
-                            mtf_view.primary().len(),
-                            mtf_view.get("1h").map(|c| c.len()).unwrap_or(0),
-                            mtf_view.get("1d").map(|c| c.len()).unwrap_or(0)
-                        );
-                    }
-
                     self.strategy.generate_signal_mtf(symbol, &mtf_view, positions.get(symbol))
                 } else {
                     self.strategy.generate_signal(symbol, current_slice, positions.get(symbol))
