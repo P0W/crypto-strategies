@@ -3,6 +3,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use crypto_strategies::monthly_pnl::MonthlyPnLMatrix;
+use crypto_strategies::multi_timeframe::MultiTimeframeData;
 use crypto_strategies::strategies;
 use crypto_strategies::{backtest::Backtester, data, Config};
 use tracing::{debug, info};
@@ -24,7 +25,6 @@ pub fn run(
     // Apply overrides
     if let Some(strategy) = strategy_override {
         info!("Overriding strategy to: {}", strategy);
-        // Update the strategy name in the strategy object
         if let Some(obj) = config.strategy.as_object_mut() {
             obj.insert("name".to_string(), serde_json::json!(strategy));
         }
@@ -35,15 +35,14 @@ pub fn run(
         config.trading.initial_capital = capital;
     }
 
-    // Disable risk limits if requested
     if no_risk_limits {
-        info!("Risk limits DISABLED - no drawdown halt, unlimited positions");
-        config.trading.max_drawdown = 1.0; // 100% - effectively no limit
-        config.trading.max_positions = 100; // Effectively unlimited
-        config.trading.max_portfolio_heat = 1.0; // 100% - no limit
+        info!("Risk limits DISABLED");
+        config.trading.max_drawdown = 1.0;
+        config.trading.max_positions = 100;
+        config.trading.max_portfolio_heat = 1.0;
     }
 
-    // Parse date range filters
+    // Parse date filters
     let start_date: Option<DateTime<Utc>> = start_override
         .as_ref()
         .map(|s| data::parse_date(s))
@@ -54,76 +53,76 @@ pub fn run(
         .transpose()?;
 
     if let Some(ref start) = start_date {
-        info!("Filtering data from: {}", start);
+        info!("Start date: {}", start);
     }
     if let Some(ref end) = end_date {
-        info!("Filtering data until: {}", end);
+        info!("End date: {}", end);
     }
 
-    // Load data
-    info!("Loading data from: {}", config.backtest.data_dir);
+    // Get symbols and primary timeframe
     let symbols = config.trading.symbols();
-    let timeframe = config.timeframe();
-    debug!("Symbols: {:?}", symbols);
+    let primary_tf = config.timeframe();
+    debug!("Symbols: {:?}, Primary TF: {}", symbols, primary_tf);
 
-    // Check for missing data and fetch if needed (including date range coverage)
-    let timeframes = vec![timeframe.clone()];
+    // Create strategy to query its requirements
+    info!("Creating strategy: {}", config.strategy_name());
+    let strategy = strategies::create_strategy(&config)?;
+    let required_tfs = strategy.required_timeframes();
+
+    // Build complete timeframe list
+    let mut all_tfs: Vec<&str> = required_tfs;
+    if !all_tfs.contains(&primary_tf.as_str()) {
+        all_tfs.push(&primary_tf);
+    }
+
+    info!("Loading timeframes: {:?}", all_tfs);
+
+    // Check and fetch missing data
+    let tf_strings: Vec<String> = all_tfs.iter().map(|s| s.to_string()).collect();
     data::check_and_fetch_data(
         &config.backtest.data_dir,
         &symbols,
-        &timeframes,
+        &tf_strings,
         start_date,
         end_date,
     )?;
 
-    // Create strategy based on config
-    info!("Creating strategy: {}", config.strategy_name());
-    let strategy = strategies::create_strategy(&config)?;
-
-    // Check if strategy requires multiple timeframes
-    let required_tfs = strategy.required_timeframes();
-
-    let mut backtester = Backtester::new(config.clone(), strategy);
-
-    info!("Running backtest...");
-    let result = if !required_tfs.is_empty() {
-        // Multi-timeframe strategy
-        info!(
-            "Multi-timeframe strategy detected, loading timeframes: {:?}",
-            required_tfs
-        );
-
-        // Build timeframes list: required TFs + primary timeframe
-        let mut all_timeframes: Vec<&str> = required_tfs.clone();
-        if !all_timeframes.contains(&timeframe.as_str()) {
-            all_timeframes.push(&timeframe);
-        }
-
-        // Load multi-timeframe data
-        let mtf_data = data::load_multi_timeframe(
+    // Load data - always use MTF format (unified interface)
+    let mtf_data = if all_tfs.len() > 1 {
+        // Multi-timeframe
+        data::load_multi_timeframe(
             &config.backtest.data_dir,
             &symbols,
-            &all_timeframes,
-            &timeframe,
+            &all_tfs,
+            &primary_tf,
             start_date,
             end_date,
-        )?;
-
-        info!("Loaded multi-timeframe data for {} symbols", mtf_data.len());
-        backtester.run_multi_timeframe(mtf_data)
+        )?
     } else {
-        // Single-timeframe strategy (backward compatibility)
-        let data = data::load_multi_symbol_with_range(
+        // Single-timeframe - wrap in MTF format
+        let single_data = data::load_multi_symbol_with_range(
             &config.backtest.data_dir,
             &symbols,
-            &timeframe,
+            &primary_tf,
             start_date,
             end_date,
         )?;
 
-        info!("Loaded data for {} symbols", data.len());
-        backtester.run(data)
+        single_data
+            .into_iter()
+            .map(|(symbol, candles)| {
+                let mut mtf = MultiTimeframeData::new(&primary_tf);
+                mtf.add_timeframe(&primary_tf, candles);
+                (symbol, mtf)
+            })
+            .collect()
     };
+
+    info!("Loaded data for {} symbols", mtf_data.len());
+
+    // Run backtest
+    let mut backtester = Backtester::new(config.clone(), strategy);
+    let result = backtester.run(mtf_data);
 
     // Print results
     println!("\n{}", "=".repeat(60));
@@ -152,20 +151,14 @@ pub fn run(
     println!("Largest Win:        ₹{:.2}", result.metrics.largest_win);
     println!("Largest Loss:       ₹{:.2}", result.metrics.largest_loss);
     println!("{}", "-".repeat(60));
-    println!(
-        "Total Commission:   ₹{:.2}",
-        result.metrics.total_commission
-    );
+    println!("Total Commission:   ₹{:.2}", result.metrics.total_commission);
     println!("Tax (30%):          ₹{:.2}", result.metrics.tax_amount);
     println!("{}", "=".repeat(60));
 
-    // Generate and display monthly P&L matrix
-    let monthly_matrix = MonthlyPnLMatrix::from_trades(&result.trades);
+    // Monthly P&L matrix
+    let monthly = MonthlyPnLMatrix::from_trades(&result.trades);
+    print!("{}", monthly.render_colored());
 
-    // Use colored output for terminal display
-    print!("{}", monthly_matrix.render_colored());
-
-    info!("Backtest completed successfully");
-
+    info!("Backtest completed");
     Ok(())
 }
