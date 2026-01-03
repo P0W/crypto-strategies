@@ -20,39 +20,40 @@
 use crate::indicators::atr;
 use crate::strategies::Strategy;
 use crate::{Candle, MultiTimeframeCandles, Position, Side, Signal, Symbol};
-use std::cell::Cell;
+use std::sync::Mutex;
 
 use super::config::QuickFlipConfig;
 
 /// Internal state for tracking trade cooldowns and last signal direction
+/// Uses Mutex for thread-safe interior mutability (no unsafe code)
 struct State {
-    last_trade_bar: Cell<usize>,
-    last_signal: Cell<Signal>,
-    range_high: Cell<f64>,
-    range_low: Cell<f64>,
+    last_trade_bar: usize,
+    last_signal: Signal,
+    range_high: f64,
+    range_low: f64,
 }
 
 impl Default for State {
     fn default() -> Self {
         Self {
-            last_trade_bar: Cell::new(0),
-            last_signal: Cell::new(Signal::Flat),
-            range_high: Cell::new(0.0),
-            range_low: Cell::new(0.0),
+            last_trade_bar: 0,
+            last_signal: Signal::Flat,
+            range_high: 0.0,
+            range_low: 0.0,
         }
     }
 }
 
 pub struct QuickFlipStrategy {
     config: QuickFlipConfig,
-    state: State,
+    state: Mutex<State>,
 }
 
 impl QuickFlipStrategy {
     pub fn new(config: QuickFlipConfig) -> Self {
         Self {
             config,
-            state: State::default(),
+            state: Mutex::new(State::default()),
         }
     }
 
@@ -165,8 +166,11 @@ impl Strategy for QuickFlipStrategy {
         }
 
         // Cooldown check
-        if current_bar.saturating_sub(self.state.last_trade_bar.get()) < self.config.cooldown_bars {
-            return Signal::Flat;
+        {
+            let state = self.state.lock().unwrap();
+            if current_bar.saturating_sub(state.last_trade_bar) < self.config.cooldown_bars {
+                return Signal::Flat;
+            }
         }
 
         // Step 1: Calculate daily ATR
@@ -199,8 +203,11 @@ impl Strategy for QuickFlipStrategy {
         }
 
         // Cache range for stop/target
-        self.state.range_high.set(range_high);
-        self.state.range_low.set(range_low);
+        {
+            let mut state = self.state.lock().unwrap();
+            state.range_high = range_high;
+            state.range_low = range_low;
+        }
 
         // Step 4: Check for breakout/bounce with pattern confirmation
         let curr = &candles_primary[candles_primary.len() - 1];
@@ -216,8 +223,9 @@ impl Strategy for QuickFlipStrategy {
         let bullish_setup = near_low && Self::is_bullish_pattern(prev, curr);
 
         if bullish_setup {
-            self.state.last_signal.set(Signal::Long);
-            self.state.last_trade_bar.set(current_bar);
+            let mut state = self.state.lock().unwrap();
+            state.last_signal = Signal::Long;
+            state.last_trade_bar = current_bar;
             return Signal::Long;
         }
 
@@ -227,8 +235,9 @@ impl Strategy for QuickFlipStrategy {
         let bearish_setup = near_high && Self::is_bearish_pattern(prev, curr);
 
         if bearish_setup {
-            self.state.last_signal.set(Signal::Short);
-            self.state.last_trade_bar.set(current_bar);
+            let mut state = self.state.lock().unwrap();
+            state.last_signal = Signal::Short;
+            state.last_trade_bar = current_bar;
             return Signal::Short;
         }
 
@@ -255,8 +264,11 @@ impl Strategy for QuickFlipStrategy {
             };
         }
 
-        if current_bar.saturating_sub(self.state.last_trade_bar.get()) < self.config.cooldown_bars {
-            return Signal::Flat;
+        {
+            let state = self.state.lock().unwrap();
+            if current_bar.saturating_sub(state.last_trade_bar) < self.config.cooldown_bars {
+                return Signal::Flat;
+            }
         }
 
         // Single-TF mode: use same data for ATR and range
@@ -275,8 +287,11 @@ impl Strategy for QuickFlipStrategy {
             return Signal::Flat;
         }
 
-        self.state.range_high.set(range_high);
-        self.state.range_low.set(range_low);
+        {
+            let mut state = self.state.lock().unwrap();
+            state.range_high = range_high;
+            state.range_low = range_low;
+        }
 
         let curr = &candles[candles.len() - 1];
         let prev = &candles[candles.len() - 2];
@@ -288,8 +303,9 @@ impl Strategy for QuickFlipStrategy {
         let breakout_long =
             curr.close > range_high && Self::is_bullish(curr) && Self::is_strong_candle(curr);
         if breakout_long {
-            self.state.last_signal.set(Signal::Long);
-            self.state.last_trade_bar.set(current_bar);
+            let mut state = self.state.lock().unwrap();
+            state.last_signal = Signal::Long;
+            state.last_trade_bar = current_bar;
             return Signal::Long;
         }
 
@@ -297,8 +313,9 @@ impl Strategy for QuickFlipStrategy {
         let breakout_short =
             curr.close < range_low && Self::is_bearish(curr) && Self::is_strong_candle(curr);
         if breakout_short {
-            self.state.last_signal.set(Signal::Short);
-            self.state.last_trade_bar.set(current_bar);
+            let mut state = self.state.lock().unwrap();
+            state.last_signal = Signal::Short;
+            state.last_trade_bar = current_bar;
             return Signal::Short;
         }
 
@@ -306,16 +323,18 @@ impl Strategy for QuickFlipStrategy {
         let touch_threshold = range_size * 0.30; // 30% threshold for more signals
         let near_low = curr.close <= range_low + touch_threshold || curr.low <= range_low;
         if near_low && Self::is_bullish_pattern(prev, curr) {
-            self.state.last_signal.set(Signal::Long);
-            self.state.last_trade_bar.set(current_bar);
+            let mut state = self.state.lock().unwrap();
+            state.last_signal = Signal::Long;
+            state.last_trade_bar = current_bar;
             return Signal::Long;
         }
 
         // REVERSAL SHORT: Price near/above range high, bearish candle
         let near_high = curr.close >= range_high - touch_threshold || curr.high >= range_high;
         if near_high && Self::is_bearish_pattern(prev, curr) {
-            self.state.last_signal.set(Signal::Short);
-            self.state.last_trade_bar.set(current_bar);
+            let mut state = self.state.lock().unwrap();
+            state.last_signal = Signal::Short;
+            state.last_trade_bar = current_bar;
             return Signal::Short;
         }
 
@@ -324,7 +343,8 @@ impl Strategy for QuickFlipStrategy {
 
     fn calculate_stop_loss(&self, candles: &[Candle], _entry_price: f64) -> f64 {
         let signal_candle = candles.last().unwrap();
-        match self.state.last_signal.get() {
+        let state = self.state.lock().unwrap();
+        match state.last_signal {
             Signal::Long => signal_candle.low * 0.998, // Just below the low
             Signal::Short => signal_candle.high * 1.002, // Just above the high
             Signal::Flat => signal_candle.low * 0.998,
@@ -332,11 +352,12 @@ impl Strategy for QuickFlipStrategy {
     }
 
     fn calculate_take_profit(&self, _candles: &[Candle], entry_price: f64) -> f64 {
-        let range_high = self.state.range_high.get();
-        let range_low = self.state.range_low.get();
+        let state = self.state.lock().unwrap();
+        let range_high = state.range_high;
+        let range_low = state.range_low;
         let mid = (range_high + range_low) / 2.0;
 
-        match self.state.last_signal.get() {
+        match state.last_signal {
             Signal::Long => {
                 if self.config.conservative_target {
                     mid
@@ -361,8 +382,9 @@ impl Strategy for QuickFlipStrategy {
         current_price: f64,
         _candles: &[Candle],
     ) -> Option<f64> {
-        let range_high = self.state.range_high.get();
-        let range_low = self.state.range_low.get();
+        let state = self.state.lock().unwrap();
+        let range_high = state.range_high;
+        let range_low = state.range_low;
         let mid = (range_high + range_low) / 2.0;
 
         // Move to breakeven when price reaches mid-point or re-enters range
@@ -385,9 +407,6 @@ impl Strategy for QuickFlipStrategy {
     }
 
     fn init(&mut self) {
-        self.state = State::default();
+        *self.state.lock().unwrap() = State::default();
     }
 }
-
-unsafe impl Send for QuickFlipStrategy {}
-unsafe impl Sync for QuickFlipStrategy {}
