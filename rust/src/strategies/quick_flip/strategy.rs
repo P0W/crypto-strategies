@@ -129,7 +129,7 @@ impl Strategy for QuickFlipStrategy {
     }
 
     fn required_timeframes(&self) -> Vec<&'static str> {
-        // Return empty to use single-TF mode which generates more trades
+        // Return empty to use single-TF mode - works better for all timeframes
         vec![]
     }
 

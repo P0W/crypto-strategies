@@ -667,7 +667,10 @@ fn update_config_with_best(
         // Update other strategy params
         for key in grid_keys {
             if let Some(&value) = best.params.get(key) {
-                let json_val = if value.fract() == 0.0 && value >= 0.0 && value < i64::MAX as f64 {
+                // Handle booleans (conservative_target) specially
+                let json_val = if key == "conservative_target" {
+                    serde_json::json!(value != 0.0)
+                } else if value.fract() == 0.0 && value >= 0.0 && value < i64::MAX as f64 {
                     serde_json::json!(value as i64)
                 } else {
                     serde_json::json!(value)
