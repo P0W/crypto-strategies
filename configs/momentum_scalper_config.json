@@ -1,84 +1,113 @@
 {
-    "_comment": "Momentum Scalper - STRATEGY NOT PROFITABLE on crypto data. Tested on 1d, 4h with various parameters. Best Sharpe: -0.21 with 16% return. Strategy generates positive returns but high volatility results in negative risk-adjusted performance.",
-
-    "exchange": {
-        "maker_fee": 0.001,
-        "taker_fee": 0.001,
-        "assumed_slippage": 0.001,
-        "rate_limit": 10
-    },
-
-    "trading": {
-        "symbols": ["BTCINR", "ETHINR", "SOLINR", "BNBINR", "XRPINR"],
-        "initial_capital": 100000,
-
-        "risk_per_trade": 0.08,
-        "max_positions": 3,
-        "max_portfolio_heat": 0.20,
-        "max_position_pct": 0.12,
-        "max_drawdown": 0.12,
-
-        "drawdown_warning": 0.06,
-        "drawdown_critical": 0.10,
-        "drawdown_warning_multiplier": 0.50,
-        "drawdown_critical_multiplier": 0.25,
-
-        "consecutive_loss_limit": 3,
-        "consecutive_loss_multiplier": 0.75
-    },
-
-    "strategy": {
-        "name": "momentum_scalper",
-        "timeframe": "5m",
-        "ema_fast": 9,
-        "ema_slow": 21,
-        "ema_trend": 50,
-
-        "use_macd": true,
-        "macd_fast": 12,
-        "macd_slow": 26,
-        "macd_signal": 9,
-
-        "volume_period": 20,
-        "volume_threshold": 1.2,
-        "require_volume": false,
-
-        "atr_period": 14,
-        "stop_atr_multiple": 1.0,
-        "target_atr_multiple": 1.5,
-        "trailing_activation": 0.5,
-        "trailing_atr_multiple": 0.75,
-
-        "adx_threshold": 20.0,
-        "adx_period": 14,
-        "trade_with_trend": true,
-
-        "max_hold_bars": 20,
-        "exit_on_cross": true,
-        "cooldown_bars": 2,
-
-        "allow_short": false
-    },
-
-    "grid": {
-        "ema_fast": [8, 13],
-        "ema_slow": [21, 34],
-        "atr_period": [14, 20],
-        "stop_atr_multiple": [1.0, 1.5],
-        "target_atr_multiple": [2.0, 3.0],
-        "adx_threshold": [15.0, 20.0],
-        "max_hold_bars": [20, 30]
-    },
-
-    "tax": {
-        "tax_rate": 0.30,
-        "tds_rate": 0.01,
-        "loss_offset_allowed": false
-    },
-
-    "backtest": {
-        "data_dir": "../data",
-        "results_dir": "../results",
-        "commission": 0.001
-    }
+  "_comment": "Momentum Scalper - Optimized for shorter timeframes with relaxed risk parameters",
+  "backtest": {
+    "commission": 0.001,
+    "data_dir": "../data",
+    "results_dir": "../results"
+  },
+  "exchange": {
+    "assumed_slippage": 0.001,
+    "maker_fee": 0.001,
+    "rate_limit": 10,
+    "taker_fee": 0.001
+  },
+  "grid": {
+    "_optimization": [
+      {
+        "calmar_ratio": -0.03,
+        "expectancy": -369.17,
+        "max_drawdown": 92.4,
+        "optimized_at": "2026-01-03 09:05:29",
+        "sharpe_ratio": 0.21,
+        "symbols": [
+          "BTCINR",
+          "ETHINR",
+          "SOLINR",
+          "BNBINR",
+          "XRPINR"
+        ],
+        "total_return": -9.1,
+        "total_trades": 18,
+        "win_rate": 11.1
+      }
+    ],
+    "adx_threshold": [
+      15.0
+    ],
+    "atr_period": [
+      14
+    ],
+    "ema_fast": [
+      8,
+      13
+    ],
+    "ema_slow": [
+      21,
+      34
+    ],
+    "max_hold_bars": [
+      50,
+      100
+    ],
+    "stop_atr_multiple": [
+      2.0,
+      2.5
+    ],
+    "target_atr_multiple": [
+      3.0,
+      4.0
+    ]
+  },
+  "strategy": {
+    "adx_period": 14,
+    "adx_threshold": 15,
+    "allow_short": false,
+    "atr_period": 14,
+    "cooldown_bars": 1,
+    "ema_fast": 13,
+    "ema_slow": 34,
+    "ema_trend": 50,
+    "exit_on_cross": true,
+    "macd_fast": 12,
+    "macd_signal": 9,
+    "macd_slow": 26,
+    "max_hold_bars": 50,
+    "name": "momentum_scalper",
+    "require_volume": false,
+    "stop_atr_multiple": 2.5,
+    "target_atr_multiple": 3,
+    "timeframe": "1h",
+    "trade_with_trend": false,
+    "trailing_activation": 0.3,
+    "trailing_atr_multiple": 1.5,
+    "use_macd": false,
+    "volume_period": 20,
+    "volume_threshold": 1.0
+  },
+  "tax": {
+    "loss_offset_allowed": false,
+    "tax_rate": 0.3,
+    "tds_rate": 0.01
+  },
+  "trading": {
+    "consecutive_loss_limit": 5,
+    "consecutive_loss_multiplier": 0.85,
+    "drawdown_critical": 0.2,
+    "drawdown_critical_multiplier": 0.5,
+    "drawdown_warning": 0.12,
+    "drawdown_warning_multiplier": 0.7,
+    "initial_capital": 100000,
+    "max_drawdown": 0.25,
+    "max_portfolio_heat": 0.4,
+    "max_position_pct": 0.25,
+    "max_positions": 5,
+    "risk_per_trade": 0.15,
+    "symbols": [
+      "BTCINR",
+      "ETHINR",
+      "SOLINR",
+      "BNBINR",
+      "XRPINR"
+    ]
+  }
 }

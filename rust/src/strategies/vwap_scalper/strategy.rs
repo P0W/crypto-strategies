@@ -34,7 +34,7 @@ impl VwapScalperStrategy {
         }
     }
 
-    /// Check VWAP crossover signal
+    /// Check VWAP crossover signal OR price position relative to VWAP
     fn check_vwap_crossover(&self, candles: &[Candle]) -> Option<Signal> {
         if candles.len() < 3 {
             return None;
@@ -57,6 +57,8 @@ impl VwapScalperStrategy {
 
         let close_curr = close[len - 1];
         let close_prev = close[len - 2];
+        let low_curr = low[len - 1];
+        let high_curr = high[len - 1];
 
         // Bullish crossover: price crosses above VWAP
         if close_prev <= vwap_prev && close_curr > vwap_curr {
@@ -65,6 +67,17 @@ impl VwapScalperStrategy {
 
         // Bearish crossover: price crosses below VWAP
         if close_prev >= vwap_prev && close_curr < vwap_curr {
+            return Some(Signal::Short);
+        }
+
+        // Additional: Price bouncing off VWAP (wicks touching)
+        // Bullish: Low touches/penetrates VWAP, close above
+        if low_curr <= vwap_curr && close_curr > vwap_curr {
+            return Some(Signal::Long);
+        }
+
+        // Bearish: High touches/penetrates VWAP, close below
+        if high_curr >= vwap_curr && close_curr < vwap_curr {
             return Some(Signal::Short);
         }
 

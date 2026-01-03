@@ -48,6 +48,7 @@ impl MeanReversionStrategy {
     }
 
     /// Classify market state based on Bollinger Bands and RSI
+    /// Relaxed conditions: price at band OR RSI extreme (not both required)
     fn classify_market_state(&self, candles: &[Candle]) -> Option<MarketState> {
         if candles.len() < self.config.bb_period {
             return None;
@@ -77,17 +78,19 @@ impl MeanReversionStrategy {
             return Some(MarketState::Extreme);
         }
 
-        // Check oversold conditions
-        if current_close <= lower_band + penetration_distance
-            && current_rsi <= self.config.rsi_oversold
-        {
+        // Check oversold conditions - price at lower band OR RSI oversold
+        let price_oversold = current_close <= lower_band + penetration_distance;
+        let rsi_oversold = current_rsi <= self.config.rsi_oversold;
+        
+        if price_oversold || rsi_oversold {
             return Some(MarketState::Oversold);
         }
 
-        // Check overbought conditions
-        if current_close >= upper_band - penetration_distance
-            && current_rsi >= self.config.rsi_overbought
-        {
+        // Check overbought conditions - price at upper band OR RSI overbought
+        let price_overbought = current_close >= upper_band - penetration_distance;
+        let rsi_overbought = current_rsi >= self.config.rsi_overbought;
+        
+        if price_overbought || rsi_overbought {
             return Some(MarketState::Overbought);
         }
 
