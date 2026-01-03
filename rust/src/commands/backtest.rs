@@ -13,6 +13,7 @@ pub fn run(
     capital_override: Option<f64>,
     start_override: Option<String>,
     end_override: Option<String>,
+    no_risk_limits: bool,
 ) -> Result<()> {
     info!("Starting backtest");
 
@@ -32,6 +33,14 @@ pub fn run(
     if let Some(capital) = capital_override {
         info!("Overriding initial capital to: ₹{:.2}", capital);
         config.trading.initial_capital = capital;
+    }
+
+    // Disable risk limits if requested
+    if no_risk_limits {
+        info!("Risk limits DISABLED - no drawdown halt, unlimited positions");
+        config.trading.max_drawdown = 1.0; // 100% - effectively no limit
+        config.trading.max_positions = 100; // Effectively unlimited
+        config.trading.max_portfolio_heat = 1.0; // 100% - no limit
     }
 
     // Parse date range filters
@@ -59,67 +68,13 @@ pub fn run(
 
     // Check for missing data and fetch if needed (including date range coverage)
     let timeframes = vec![timeframe.clone()];
-
-    let (missing_files, needs_earlier, _needs_later) = data::check_data_coverage(
+    data::check_and_fetch_data(
         &config.backtest.data_dir,
         &symbols,
         &timeframes,
         start_date,
         end_date,
-    );
-
-    let needs_download = !missing_files.is_empty() || !needs_earlier.is_empty();
-
-    if needs_download {
-        println!("\n{}", "=".repeat(60));
-        println!("DATA AVAILABILITY CHECK");
-        println!("{}", "=".repeat(60));
-
-        if !missing_files.is_empty() {
-            println!("  Missing files: {}", missing_files.len());
-            for (sym, tf) in &missing_files {
-                println!("    - {}_{}.csv", sym.as_str(), tf);
-            }
-        }
-
-        if !needs_earlier.is_empty() {
-            println!("  Files needing earlier data: {}", needs_earlier.len());
-            for (sym, tf, needed_start) in &needs_earlier {
-                println!(
-                    "    - {}_{}.csv (need data from {})",
-                    sym.as_str(),
-                    tf,
-                    needed_start.format("%Y-%m-%d")
-                );
-            }
-        }
-
-        println!("{}", "-".repeat(60));
-        println!("  Downloading missing data from Binance...\n");
-
-        match data::ensure_data_for_range_sync(
-            &config.backtest.data_dir,
-            &symbols,
-            &timeframes,
-            start_date,
-            end_date,
-        ) {
-            Ok(failed) => {
-                if !failed.is_empty() {
-                    println!("\n  ⚠ Could not fetch {} files:", failed.len());
-                    for (sym, tf) in &failed {
-                        println!("    - {}_{}.csv", sym.as_str(), tf);
-                    }
-                } else {
-                    println!("\n  ✓ All data fetched/extended successfully");
-                }
-            }
-            Err(e) => {
-                println!("\n  ⚠ Error fetching data: {}", e);
-            }
-        }
-        println!("{}\n", "=".repeat(60));
-    }
+    )?;
 
     // Create strategy based on config
     info!("Creating strategy: {}", config.strategy_name());
@@ -206,7 +161,7 @@ pub fn run(
 
     // Generate and display monthly P&L matrix
     let monthly_matrix = MonthlyPnLMatrix::from_trades(&result.trades);
-    
+
     // Use colored output for terminal display
     print!("{}", monthly_matrix.render_colored());
 

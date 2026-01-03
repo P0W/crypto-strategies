@@ -150,68 +150,13 @@ pub fn run(
 
     // Check for missing data and fetch if needed (including date range coverage)
     info!("Checking for missing data files...");
-
-    // First check date range coverage
-    let (missing_files, needs_earlier, _needs_later) = data::check_data_coverage(
+    data::check_and_fetch_data(
         &config.backtest.data_dir,
         &all_symbols,
         &timeframes_to_test,
         start_date,
         end_date,
-    );
-
-    let needs_download = !missing_files.is_empty() || !needs_earlier.is_empty();
-
-    if needs_download {
-        println!("\n{}", "=".repeat(60));
-        println!("DATA AVAILABILITY CHECK");
-        println!("{}", "=".repeat(60));
-
-        if !missing_files.is_empty() {
-            println!("  Missing files: {}", missing_files.len());
-            for (sym, tf) in &missing_files {
-                println!("    - {}_{}.csv", sym.as_str(), tf);
-            }
-        }
-
-        if !needs_earlier.is_empty() {
-            println!("  Files needing earlier data: {}", needs_earlier.len());
-            for (sym, tf, needed_start) in &needs_earlier {
-                println!(
-                    "    - {}_{}.csv (need data from {})",
-                    sym.as_str(),
-                    tf,
-                    needed_start.format("%Y-%m-%d")
-                );
-            }
-        }
-
-        println!("{}", "-".repeat(60));
-        println!("  Downloading missing data from Binance...\n");
-
-        match data::ensure_data_for_range_sync(
-            &config.backtest.data_dir,
-            &all_symbols,
-            &timeframes_to_test,
-            start_date,
-            end_date,
-        ) {
-            Ok(failed) => {
-                if !failed.is_empty() {
-                    println!("\n  ⚠ Could not fetch {} files:", failed.len());
-                    for (sym, tf) in &failed {
-                        println!("    - {}_{}.csv", sym.as_str(), tf);
-                    }
-                } else {
-                    println!("\n  ✓ All data fetched/extended successfully");
-                }
-            }
-            Err(e) => {
-                println!("\n  ⚠ Error fetching data: {}", e);
-            }
-        }
-        println!("{}\n", "=".repeat(60));
-    }
+    )?;
 
     // Check actual data coverage and warn if not fully covered
     if start_date.is_some() {
@@ -556,7 +501,8 @@ pub fn run(
             let should_update = match baseline_metric {
                 Some(baseline) => {
                     let improvement = best_metric - baseline;
-                    if improvement > 0.0 {
+                    // Use small epsilon to avoid updates due to floating-point precision
+                    if improvement > 0.001 {
                         println!(
                             "  Best result ({:.2}) is better than current ({:.2}) by {:.2}",
                             best_metric, baseline, improvement
