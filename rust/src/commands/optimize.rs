@@ -464,19 +464,8 @@ pub fn run(
             _ => "unknown",
         };
 
-        // Only update if best result's timeframe matches config's timeframe
-        let config_tf = config.timeframe();
-        if best_tf != config_tf {
-            println!(
-                "  Skipping config update: best result is on {} but config uses {}",
-                best_tf, config_tf
-            );
-            println!(
-                "  To update, run optimization with --timeframes {} or change config manually",
-                config_tf
-            );
-            println!();
-        } else if best_metric < 0.0 {
+        // Check if we should update
+        if best_metric < 0.0 {
             // Don't update with a losing strategy
             println!(
                 "  Skipping config update: best result has negative {} ({:.2})",
@@ -533,6 +522,7 @@ pub fn run(
                     best,
                     &grid_keys,
                     &symbols,
+                    best_tf,
                     start_date,
                     end_date,
                 ) {
@@ -627,6 +617,7 @@ fn update_config_with_best(
     best: &OptimizationResult,
     grid_keys: &[String],
     symbols: &[String],
+    timeframe: &str,
     start_date: Option<DateTime<Utc>>,
     end_date: Option<DateTime<Utc>>,
 ) -> Result<()> {
@@ -635,11 +626,15 @@ fn update_config_with_best(
     let mut config_json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(config_path)?)?;
 
-    // Update strategy params
+    // Update strategy params including timeframe
     if let Some(obj) = config_json
         .get_mut("strategy")
         .and_then(|s| s.as_object_mut())
     {
+        // Update timeframe
+        obj.insert("timeframe".to_string(), serde_json::json!(timeframe));
+
+        // Update other strategy params
         for key in grid_keys {
             if let Some(&value) = best.params.get(key) {
                 let json_val = if value.fract() == 0.0 && value >= 0.0 && value < i64::MAX as f64 {
