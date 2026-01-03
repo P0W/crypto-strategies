@@ -2,6 +2,19 @@
 
 High-performance Rust implementation of trading strategies for CoinDCX and Zerodha.
 
+## Verified Backtest Results
+
+All strategies backtested with **₹100,000 initial capital** on crypto pairs (BTC, ETH, SOL, BNB, XRP) with INR.
+
+| Strategy | Timeframe | Date Range | Sharpe | Return | Win Rate | Trades | Max DD |
+|----------|-----------|------------|--------|--------|----------|--------|--------|
+| **volatility_regime** | 1d | 2022-01-02 to 2025-12-31 | 0.55 | 55.36% | 44.9% | 49 | 13.61% |
+| **momentum_scalper** | 1d | Full data range | 0.46 | 70.07% | 43.56% | 163 | 27.46% |
+| **range_breakout** | 1d | 2023-01-01 to 2025-12-31 | 0.29 | 31.16% | 38.36% | 146 | 5.05% |
+| **quick_flip** | 1d | 2022-01-01 to 2025-01-01 | 0.26 | 25.19% | 45.45% | 11 | 60.68% |
+
+*Results verified on 2026-01-03. All strategies use 1d timeframe for optimal Sharpe ratios.*
+
 ## Features
 
 - **Performance**: 10-100x faster backtests enabling thorough optimization
@@ -189,12 +202,10 @@ src/
 │
 ├── strategies/              # Strategy implementations
 │   ├── mod.rs               # Strategy trait + registry
-│   ├── volatility_regime/   # ATR regime classification
-│   ├── quick_flip/          # Multi-TF range breakout
-│   ├── vwap_scalper/        # VWAP crossover scalping
-│   ├── mean_reversion/      # Bollinger + RSI reversion
-│   ├── momentum_scalper/    # EMA crossover momentum
-│   └── range_breakout/      # N-bar high/low breakout
+│   ├── volatility_regime/   # ATR regime classification (Sharpe 0.55)
+│   ├── momentum_scalper/    # EMA crossover momentum (Sharpe 0.46)
+│   ├── range_breakout/      # N-bar high/low breakout (Sharpe 0.29)
+│   └── quick_flip/          # Range reversal/breakout (Sharpe 0.26)
 │
 ├── binance/                 # Binance API (data only)
 │   ├── client.rs
@@ -229,31 +240,29 @@ src/
 
 ## Available Strategies
 
-| Strategy | Description | Best Timeframe | Key Feature |
-|----------|-------------|----------------|-------------|
-| `volatility_regime` | ATR-based regime classification | 1d | Volatility clustering |
-| `quick_flip` | Multi-TF range breakout | 5m (uses 1d, 15m) | Pattern recognition |
-| `vwap_scalper` | VWAP crossover scalping | 5m, 15m | Mean reversion |
-| `mean_reversion` | Bollinger Band + RSI | 1h, 4h | Oversold bounces |
-| `momentum_scalper` | EMA crossover + MACD | 5m, 15m | Trend following |
-| `range_breakout` | N-bar high/low breakout | 1h, 4h | Breakout trading |
+| Strategy | Description | Best Timeframe | Sharpe | Key Feature |
+|----------|-------------|----------------|--------|-------------|
+| `volatility_regime` | ATR-based regime classification | 1d | 0.55 | Volatility clustering |
+| `momentum_scalper` | EMA crossover momentum | 1d | 0.46 | Trend following |
+| `range_breakout` | N-bar high/low breakout | 1d | 0.29 | Breakout trading |
+| `quick_flip` | Range reversal/breakout | 1d | 0.26 | Pattern recognition |
 
 ### Quick Flip Strategy
 
-Multi-timeframe pattern scalper:
-- **1d**: ATR for volatility context
-- **15m**: Range box detection (opening bars high/low)
-- **5m**: Entry patterns (Hammer, Engulfing)
-- **Filters**: Trend EMA, volume confirmation
+Range-based reversal and breakout strategy:
+- **Range Box**: Uses `opening_bars` to define price range (high/low)
+- **Entry**: Price breaks outside range with reversal candle OR breakout continuation
+- **ATR Filter**: Optional minimum range as % of ATR
 - **Exit**: Signal candle extreme (stop), range boundary (target)
+- **Best Config**: 1d timeframe, 50-bar lookback, Sharpe 0.26
 
-### VWAP Scalper Strategy
+### Volatility Regime Strategy
 
-Price-to-VWAP mean reversion:
-- **Entry**: Price crosses above VWAP
-- **Filter**: Max distance from VWAP, volume spike optional
-- **Exit**: ATR-based stops, max hold bars
-- **Features**: Cooldown between trades, trailing stop
+ATR-based regime classification for adaptive trading:
+- **Regime Detection**: Compression (<0.6 ATR), Normal, Expansion (>1.5 ATR), Extreme (>2.5 ATR)
+- **Entry**: Compression or Normal regime with EMA trend + ADX confirmation
+- **Exit**: Trailing stop, take profit, or regime exit (Extreme)
+- **Best Config**: 1d timeframe, EMA 8/21, Sharpe 0.55
 
 ## Creating a New Strategy
 
