@@ -270,64 +270,31 @@ impl Strategy for MomentumScalperStrategy {
             return Signal::Long;
         }
 
-        // Entry logic - check EMA crossover OR strong alignment
-        let crossover = self.check_ema_crossover(candles);
+        // Simple entry logic - EMA alignment is enough
+        // We want to be in position when fast EMA > slow EMA (uptrend)
         let alignment = self.check_ema_alignment(candles);
-
-        // Enter on crossover, or if already in strong trend alignment
-        let signal = if let Some(cross_signal) = crossover {
-            cross_signal
-        } else if let Some(align_signal) = alignment {
-            // Enter on strong alignment if ADX is high (trending market)
-            if self.check_adx_strength(candles) {
-                align_signal
-            } else {
-                return Signal::Flat;
-            }
-        } else {
-            return Signal::Flat;
+        
+        let signal = match alignment {
+            Some(s) => s,
+            None => return Signal::Flat,
         };
 
-        // Filter: trade with trend
-        if self.config.trade_with_trend {
-            let trend = self.get_trend_direction(candles);
-            if signal == Signal::Long && trend == TrendDirection::Down {
-                return Signal::Flat;
-            }
-            if signal == Signal::Short && trend == TrendDirection::Up {
-                return Signal::Flat;
-            }
+        // Only apply ADX filter if explicitly configured
+        if self.config.adx_threshold > 0.0 && !self.check_adx_strength(candles) {
+            return Signal::Flat;
         }
 
-        // Filter: MACD momentum confirmation
+        // Only apply MACD filter if explicitly enabled
         if self.config.use_macd {
             let momentum = self.get_macd_momentum(candles);
             if signal == Signal::Long
                 && !matches!(
                     momentum,
-                    MomentumState::StrongBullish | MomentumState::WeakBullish
+                    MomentumState::StrongBullish | MomentumState::WeakBullish | MomentumState::Neutral
                 )
             {
                 return Signal::Flat;
             }
-            if signal == Signal::Short
-                && !matches!(
-                    momentum,
-                    MomentumState::StrongBearish | MomentumState::WeakBearish
-                )
-            {
-                return Signal::Flat;
-            }
-        }
-
-        // Filter: ADX trend strength
-        if !self.check_adx_strength(candles) {
-            return Signal::Flat;
-        }
-
-        // Filter: Volume
-        if !self.check_volume(candles) {
-            return Signal::Flat;
         }
 
         // Return signal (only long if short not allowed)
