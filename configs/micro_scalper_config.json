@@ -1,0 +1,59 @@
+{
+  "backtest": {
+    "commission": 0.001,
+    "data_dir": "../data",
+    "end_date": "2025-12-31",
+    "results_dir": "../results",
+    "start_date": "2023-01-01"
+  },
+  "exchange": {
+    "assumed_slippage": 0.001,
+    "maker_fee": 0.001,
+    "rate_limit": 10,
+    "taker_fee": 0.001
+  },
+  "grid": {
+    "ema_fast": [5, 9, 13],
+    "ema_slow": [21, 34, 50],
+    "stop_atr": [1.5, 2.0, 2.5],
+    "target_atr": [3.0, 4.0, 5.0]
+  },
+  "strategy": {
+    "name": "micro_scalper",
+    "rsi_period": 7,
+    "rsi_oversold": 30.0,
+    "rsi_overbought": 70.0,
+    "ema_fast": 9,
+    "ema_slow": 21,
+    "atr_period": 14,
+    "stop_atr": 2.0,
+    "target_atr": 4.0,
+    "trailing_atr": 1.5,
+    "trailing_activation": 2.0,
+    "cooldown": 5,
+    "allow_short": false,
+    "min_hold_bars": 1,
+    "max_hold_bars": 200,
+    "timeframe": "1h"
+  },
+  "tax": {
+    "loss_offset_allowed": false,
+    "tax_rate": 0.3,
+    "tds_rate": 0.01
+  },
+  "trading": {
+    "consecutive_loss_limit": 3,
+    "consecutive_loss_multiplier": 0.75,
+    "drawdown_critical": 0.15,
+    "drawdown_critical_multiplier": 0.25,
+    "drawdown_warning": 0.1,
+    "drawdown_warning_multiplier": 0.5,
+    "initial_capital": 100000,
+    "max_drawdown": 0.2,
+    "max_portfolio_heat": 0.3,
+    "max_position_pct": 0.2,
+    "max_positions": 5,
+    "symbols": ["BTCINR"],
+    "risk_per_trade": 0.02
+  }
+}

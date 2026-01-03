@@ -350,7 +350,7 @@ impl Backtester {
         // Close remaining positions
         self.close_remaining_positions(&aligned, &mut positions, &mut trades);
 
-        let metrics = self.calculate_metrics(&trades, &equity_curve);
+        let metrics = self.calculate_metrics(&trades, &equity_curve, &primary_tf);
         BacktestResult {
             trades,
             equity_curve,
@@ -465,6 +465,7 @@ impl Backtester {
         &self,
         trades: &[Trade],
         equity_curve: &[(DateTime<Utc>, f64)],
+        timeframe: &str,
     ) -> PerformanceMetrics {
         if trades.is_empty() || equity_curve.is_empty() {
             return PerformanceMetrics::default();
@@ -538,10 +539,18 @@ impl Backtester {
             }
         }
 
-        // Sharpe ratio (365 days for crypto)
-        const DAYS_PER_YEAR: f64 = 365.0;
+        // Sharpe ratio - annualized based on timeframe
+        // For crypto: 365 days/year, 24 hours/day
+        let periods_per_year: f64 = match timeframe {
+            "1m" => 365.0 * 24.0 * 60.0,      // 525,600
+            "5m" => 365.0 * 24.0 * 12.0,      // 105,120
+            "15m" => 365.0 * 24.0 * 4.0,      // 35,040
+            "1h" => 365.0 * 24.0,             // 8,760
+            "4h" => 365.0 * 6.0,              // 2,190
+            "1d" | _ => 365.0,                // 365 (default)
+        };
         const RISK_FREE: f64 = 0.05;
-        let daily_rf = RISK_FREE / DAYS_PER_YEAR;
+        let period_rf = RISK_FREE / periods_per_year;
 
         let returns: Vec<f64> = equity_curve
             .windows(2)
@@ -554,7 +563,7 @@ impl Backtester {
         } else {
             0.0
         };
-        let excess = mean_ret - daily_rf;
+        let excess = mean_ret - period_rf;
 
         let std_dev = if n > 1.0 {
             let var = returns.iter().map(|r| (r - mean_ret).powi(2)).sum::<f64>() / (n - 1.0);
@@ -564,7 +573,7 @@ impl Backtester {
         };
 
         let sharpe = if std_dev > 0.0 {
-            excess / std_dev * DAYS_PER_YEAR.sqrt()
+            excess / std_dev * periods_per_year.sqrt()
         } else {
             0.0
         };
