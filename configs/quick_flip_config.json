@@ -1,54 +1,87 @@
 {
-    "exchange": {
-        "maker_fee": 0.001,
-        "taker_fee": 0.001,
-        "assumed_slippage": 0.001,
-        "rate_limit": 10
-    },
-
-    "trading": {
-        "symbols": ["BTCINR", "ETHINR", "SOLINR", "XRPINR", "BNBINR"],
-        "initial_capital": 100000,
-        "risk_per_trade": 0.10,
-        "max_positions": 5,
-        "max_portfolio_heat": 0.30,
-        "max_position_pct": 0.15,
-        "max_drawdown": 0.15,
-        "drawdown_warning": 0.08,
-        "drawdown_critical": 0.12,
-        "drawdown_warning_multiplier": 0.50,
-        "drawdown_critical_multiplier": 0.25,
-        "consecutive_loss_limit": 3,
-        "consecutive_loss_multiplier": 0.75
-    },
-
-    "strategy": {
-        "name": "quick_flip",
-        "timeframe": "5m",
-        "atr_period": 14,
-        "min_range_pct": 0.05,
-        "opening_bars": 4,
-        "cooldown_bars": 3,
-        "conservative_target": false
-    },
-
-    "grid": {
-        "atr_period": [14],
-        "min_range_pct": [0.02, 0.03, 0.05, 0.08],
-        "opening_bars": [2, 4, 6, 8],
-        "cooldown_bars": [1, 3, 6],
-        "conservative_target": [false, true]
-    },
-
-    "tax": {
-        "tax_rate": 0.30,
-        "tds_rate": 0.01,
-        "loss_offset_allowed": false
-    },
-
-    "backtest": {
-        "data_dir": "../data",
-        "results_dir": "../results",
-        "commission": 0.001
-    }
+  "backtest": {
+    "commission": 0.001,
+    "data_dir": "../data",
+    "end_date": "2024-12-01",
+    "results_dir": "../results",
+    "start_date": "2023-01-01"
+  },
+  "exchange": {
+    "assumed_slippage": 0.001,
+    "maker_fee": 0.001,
+    "rate_limit": 10,
+    "taker_fee": 0.001
+  },
+  "grid": {
+    "_optimization": [
+      {
+        "calmar_ratio": 0.03,
+        "expectancy": 1225.69,
+        "max_drawdown": 22.6,
+        "optimized_at": "2026-01-03 06:21:01",
+        "sharpe_ratio": -0.89,
+        "symbols": [
+          "BTCINR",
+          "ETHINR",
+          "SOLINR",
+          "XRPINR",
+          "BNBINR"
+        ],
+        "total_return": 1.2,
+        "total_trades": 1,
+        "win_rate": 100.0
+      }
+    ],
+    "atr_period": [
+      14
+    ],
+    "conservative_target": [
+      false,
+      true
+    ],
+    "cooldown_bars": [
+      1
+    ],
+    "min_range_pct": [
+      0.0
+    ],
+    "opening_bars": [
+      2, 3, 5, 10, 20
+    ]
+  },
+  "strategy": {
+    "atr_period": 14,
+    "conservative_target": false,
+    "cooldown_bars": 1,
+    "min_range_pct": 0.0,
+    "name": "quick_flip",
+    "opening_bars": 10,
+    "timeframe": "1h"
+  },
+  "tax": {
+    "loss_offset_allowed": false,
+    "tax_rate": 0.3,
+    "tds_rate": 0.01
+  },
+  "trading": {
+    "consecutive_loss_limit": 3,
+    "consecutive_loss_multiplier": 0.75,
+    "drawdown_critical": 0.12,
+    "drawdown_critical_multiplier": 0.25,
+    "drawdown_warning": 0.08,
+    "drawdown_warning_multiplier": 0.5,
+    "initial_capital": 100000,
+    "max_drawdown": 0.15,
+    "max_portfolio_heat": 0.3,
+    "max_position_pct": 0.15,
+    "max_positions": 5,
+    "risk_per_trade": 0.1,
+    "symbols": [
+      "BTCINR",
+      "ETHINR",
+      "SOLINR",
+      "XRPINR",
+      "BNBINR"
+    ]
+  }
 }

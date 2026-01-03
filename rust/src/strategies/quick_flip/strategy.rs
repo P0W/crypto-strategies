@@ -108,64 +108,18 @@ impl QuickFlipStrategy {
         body / range > 0.5  // Body is more than 50% of range
     }
 
-    /// Check for bullish reversal pattern (hammer or bullish engulfing)
+    /// Check for bullish setup - simplified for more trades
     #[inline]
-    fn is_bullish_pattern(prev: &Candle, curr: &Candle) -> bool {
-        // Strong bullish momentum candle (primary check)
-        if Self::is_bullish(curr) && Self::is_strong_candle(curr) {
-            return true;
-        }
-        
-        // Hammer: small body, long lower wick
-        let range = curr.high - curr.low;
-        if range > 0.0 {
-            let body = (curr.close - curr.open).abs();
-            let lower_wick = curr.open.min(curr.close) - curr.low;
-            if body / range < 0.4 && lower_wick / range > 0.4 {
-                return true;
-            }
-        }
-        
-        // Bullish engulfing (relaxed)
-        if Self::is_bearish(prev) && Self::is_bullish(curr) {
-            let prev_body = (prev.open - prev.close).abs();
-            let curr_body = (curr.close - curr.open).abs();
-            if curr_body > prev_body * 0.8 {
-                return true;
-            }
-        }
-        
-        false
+    fn is_bullish_pattern(_prev: &Candle, curr: &Candle) -> bool {
+        // Any bullish candle counts
+        Self::is_bullish(curr)
     }
 
-    /// Check for bearish reversal pattern
+    /// Check for bearish setup - simplified for more trades
     #[inline]
-    fn is_bearish_pattern(prev: &Candle, curr: &Candle) -> bool {
-        // Strong bearish momentum candle (primary check)
-        if Self::is_bearish(curr) && Self::is_strong_candle(curr) {
-            return true;
-        }
-        
-        // Shooting star: small body, long upper wick
-        let range = curr.high - curr.low;
-        if range > 0.0 {
-            let body = (curr.close - curr.open).abs();
-            let upper_wick = curr.high - curr.open.max(curr.close);
-            if body / range < 0.4 && upper_wick / range > 0.4 {
-                return true;
-            }
-        }
-        
-        // Bearish engulfing (relaxed)
-        if Self::is_bullish(prev) && Self::is_bearish(curr) {
-            let prev_body = (prev.close - prev.open).abs();
-            let curr_body = (curr.open - curr.close).abs();
-            if curr_body > prev_body * 0.8 {
-                return true;
-            }
-        }
-        
-        false
+    fn is_bearish_pattern(_prev: &Candle, curr: &Candle) -> bool {
+        // Any bearish candle counts
+        Self::is_bearish(curr)
     }
 }
 
@@ -175,7 +129,8 @@ impl Strategy for QuickFlipStrategy {
     }
 
     fn required_timeframes(&self) -> Vec<&'static str> {
-        vec!["1d", "1h"]
+        // Return empty to use single-TF mode which generates more trades
+        vec![]
     }
 
     fn generate_signal_mtf(
@@ -184,16 +139,16 @@ impl Strategy for QuickFlipStrategy {
         mtf: &MultiTimeframeCandles,
         position: Option<&Position>,
     ) -> Signal {
-        let candles_5m = mtf.primary();
-        let candles_1h = mtf.get("1h").unwrap_or(&[]);
+        let candles_primary = mtf.primary();
+        let candles_4h = mtf.get("4h").unwrap_or(&[]);
         let candles_1d = mtf.get("1d").unwrap_or(&[]);
 
         // Minimum data requirements
-        if candles_5m.len() < 20 || candles_1h.len() < 3 || candles_1d.len() < 15 {
+        if candles_primary.len() < 20 || candles_4h.len() < 3 || candles_1d.len() < 15 {
             return Signal::Flat;
         }
 
-        let current_bar = candles_5m.len();
+        let current_bar = candles_primary.len();
 
         // If in position, maintain it
         if let Some(pos) = position {
@@ -214,26 +169,27 @@ impl Strategy for QuickFlipStrategy {
             None => return Signal::Flat,
         };
 
-        // Step 2: Compute 1h range box from PREVIOUS N hours (not including current)
-        // The range should be computed from bars BEFORE the current price
+        // Step 2: Compute 4h range box from PREVIOUS N bars (not including current)
         let window_size = self.config.opening_bars.max(1);
-        if candles_1h.len() < window_size + 1 {
+        if candles_4h.len() < window_size + 1 {
             return Signal::Flat;
         }
-        // Exclude the last bar (current hour) to avoid look-ahead bias
-        let window_end = candles_1h.len() - 1;  // Exclude current hour
+        // Exclude the last bar to avoid look-ahead bias
+        let window_end = candles_4h.len() - 1;
         let window_start = window_end.saturating_sub(window_size);
-        let (range_high, range_low) = Self::compute_range(&candles_1h[window_start..window_end]);
+        let (range_high, range_low) = Self::compute_range(&candles_4h[window_start..window_end]);
 
         if range_high <= range_low {
             return Signal::Flat;
         }
 
-        // Step 3: ATR filter
+        // Step 3: ATR filter - range must be meaningful relative to volatility (skip if min_range_pct is 0)
         let range_size = range_high - range_low;
-        let min_required = daily_atr * self.config.min_range_pct;
-        if range_size < min_required {
-            return Signal::Flat;
+        if self.config.min_range_pct > 0.0 {
+            let min_required = daily_atr * self.config.min_range_pct;
+            if range_size < min_required {
+                return Signal::Flat;
+            }
         }
 
         // Cache range for stop/target
@@ -241,16 +197,15 @@ impl Strategy for QuickFlipStrategy {
         self.state.range_low.set(range_low);
 
         // Step 4: Check for breakout/bounce with pattern confirmation
-        let curr = &candles_5m[candles_5m.len() - 1];
-        let prev = &candles_5m[candles_5m.len() - 2];
+        let curr = &candles_primary[candles_primary.len() - 1];
+        let prev = &candles_primary[candles_primary.len() - 2];
 
-        // Calculate proximity threshold (small % of range for touch detection)
-        let range_size = range_high - range_low;
-        let touch_threshold = range_size * 0.02;  // 2% of range
+        // Calculate proximity threshold (% of range for touch detection)
+        // Using 20% threshold for more trade opportunities
+        let touch_threshold = range_size * 0.20;
 
         // BULLISH SETUPS:
-        // 1. Price touches/dips below range_low then reverses (bounce off support)
-        // 2. Price is near range_low with bullish pattern
+        // Price near or below range_low with bullish pattern
         let near_low = curr.close <= range_low + touch_threshold || curr.low <= range_low;
         let bullish_setup = near_low && Self::is_bullish_pattern(prev, curr);
         
@@ -261,8 +216,7 @@ impl Strategy for QuickFlipStrategy {
         }
 
         // BEARISH SETUPS:
-        // 1. Price touches/spikes above range_high then reverses (rejection at resistance)
-        // 2. Price is near range_high with bearish pattern
+        // Price near or above range_high with bearish pattern
         let near_high = curr.close >= range_high - touch_threshold || curr.high >= range_high;
         let bearish_setup = near_high && Self::is_bearish_pattern(prev, curr);
         
@@ -321,7 +275,7 @@ impl Strategy for QuickFlipStrategy {
         let curr = &candles[candles.len() - 1];
         let prev = &candles[candles.len() - 2];
 
-        let touch_threshold = range_size * 0.02;
+        let touch_threshold = range_size * 0.20;
 
         // BULLISH: Near range low with bullish pattern
         let near_low = curr.close <= range_low + touch_threshold || curr.low <= range_low;
