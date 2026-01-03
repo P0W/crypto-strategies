@@ -1,0 +1,94 @@
+{
+  "backtest": {
+    "commission": 0.001,
+    "data_dir": "../data",
+    "results_dir": "../results"
+  },
+  "exchange": {
+    "assumed_slippage": 0.001,
+    "maker_fee": 0.001,
+    "rate_limit": 10,
+    "taker_fee": 0.001
+  },
+  "grid": {
+    "_optimization": [
+      {
+        "calmar_ratio": 0.26,
+        "expectancy": 110.85,
+        "max_drawdown": 22.0,
+        "optimized_at": "2026-01-03 17:33:37",
+        "sharpe_ratio": 0.11,
+        "symbols": [
+          "BTCINR",
+          "ETHINR",
+          "SOLINR"
+        ],
+        "total_return": 25.4,
+        "total_trades": 281,
+        "win_rate": 43.4
+      }
+    ],
+    "atr_period": [
+      14
+    ],
+    "ema_fast": [
+      13
+    ],
+    "ema_slow": [
+      34
+    ],
+    "stop_atr_multiple": [
+      3.0,
+      3.5
+    ],
+    "target_atr_multiple": [
+      6.0,
+      7.0,
+      8.0,
+      9.0,
+      10.0
+    ]
+  },
+  "strategy": {
+    "adx_period": 14,
+    "adx_threshold": 20,
+    "atr_period": 14,
+    "breakout_atr_multiple": 1.5,
+    "compression_threshold": 0.6,
+    "ema_fast": 13,
+    "ema_slow": 34,
+    "expansion_threshold": 1.5,
+    "extreme_threshold": 2.5,
+    "name": "volatility_regime",
+    "stop_atr_multiple": 3.5,
+    "target_atr_multiple": 9,
+    "timeframe": "4h",
+    "trailing_activation": 0.5,
+    "trailing_atr_multiple": 1.5,
+    "volatility_lookback": 20
+  },
+  "tax": {
+    "loss_offset_allowed": false,
+    "tax_rate": 0.3,
+    "tds_rate": 0.01
+  },
+  "trading": {
+    "consecutive_loss_limit": 3,
+    "consecutive_loss_multiplier": 0.75,
+    "drawdown_critical": 0.15,
+    "drawdown_critical_multiplier": 0.25,
+    "drawdown_warning": 0.1,
+    "drawdown_warning_multiplier": 0.5,
+    "initial_capital": 100000,
+    "max_drawdown": 0.25,
+    "max_portfolio_heat": 0.4,
+    "max_position_pct": 0.25,
+    "max_positions": 5,
+    "risk_per_trade": 0.03,
+    "symbols": [
+      "BTCINR",
+      "ETHINR",
+      "SOLINR"
+    ]
+  }
+}
