@@ -22,14 +22,6 @@ pub enum MomentumState {
     StrongBearish,
 }
 
-/// Trend direction
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum TrendDirection {
-    Up,
-    Down,
-    Sideways,
-}
-
 /// Create strategy from config (called by registry)
 pub fn create(config: &Config) -> Result<Box<dyn Strategy>> {
     let strategy_config: MomentumScalperConfig = serde_json::from_value(config.strategy.clone())
