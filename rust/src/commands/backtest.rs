@@ -151,7 +151,10 @@ pub fn run(
     println!("Largest Win:        ₹{:.2}", result.metrics.largest_win);
     println!("Largest Loss:       ₹{:.2}", result.metrics.largest_loss);
     println!("{}", "-".repeat(60));
-    println!("Total Commission:   ₹{:.2}", result.metrics.total_commission);
+    println!(
+        "Total Commission:   ₹{:.2}",
+        result.metrics.total_commission
+    );
     println!("Tax (30%):          ₹{:.2}", result.metrics.tax_amount);
     println!("{}", "=".repeat(60));
 

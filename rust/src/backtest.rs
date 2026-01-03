@@ -170,7 +170,8 @@ impl Backtester {
                                 target_price: order.target_price,
                                 trailing_stop: None,
                                 entry_time: candle.datetime,
-                                risk_amount: (entry_price - order.stop_price).abs() * order.quantity,
+                                risk_amount: (entry_price - order.stop_price).abs()
+                                    * order.quantity,
                             },
                         );
 
@@ -189,7 +190,9 @@ impl Backtester {
                     if let Some(pos) = positions.remove(symbol) {
                         let exit_price = match pos.side {
                             Side::Buy => open_price * (1.0 - self.config.exchange.assumed_slippage),
-                            Side::Sell => open_price * (1.0 + self.config.exchange.assumed_slippage),
+                            Side::Sell => {
+                                open_price * (1.0 + self.config.exchange.assumed_slippage)
+                            }
                         };
 
                         let trade = self.close_position(&pos, exit_price, candle.datetime, &reason);
@@ -244,7 +247,8 @@ impl Backtester {
 
                     // Update trailing stop
                     let active_stop = if let Some(new_stop) =
-                        self.strategy.update_trailing_stop(&pos, price, current_slice)
+                        self.strategy
+                            .update_trailing_stop(&pos, price, current_slice)
                     {
                         if let Some(p) = positions.get_mut(symbol) {
                             p.trailing_stop = Some(new_stop);
@@ -300,24 +304,39 @@ impl Backtester {
                         }
                     }
 
-                    self.strategy.generate_signal_mtf(symbol, &mtf_view, positions.get(symbol))
+                    self.strategy
+                        .generate_signal_mtf(symbol, &mtf_view, positions.get(symbol))
                 } else {
-                    self.strategy.generate_signal(symbol, current_slice, positions.get(symbol))
+                    self.strategy
+                        .generate_signal(symbol, current_slice, positions.get(symbol))
                 };
 
                 // Process signal
                 match signal {
-                    Signal::Long if !positions.contains_key(symbol) && !pending_orders.contains_key(symbol) => {
-                        if let Some(order) = self.create_order(symbol, Side::Buy, current_slice, price, &positions) {
+                    Signal::Long
+                        if !positions.contains_key(symbol)
+                            && !pending_orders.contains_key(symbol) =>
+                    {
+                        if let Some(order) =
+                            self.create_order(symbol, Side::Buy, current_slice, price, &positions)
+                        {
                             pending_orders.insert(symbol.clone(), order);
                         }
                     }
-                    Signal::Short if !positions.contains_key(symbol) && !pending_orders.contains_key(symbol) => {
-                        if let Some(order) = self.create_order(symbol, Side::Sell, current_slice, price, &positions) {
+                    Signal::Short
+                        if !positions.contains_key(symbol)
+                            && !pending_orders.contains_key(symbol) =>
+                    {
+                        if let Some(order) =
+                            self.create_order(symbol, Side::Sell, current_slice, price, &positions)
+                        {
                             pending_orders.insert(symbol.clone(), order);
                         }
                     }
-                    Signal::Flat if positions.contains_key(symbol) && !pending_closes.contains_key(symbol) => {
+                    Signal::Flat
+                        if positions.contains_key(symbol)
+                            && !pending_closes.contains_key(symbol) =>
+                    {
                         pending_closes.insert(symbol.clone(), "Signal".to_string());
                     }
                     _ => {}
@@ -332,7 +351,11 @@ impl Backtester {
         self.close_remaining_positions(&aligned, &mut positions, &mut trades);
 
         let metrics = self.calculate_metrics(&trades, &equity_curve);
-        BacktestResult { trades, equity_curve, metrics }
+        BacktestResult {
+            trades,
+            equity_curve,
+            metrics,
+        }
     }
 
     /// Legacy single-TF interface - converts to MTF format
@@ -389,7 +412,13 @@ impl Backtester {
     }
 
     #[inline]
-    fn close_position(&self, pos: &Position, exit_price: f64, exit_time: DateTime<Utc>, _reason: &str) -> Trade {
+    fn close_position(
+        &self,
+        pos: &Position,
+        exit_price: f64,
+        exit_time: DateTime<Utc>,
+        _reason: &str,
+    ) -> Trade {
         let pnl = match pos.side {
             Side::Buy => (exit_price - pos.entry_price) * pos.quantity,
             Side::Sell => (pos.entry_price - exit_price) * pos.quantity,
@@ -432,7 +461,11 @@ impl Backtester {
         }
     }
 
-    fn calculate_metrics(&self, trades: &[Trade], equity_curve: &[(DateTime<Utc>, f64)]) -> PerformanceMetrics {
+    fn calculate_metrics(
+        &self,
+        trades: &[Trade],
+        equity_curve: &[(DateTime<Utc>, f64)],
+    ) -> PerformanceMetrics {
         if trades.is_empty() || equity_curve.is_empty() {
             return PerformanceMetrics::default();
         }
@@ -471,8 +504,16 @@ impl Backtester {
             0.0
         };
 
-        let avg_win = if !winners.is_empty() { gross_profit / winners.len() as f64 } else { 0.0 };
-        let avg_loss = if !losers.is_empty() { gross_loss / losers.len() as f64 } else { 0.0 };
+        let avg_win = if !winners.is_empty() {
+            gross_profit / winners.len() as f64
+        } else {
+            0.0
+        };
+        let avg_loss = if !losers.is_empty() {
+            gross_loss / losers.len() as f64
+        } else {
+            0.0
+        };
 
         let expectancy = if !trades.is_empty() {
             let wr = win_rate / 100.0;
@@ -508,7 +549,11 @@ impl Backtester {
             .collect();
 
         let n = returns.len() as f64;
-        let mean_ret = if n > 0.0 { returns.iter().sum::<f64>() / n } else { 0.0 };
+        let mean_ret = if n > 0.0 {
+            returns.iter().sum::<f64>() / n
+        } else {
+            0.0
+        };
         let excess = mean_ret - daily_rf;
 
         let std_dev = if n > 1.0 {
@@ -518,7 +563,11 @@ impl Backtester {
             0.0
         };
 
-        let sharpe = if std_dev > 0.0 { excess / std_dev * DAYS_PER_YEAR.sqrt() } else { 0.0 };
+        let sharpe = if std_dev > 0.0 {
+            excess / std_dev * DAYS_PER_YEAR.sqrt()
+        } else {
+            0.0
+        };
 
         // Calmar ratio
         let calmar = if max_dd > 0.0 && equity_curve.len() >= 2 {
@@ -560,8 +609,6 @@ impl Backtester {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_sharpe_calculation() {
         let returns = vec![0.02, -0.01, 0.03, -0.02, 0.01, 0.0, 0.025, -0.015, 0.02];

@@ -83,7 +83,10 @@ impl Optimizer {
     where
         F: Fn(&Config) -> Box<dyn Strategy> + Send + Sync,
     {
-        tracing::info!("Testing {} parameter combinations with progress", configs.len());
+        tracing::info!(
+            "Testing {} parameter combinations with progress",
+            configs.len()
+        );
 
         configs
             .par_iter()
@@ -118,7 +121,10 @@ impl Optimizer {
     where
         F: Fn(&Config) -> Box<dyn Strategy>,
     {
-        tracing::info!("Testing {} parameter combinations sequentially", configs.len());
+        tracing::info!(
+            "Testing {} parameter combinations sequentially",
+            configs.len()
+        );
 
         configs
             .iter()

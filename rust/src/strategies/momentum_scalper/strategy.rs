@@ -13,12 +13,12 @@
 //! 4. Exit on EMA cross back (fast below slow)
 //! 5. Max hold bars exceeded
 
-use crate::indicators::{adx, atr, ema, macd, sma};
+use crate::indicators::{adx, atr, ema, macd};
 use crate::strategies::Strategy;
 use crate::{Candle, Order, OrderStatus, Position, Signal, Symbol, Trade};
 
 use super::config::MomentumScalperConfig;
-use super::{MomentumState, TrendDirection};
+use super::MomentumState;
 
 /// Momentum Scalper Strategy
 pub struct MomentumScalperStrategy {
@@ -36,67 +36,6 @@ impl MomentumScalperStrategy {
             cooldown_counter: 0,
             last_signal: Signal::Flat,
         }
-    }
-
-    /// Get trend direction based on price vs trend EMA
-    fn get_trend_direction(&self, candles: &[Candle]) -> TrendDirection {
-        if candles.len() < self.config.ema_trend {
-            return TrendDirection::Sideways;
-        }
-
-        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
-        let trend_ema = ema(&close, self.config.ema_trend);
-
-        let current_close = candles.last().map(|c| c.close).unwrap_or(0.0);
-        let ema_value = trend_ema.last().and_then(|&x| x).unwrap_or(0.0);
-
-        if ema_value <= 0.0 {
-            return TrendDirection::Sideways;
-        }
-
-        let diff_pct = (current_close - ema_value) / ema_value;
-
-        if diff_pct > 0.005 {
-            TrendDirection::Up
-        } else if diff_pct < -0.005 {
-            TrendDirection::Down
-        } else {
-            TrendDirection::Sideways
-        }
-    }
-
-    /// Check EMA crossover signal
-    fn check_ema_crossover(&self, candles: &[Candle]) -> Option<Signal> {
-        if candles.len() < self.config.ema_slow + 2 {
-            return None;
-        }
-
-        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
-        let fast_ema = ema(&close, self.config.ema_fast);
-        let slow_ema = ema(&close, self.config.ema_slow);
-
-        // Get current and previous values
-        let len = fast_ema.len();
-        if len < 2 {
-            return None;
-        }
-
-        let fast_curr = fast_ema[len - 1]?;
-        let fast_prev = fast_ema[len - 2]?;
-        let slow_curr = slow_ema[len - 1]?;
-        let slow_prev = slow_ema[len - 2]?;
-
-        // Bullish crossover: fast crosses above slow
-        if fast_prev <= slow_prev && fast_curr > slow_curr {
-            return Some(Signal::Long);
-        }
-
-        // Bearish crossover: fast crosses below slow
-        if fast_prev >= slow_prev && fast_curr < slow_curr {
-            return Some(Signal::Short);
-        }
-
-        None
     }
 
     /// Check if EMAs are still in bullish/bearish alignment
@@ -176,29 +115,6 @@ impl MomentumScalperStrategy {
         current_adx >= self.config.adx_threshold
     }
 
-    /// Check volume condition
-    fn check_volume(&self, candles: &[Candle]) -> bool {
-        if !self.config.require_volume {
-            return true;
-        }
-
-        if candles.len() < self.config.volume_period + 1 {
-            return true;
-        }
-
-        let volumes: Vec<f64> = candles.iter().map(|c| c.volume).collect();
-        let volume_ma = sma(&volumes, self.config.volume_period);
-
-        let current_volume = candles.last().map(|c| c.volume).unwrap_or(0.0);
-        let avg_volume = volume_ma.last().and_then(|&x| x).unwrap_or(1.0);
-
-        if avg_volume <= 0.0 {
-            return true;
-        }
-
-        current_volume >= avg_volume * self.config.volume_threshold
-    }
-
     /// Check if should exit on EMA cross back
     fn should_exit_on_cross(&self, candles: &[Candle], is_long: bool) -> bool {
         if !self.config.exit_on_cross {
@@ -273,7 +189,7 @@ impl Strategy for MomentumScalperStrategy {
         // Simple entry logic - EMA alignment is enough
         // We want to be in position when fast EMA > slow EMA (uptrend)
         let alignment = self.check_ema_alignment(candles);
-        
+
         let signal = match alignment {
             Some(s) => s,
             None => return Signal::Flat,
@@ -290,7 +206,9 @@ impl Strategy for MomentumScalperStrategy {
             if signal == Signal::Long
                 && !matches!(
                     momentum,
-                    MomentumState::StrongBullish | MomentumState::WeakBullish | MomentumState::Neutral
+                    MomentumState::StrongBullish
+                        | MomentumState::WeakBullish
+                        | MomentumState::Neutral
                 )
             {
                 return Signal::Flat;
