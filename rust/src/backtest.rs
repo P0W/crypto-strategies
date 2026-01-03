@@ -542,12 +542,12 @@ impl Backtester {
         // Sharpe ratio - annualized based on timeframe
         // For crypto: 365 days/year, 24 hours/day
         let periods_per_year: f64 = match timeframe {
-            "1m" => 365.0 * 24.0 * 60.0,      // 525,600
-            "5m" => 365.0 * 24.0 * 12.0,      // 105,120
-            "15m" => 365.0 * 24.0 * 4.0,      // 35,040
-            "1h" => 365.0 * 24.0,             // 8,760
-            "4h" => 365.0 * 6.0,              // 2,190
-            "1d" | _ => 365.0,                // 365 (default)
+            "1m" => 365.0 * 24.0 * 60.0, // 525,600
+            "5m" => 365.0 * 24.0 * 12.0, // 105,120
+            "15m" => 365.0 * 24.0 * 4.0, // 35,040
+            "1h" => 365.0 * 24.0,        // 8,760
+            "4h" => 365.0 * 6.0,         // 2,190
+            _ => 365.0, // 365 (default for 1d and unknown)
         };
         const RISK_FREE: f64 = 0.05;
         let period_rf = RISK_FREE / periods_per_year;
