@@ -17,6 +17,7 @@
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
+use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::Client;
 use std::time::Duration as StdDuration;
 use tracing::{debug, info, warn};
@@ -172,6 +173,16 @@ impl BinanceClient {
             binance_symbol, interval, days_back
         );
 
+        // Estimate total candles for progress bar
+        let estimated_candles = Self::estimate_candles(interval, days_back);
+        let progress = ProgressBar::new(estimated_candles);
+        progress.set_style(
+            ProgressStyle::default_bar()
+                .template("    [{bar:40.cyan/blue}] {pos}/{len} candles ({percent}%)")
+                .unwrap()
+                .progress_chars("=>-"),
+        );
+
         let mut all_klines = Vec::new();
         let mut current_start = start_time;
 
@@ -196,7 +207,9 @@ impl BinanceClient {
                         current_start = last.open_time + 1;
                     }
 
+                    let batch_size = klines.len() as u64;
                     all_klines.extend(klines);
+                    progress.inc(batch_size);
 
                     // Rate limiting
                     tokio::time::sleep(StdDuration::from_millis(RATE_LIMIT_DELAY_MS)).await;
@@ -207,6 +220,8 @@ impl BinanceClient {
                 }
             }
         }
+
+        progress.finish_and_clear();
 
         // Sort and deduplicate
         all_klines.sort_by_key(|k| k.open_time);
@@ -220,6 +235,30 @@ impl BinanceClient {
         );
 
         Ok(all_klines)
+    }
+
+    /// Estimate the number of candles for a given interval and days
+    fn estimate_candles(interval: &str, days: u32) -> u64 {
+        let minutes_per_candle = match interval {
+            "1m" => 1,
+            "3m" => 3,
+            "5m" => 5,
+            "15m" => 15,
+            "30m" => 30,
+            "1h" => 60,
+            "2h" => 120,
+            "4h" => 240,
+            "6h" => 360,
+            "8h" => 480,
+            "12h" => 720,
+            "1d" => 1440,
+            "3d" => 4320,
+            "1w" => 10080,
+            "1M" => 43200,
+            _ => 60, // Default to 1h
+        };
+        let total_minutes = days as u64 * 24 * 60;
+        total_minutes / minutes_per_candle
     }
 
     /// Check server connectivity

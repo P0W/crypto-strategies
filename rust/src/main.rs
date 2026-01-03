@@ -51,6 +51,10 @@ enum Commands {
         /// End date (YYYY-MM-DD)
         #[arg(long)]
         end: Option<String>,
+
+        /// Disable risk manager limits (no drawdown halt, no position limits)
+        #[arg(long)]
+        no_risk_limits: bool,
     },
 
     /// Optimize strategy parameters (grid search from JSON config)
@@ -248,7 +252,8 @@ fn main() -> Result<()> {
             capital,
             start,
             end,
-        } => commands::backtest::run(config, strategy, capital, start, end),
+            no_risk_limits,
+        } => commands::backtest::run(config, strategy, capital, start, end, no_risk_limits),
 
         Commands::Optimize {
             config,

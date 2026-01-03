@@ -505,15 +505,10 @@ pub async fn ensure_data_available(
             .await
         {
             Ok(path) => {
-                info!("  ✓ Downloaded to {}", path.display());
+                info!("  Downloaded to {}", path.display());
             }
             Err(e) => {
-                warn!(
-                    "  ✗ Failed to fetch {} {}: {}",
-                    symbol.as_str(),
-                    timeframe,
-                    e
-                );
+                warn!("  Failed to fetch {} {}: {}", symbol.as_str(), timeframe, e);
                 failed.push((symbol.clone(), timeframe.clone()));
             }
         }
@@ -547,7 +542,7 @@ pub async fn ensure_data_for_range(
     let data_dir = data_dir.as_ref();
 
     // Check what data we need
-    let (missing_files, needs_earlier, _needs_later) =
+    let (missing_files, needs_earlier, needs_later) =
         check_data_coverage(data_dir, symbols, timeframes, start, end);
 
     let mut failed = Vec::new();
@@ -574,10 +569,10 @@ pub async fn ensure_data_for_range(
                 .await
             {
                 Ok(path) => {
-                    println!("    ✓ Downloaded to {}", path.display());
+                    println!("    Downloaded to {}", path.display());
                 }
                 Err(e) => {
-                    println!("    ✗ Failed: {}", e);
+                    println!("    FAILED: {}", e);
                     failed.push((symbol.clone(), timeframe.clone()));
                 }
             }
@@ -609,23 +604,21 @@ pub async fn ensure_data_for_range(
                 .min()
                 .unwrap_or(Utc::now());
 
-            // Skip if we already tried and couldn't get earlier data
-            // (if existing_start is very close to needed_start, don't bother)
-            let days_gap = (existing_start - *needed_start).num_days();
-            if days_gap <= 1 {
-                // Already have data close to the requested start
+            // Skip if we already have data at or before the needed start
+            if existing_start <= *needed_start {
                 continue;
             }
 
-            // Calculate days to fetch
-            let days_back = days_gap as u32 + 30; // Extra buffer
+            // Calculate days to fetch from NOW to needed_start
+            // (The Binance client fetches data from (now - days_back) to now)
+            let days_from_now_to_needed = (Utc::now() - *needed_start).num_days();
+            let days_back = days_from_now_to_needed as u32 + 30; // Extra buffer
 
             println!(
-                "    Extending {}_{}.csv with earlier data ({} days before {})...",
+                "    Extending {}_{}.csv with earlier data (fetching back to {})...",
                 symbol.as_str(),
                 timeframe,
-                days_back,
-                existing_start.format("%Y-%m-%d")
+                needed_start.format("%Y-%m-%d")
             );
 
             // Fetch historical data
@@ -636,7 +629,7 @@ pub async fn ensure_data_for_range(
                 Ok(new_candles) => {
                     if new_candles.is_empty() {
                         println!(
-                            "    ⚠ No earlier data available from Binance (earliest: {})",
+                            "    No earlier data available from Binance (earliest: {})",
                             existing_start.format("%Y-%m-%d")
                         );
                         continue;
@@ -647,7 +640,7 @@ pub async fn ensure_data_for_range(
 
                     if fetched_start >= existing_start {
                         println!(
-                            "    ⚠ Binance data only goes back to {} (requested: {})",
+                            "    Binance data only goes back to {} (requested: {})",
                             existing_start.format("%Y-%m-%d"),
                             needed_start.format("%Y-%m-%d")
                         );
@@ -669,19 +662,131 @@ pub async fn ensure_data_for_range(
                         Ok(_) => {
                             let new_start = all_candles.iter().map(|c| c.datetime).min().unwrap();
                             println!(
-                                "    ✓ Extended data now starts from {} ({} total candles)",
+                                "    Extended: data now starts from {} ({} total candles)",
                                 new_start.format("%Y-%m-%d"),
                                 all_candles.len()
                             );
+                            // Warn if data doesn't go back far enough
+                            if new_start > *needed_start {
+                                println!(
+                                    "    WARNING: Data starts at {} but {} was requested.",
+                                    new_start.format("%Y-%m-%d"),
+                                    needed_start.format("%Y-%m-%d")
+                                );
+                                println!(
+                                    "             Binance may not have earlier data for this symbol."
+                                );
+                            }
                         }
                         Err(e) => {
-                            println!("    ✗ Failed to save merged data: {}", e);
+                            println!("    FAILED to save merged data: {}", e);
                             failed.push((symbol.clone(), timeframe.clone()));
                         }
                     }
                 }
                 Err(e) => {
-                    println!("    ✗ Failed to fetch earlier data: {}", e);
+                    println!("    FAILED to fetch earlier data: {}", e);
+                    failed.push((symbol.clone(), timeframe.clone()));
+                }
+            }
+        }
+    }
+
+    // Extend files that need later data (files that are stale and need refresh)
+    // Note: Skip files already handled by needs_earlier (they got fresh data up to now)
+    let earlier_symbols: std::collections::HashSet<_> = needs_earlier
+        .iter()
+        .map(|(s, tf, _)| (s.clone(), tf.clone()))
+        .collect();
+
+    let needs_later_only: Vec<_> = needs_later
+        .into_iter()
+        .filter(|(s, tf, _)| !earlier_symbols.contains(&(s.clone(), tf.clone())))
+        .collect();
+
+    if !needs_later_only.is_empty() {
+        info!(
+            "Found {} files needing only later data",
+            needs_later_only.len()
+        );
+        let fetcher = BinanceDataFetcher::new(data_dir);
+
+        for (symbol, timeframe, needed_end) in &needs_later_only {
+            let filename = format!("{}_{}.csv", symbol.as_str(), timeframe);
+            let path = data_dir.join(&filename);
+
+            // Load existing data to get the start date
+            let existing_candles = match load_csv(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("Failed to load existing data for {}: {}", symbol, e);
+                    failed.push((symbol.clone(), timeframe.clone()));
+                    continue;
+                }
+            };
+
+            let existing_start = existing_candles
+                .iter()
+                .map(|c| c.datetime)
+                .min()
+                .unwrap_or(Utc::now());
+
+            // Fetch from existing start to now (this will get all newer data)
+            let days_back = (Utc::now() - existing_start).num_days() as u32 + 30;
+
+            println!(
+                "    Refreshing {}_{}.csv with latest data...",
+                symbol.as_str(),
+                timeframe,
+            );
+
+            match fetcher
+                .fetch_full_history(symbol.as_str(), timeframe, days_back)
+                .await
+            {
+                Ok(new_candles) => {
+                    if new_candles.is_empty() {
+                        println!("    No data available from Binance");
+                        continue;
+                    }
+
+                    // Merge and deduplicate
+                    let mut all_candles: Vec<Candle> = existing_candles
+                        .into_iter()
+                        .chain(new_candles.into_iter())
+                        .collect();
+
+                    all_candles.sort_by_key(|c| c.datetime);
+                    all_candles.dedup_by_key(|c| c.datetime);
+
+                    match fetcher.save_to_csv(&all_candles, &filename) {
+                        Ok(_) => {
+                            let new_end = all_candles.iter().map(|c| c.datetime).max().unwrap();
+                            println!(
+                                "    Extended: data now ends at {} ({} total candles)",
+                                new_end.format("%Y-%m-%d"),
+                                all_candles.len()
+                            );
+                            // Warn if data doesn't cover the requested end date
+                            if new_end < *needed_end {
+                                println!(
+                                    "    WARNING: Data ends at {} but {} was requested.",
+                                    new_end.format("%Y-%m-%d"),
+                                    needed_end.format("%Y-%m-%d")
+                                );
+                                println!(
+                                    "             Symbol may be delisted or rebranded on Binance."
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            println!("    FAILED to save data: {}", e);
+                            failed.push((symbol.clone(), timeframe.clone()));
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("    FAILED to fetch data: {}", e);
                     failed.push((symbol.clone(), timeframe.clone()));
                 }
             }
@@ -692,7 +797,7 @@ pub async fn ensure_data_for_range(
 }
 
 /// Synchronous wrapper for ensure_data_for_range
-pub fn ensure_data_for_range_sync(
+fn ensure_data_for_range_sync(
     data_dir: impl AsRef<Path>,
     symbols: &[Symbol],
     timeframes: &[String],
@@ -703,6 +808,91 @@ pub fn ensure_data_for_range_sync(
     rt.block_on(ensure_data_for_range(
         data_dir, symbols, timeframes, start, end,
     ))
+}
+
+/// Check data availability and fetch missing/incomplete data from Binance.
+///
+/// This is the primary entry point for ensuring data is available before backtesting.
+/// Checks for missing files, files needing earlier data (--start), and files needing
+/// later data (--end), then fetches as needed.
+///
+/// Returns Ok(()) on success. Prints a summary of actions taken.
+pub fn check_and_fetch_data(
+    data_dir: impl AsRef<Path>,
+    symbols: &[Symbol],
+    timeframes: &[String],
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+) -> Result<()> {
+    let data_dir = data_dir.as_ref();
+
+    let (missing_files, needs_earlier, needs_later) =
+        check_data_coverage(data_dir, symbols, timeframes, start, end);
+
+    let needs_download =
+        !missing_files.is_empty() || !needs_earlier.is_empty() || !needs_later.is_empty();
+
+    if !needs_download {
+        info!("All required data files are available");
+        return Ok(());
+    }
+
+    println!("\n{}", "=".repeat(60));
+    println!("DATA AVAILABILITY CHECK");
+    println!("{}", "=".repeat(60));
+
+    if !missing_files.is_empty() {
+        println!("  Missing files: {}", missing_files.len());
+        for (sym, tf) in &missing_files {
+            println!("    - {}_{}.csv", sym.as_str(), tf);
+        }
+    }
+
+    if !needs_earlier.is_empty() {
+        println!("  Files needing earlier data: {}", needs_earlier.len());
+        for (sym, tf, needed_start) in &needs_earlier {
+            println!(
+                "    - {}_{}.csv (need data from {})",
+                sym.as_str(),
+                tf,
+                needed_start.format("%Y-%m-%d")
+            );
+        }
+    }
+
+    if !needs_later.is_empty() {
+        println!("  Files needing later data: {}", needs_later.len());
+        for (sym, tf, needed_end) in &needs_later {
+            println!(
+                "    - {}_{}.csv (need data until {})",
+                sym.as_str(),
+                tf,
+                needed_end.format("%Y-%m-%d")
+            );
+        }
+    }
+
+    println!("{}", "-".repeat(60));
+    println!("  Fetching data from Binance...\n");
+
+    let failed = ensure_data_for_range_sync(data_dir, symbols, timeframes, start, end)?;
+
+    println!();
+    if failed.is_empty() {
+        println!("  All data fetched successfully");
+    } else {
+        println!("  WARNING: Could not fetch {} file(s):", failed.len());
+        for (sym, tf) in &failed {
+            println!("    - {}_{}.csv", sym.as_str(), tf);
+        }
+        println!();
+        println!("  Backtest will proceed with available data.");
+        println!("  Results may be limited to the available date range.");
+    }
+
+    println!("{}\n", "=".repeat(60));
+
+    Ok(())
 }
 
 // =============================================================================
