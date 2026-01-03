@@ -547,7 +547,7 @@ impl Backtester {
             "15m" => 365.0 * 24.0 * 4.0, // 35,040
             "1h" => 365.0 * 24.0,        // 8,760
             "4h" => 365.0 * 6.0,         // 2,190
-            _ => 365.0, // 365 (default for 1d and unknown)
+            _ => 365.0,                  // 365 (default for 1d and unknown)
         };
         const RISK_FREE: f64 = 0.05;
         let period_rf = RISK_FREE / periods_per_year;

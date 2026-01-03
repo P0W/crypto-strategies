@@ -11,9 +11,7 @@
 //! - momentum_scalper: Sharpe 0.44, 67% return, 165 trades (1d)
 //! - quick_flip: Sharpe 0.38, 37.6% return, 10 trades (1d)
 //! - range_breakout: Sharpe 0.29, 31% return, 146 trades (1d)
-//! - grid_trading: Market-neutral grid strategy for ranging markets
 
-pub mod grid_trading;
 pub mod momentum_scalper;
 pub mod quick_flip;
 pub mod range_breakout;
@@ -151,7 +149,6 @@ fn get_registry() -> &'static RwLock<HashMap<&'static str, StrategyFactory>> {
         );
         map.insert("range_breakout", range_breakout::create as StrategyFactory);
         map.insert("quick_flip", quick_flip::create as StrategyFactory);
-        map.insert("grid_trading", grid_trading::create as StrategyFactory);
         RwLock::new(map)
     })
 }
