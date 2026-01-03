@@ -602,7 +602,8 @@ fn run_baseline_backtest(
             &timeframe,
             start_date,
             end_date,
-        ).ok()?
+        )
+        .ok()?
     } else {
         let single_data = data::load_multi_symbol_with_range(
             &config.backtest.data_dir,
@@ -610,8 +611,9 @@ fn run_baseline_backtest(
             &timeframe,
             start_date,
             end_date,
-        ).ok()?;
-        
+        )
+        .ok()?;
+
         single_data
             .into_iter()
             .map(|(symbol, candles)| {
@@ -747,15 +749,15 @@ fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<Optimiza
     use crypto_strategies::multi_timeframe::MultiTimeframeData;
 
     let symbol_list: Vec<Symbol> = task.symbols_vec.iter().map(|s| Symbol(s.clone())).collect();
-    
+
     // Create strategy to get its requirements
     let strategy = match strategies::create_strategy(param_config) {
         Ok(s) => s,
         Err(_) => return None,
     };
-    
+
     let required_tfs = strategy.required_timeframes();
-    
+
     // Load data based on strategy requirements
     let mtf_data = if !required_tfs.is_empty() {
         // MTF strategy - load all required timeframes
@@ -763,7 +765,7 @@ fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<Optimiza
         if !all_tfs.contains(&task.timeframe.as_str()) {
             all_tfs.push(&task.timeframe);
         }
-        
+
         match data::load_multi_timeframe(
             &task.config.backtest.data_dir,
             &symbol_list,
@@ -787,7 +789,7 @@ fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<Optimiza
             Ok(d) if !d.is_empty() => d,
             _ => return None,
         };
-        
+
         single_data
             .into_iter()
             .map(|(symbol, candles)| {

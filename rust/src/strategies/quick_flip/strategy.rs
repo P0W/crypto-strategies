@@ -19,7 +19,7 @@
 
 use crate::indicators::atr;
 use crate::strategies::Strategy;
-use crate::{Candle, MultiTimeframeCandles, Position, Signal, Side, Symbol};
+use crate::{Candle, MultiTimeframeCandles, Position, Side, Signal, Symbol};
 use std::cell::Cell;
 
 use super::config::QuickFlipConfig;
@@ -81,8 +81,12 @@ impl QuickFlipStrategy {
         let mut high = f64::NEG_INFINITY;
         let mut low = f64::INFINITY;
         for c in candles {
-            if c.high > high { high = c.high; }
-            if c.low < low { low = c.low; }
+            if c.high > high {
+                high = c.high;
+            }
+            if c.low < low {
+                low = c.low;
+            }
         }
         (high, low)
     }
@@ -103,9 +107,11 @@ impl QuickFlipStrategy {
     #[inline]
     fn is_strong_candle(candle: &Candle) -> bool {
         let range = candle.high - candle.low;
-        if range <= 0.0 { return false; }
+        if range <= 0.0 {
+            return false;
+        }
         let body = (candle.close - candle.open).abs();
-        body / range > 0.5  // Body is more than 50% of range
+        body / range > 0.5 // Body is more than 50% of range
     }
 
     /// Check for bullish setup - simplified for more trades
@@ -208,7 +214,7 @@ impl Strategy for QuickFlipStrategy {
         // Price near or below range_low with bullish pattern
         let near_low = curr.close <= range_low + touch_threshold || curr.low <= range_low;
         let bullish_setup = near_low && Self::is_bullish_pattern(prev, curr);
-        
+
         if bullish_setup {
             self.state.last_signal.set(Signal::Long);
             self.state.last_trade_bar.set(current_bar);
@@ -219,7 +225,7 @@ impl Strategy for QuickFlipStrategy {
         // Price near or above range_high with bearish pattern
         let near_high = curr.close >= range_high - touch_threshold || curr.high >= range_high;
         let bearish_setup = near_high && Self::is_bearish_pattern(prev, curr);
-        
+
         if bearish_setup {
             self.state.last_signal.set(Signal::Short);
             self.state.last_trade_bar.set(current_bar);
@@ -277,9 +283,10 @@ impl Strategy for QuickFlipStrategy {
 
         // STRATEGY: Quick Flip = trade BOTH reversals AND breakouts
         // This generates more trades by capturing both mean reversion and momentum
-        
+
         // BREAKOUT LONG: Price breaks above range high with momentum
-        let breakout_long = curr.close > range_high && Self::is_bullish(curr) && Self::is_strong_candle(curr);
+        let breakout_long =
+            curr.close > range_high && Self::is_bullish(curr) && Self::is_strong_candle(curr);
         if breakout_long {
             self.state.last_signal.set(Signal::Long);
             self.state.last_trade_bar.set(current_bar);
@@ -287,7 +294,8 @@ impl Strategy for QuickFlipStrategy {
         }
 
         // BREAKOUT SHORT: Price breaks below range low with momentum
-        let breakout_short = curr.close < range_low && Self::is_bearish(curr) && Self::is_strong_candle(curr);
+        let breakout_short =
+            curr.close < range_low && Self::is_bearish(curr) && Self::is_strong_candle(curr);
         if breakout_short {
             self.state.last_signal.set(Signal::Short);
             self.state.last_trade_bar.set(current_bar);
@@ -295,7 +303,7 @@ impl Strategy for QuickFlipStrategy {
         }
 
         // REVERSAL LONG: Price near/below range low, bullish candle
-        let touch_threshold = range_size * 0.30;  // 30% threshold for more signals
+        let touch_threshold = range_size * 0.30; // 30% threshold for more signals
         let near_low = curr.close <= range_low + touch_threshold || curr.low <= range_low;
         if near_low && Self::is_bullish_pattern(prev, curr) {
             self.state.last_signal.set(Signal::Long);
@@ -317,7 +325,7 @@ impl Strategy for QuickFlipStrategy {
     fn calculate_stop_loss(&self, candles: &[Candle], _entry_price: f64) -> f64 {
         let signal_candle = candles.last().unwrap();
         match self.state.last_signal.get() {
-            Signal::Long => signal_candle.low * 0.998,  // Just below the low
+            Signal::Long => signal_candle.low * 0.998, // Just below the low
             Signal::Short => signal_candle.high * 1.002, // Just above the high
             Signal::Flat => signal_candle.low * 0.998,
         }
@@ -330,10 +338,18 @@ impl Strategy for QuickFlipStrategy {
 
         match self.state.last_signal.get() {
             Signal::Long => {
-                if self.config.conservative_target { mid } else { range_high }
+                if self.config.conservative_target {
+                    mid
+                } else {
+                    range_high
+                }
             }
             Signal::Short => {
-                if self.config.conservative_target { mid } else { range_low }
+                if self.config.conservative_target {
+                    mid
+                } else {
+                    range_low
+                }
             }
             Signal::Flat => entry_price * 1.02,
         }

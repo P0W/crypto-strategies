@@ -691,11 +691,11 @@ async fn test_list_inr_pairs() {
 // Indicator Processing Tests with Real Data Structure
 // =============================================================================
 
+/// OHLCV data structure for indicator testing
+type OhlcvData = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
+
 /// Generate realistic price data for indicator testing
-fn generate_realistic_ohlcv(
-    count: usize,
-    start_price: f64,
-) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+fn generate_realistic_ohlcv(count: usize, start_price: f64) -> OhlcvData {
     let mut opens = Vec::with_capacity(count);
     let mut highs = Vec::with_capacity(count);
     let mut lows = Vec::with_capacity(count);
@@ -1133,12 +1133,12 @@ async fn test_sharpe_ratio_excludes_zero_return_days() {
         BacktestConfig, Config, ExchangeConfig, TaxConfig, TradingConfig,
     };
     use crypto_strategies::data::CoinDCXDataFetcher;
+    use crypto_strategies::multi_timeframe::MultiTimeframeData;
     use crypto_strategies::strategies::volatility_regime::{
         VolatilityRegimeConfig, VolatilityRegimeStrategy,
     };
     use std::collections::HashMap;
     use std::env::temp_dir;
-    use crypto_strategies::multi_timeframe::MultiTimeframeData;
 
     let temp_data_dir = temp_dir().join("crypto_test_sharpe");
     let _guard = TempDirGuard(temp_data_dir.clone());
@@ -1189,7 +1189,7 @@ async fn test_sharpe_ratio_excludes_zero_return_days() {
     let mut backtester = Backtester::new(config, Box::new(strategy));
     let symbol = Symbol::new("BTCINR");
     let mut data = HashMap::new();
-    
+
     // Create MultiTimeframeData for the symbol
     let mut mtf_data = MultiTimeframeData::new("1d");
     mtf_data.add_timeframe("1d", candles.clone());
