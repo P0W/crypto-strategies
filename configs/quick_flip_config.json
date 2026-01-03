@@ -26,9 +26,9 @@
         "name": "quick_flip",
         "timeframe": "5m",
         "atr_period": 14,
-        "min_range_pct": 0.25,
-        "opening_bars": 1,
-        "cooldown_bars": 6,
+        "min_range_pct": 0.15,
+        "opening_bars": 3,
+        "cooldown_bars": 12,
         "conservative_target": false
     },
 

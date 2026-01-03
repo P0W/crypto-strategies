@@ -580,25 +580,55 @@ fn run_baseline_backtest(
     end_date: Option<DateTime<Utc>>,
 ) -> Option<f64> {
     use crypto_strategies::backtest::Backtester;
+    use crypto_strategies::multi_timeframe::MultiTimeframeData;
 
     let symbols: Vec<Symbol> = config.trading.symbols();
     let timeframe = config.timeframe();
 
-    let data = data::load_multi_symbol_with_range(
-        &config.backtest.data_dir,
-        &symbols,
-        &timeframe,
-        start_date,
-        end_date,
-    )
-    .ok()?;
-    if data.is_empty() {
+    // Create strategy to get requirements
+    let strategy = strategies::create_strategy(config).ok()?;
+    let required_tfs = strategy.required_timeframes();
+
+    // Load data in MTF format
+    let mtf_data = if !required_tfs.is_empty() {
+        let mut all_tfs: Vec<&str> = required_tfs;
+        if !all_tfs.contains(&timeframe.as_str()) {
+            all_tfs.push(&timeframe);
+        }
+        data::load_multi_timeframe(
+            &config.backtest.data_dir,
+            &symbols,
+            &all_tfs,
+            &timeframe,
+            start_date,
+            end_date,
+        ).ok()?
+    } else {
+        let single_data = data::load_multi_symbol_with_range(
+            &config.backtest.data_dir,
+            &symbols,
+            &timeframe,
+            start_date,
+            end_date,
+        ).ok()?;
+        
+        single_data
+            .into_iter()
+            .map(|(symbol, candles)| {
+                let mut mtf = MultiTimeframeData::new(&timeframe);
+                mtf.add_timeframe(&timeframe, candles);
+                (symbol, mtf)
+            })
+            .collect()
+    };
+
+    if mtf_data.is_empty() {
         return None;
     }
 
     let strategy = strategies::create_strategy(config).ok()?;
     let mut backtester = Backtester::new(config.clone(), strategy);
-    let result = backtester.run(data);
+    let result = backtester.run(mtf_data);
 
     Some(match sort_by {
         "sharpe" => result.metrics.sharpe_ratio,
@@ -711,26 +741,62 @@ struct OptTask {
 
 fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<OptimizationResult> {
     use crypto_strategies::backtest::Backtester;
+    use crypto_strategies::multi_timeframe::MultiTimeframeData;
 
     let symbol_list: Vec<Symbol> = task.symbols_vec.iter().map(|s| Symbol(s.clone())).collect();
-    let data = match data::load_multi_symbol_with_range(
-        &task.config.backtest.data_dir,
-        &symbol_list,
-        &task.timeframe,
-        task.start_date,
-        task.end_date,
-    ) {
-        Ok(d) if !d.is_empty() => d,
-        _ => return None,
-    };
-
+    
+    // Create strategy to get its requirements
     let strategy = match strategies::create_strategy(param_config) {
         Ok(s) => s,
         Err(_) => return None,
     };
+    
+    let required_tfs = strategy.required_timeframes();
+    
+    // Load data based on strategy requirements
+    let mtf_data = if !required_tfs.is_empty() {
+        // MTF strategy - load all required timeframes
+        let mut all_tfs: Vec<&str> = required_tfs;
+        if !all_tfs.contains(&task.timeframe.as_str()) {
+            all_tfs.push(&task.timeframe);
+        }
+        
+        match data::load_multi_timeframe(
+            &task.config.backtest.data_dir,
+            &symbol_list,
+            &all_tfs,
+            &task.timeframe,
+            task.start_date,
+            task.end_date,
+        ) {
+            Ok(d) if !d.is_empty() => d,
+            _ => return None,
+        }
+    } else {
+        // Single-TF strategy - wrap in MTF format
+        let single_data = match data::load_multi_symbol_with_range(
+            &task.config.backtest.data_dir,
+            &symbol_list,
+            &task.timeframe,
+            task.start_date,
+            task.end_date,
+        ) {
+            Ok(d) if !d.is_empty() => d,
+            _ => return None,
+        };
+        
+        single_data
+            .into_iter()
+            .map(|(symbol, candles)| {
+                let mut mtf = MultiTimeframeData::new(&task.timeframe);
+                mtf.add_timeframe(&task.timeframe, candles);
+                (symbol, mtf)
+            })
+            .collect()
+    };
 
     let mut backtester = Backtester::new(param_config.clone(), strategy);
-    let result = backtester.run(data);
+    let result = backtester.run(mtf_data);
 
     // Build params with metadata
     let mut params: HashMap<String, f64> = HashMap::new();
