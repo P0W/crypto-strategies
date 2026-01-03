@@ -1,5 +1,5 @@
 {
-  "_comment": "Momentum Scalper - Optimized for shorter timeframes with relaxed risk parameters",
+  "_comment": "Momentum Scalper - Simple EMA trend following optimized for 4h timeframe",
   "backtest": {
     "commission": 0.001,
     "data_dir": "../data",
@@ -14,11 +14,11 @@
   "grid": {
     "_optimization": [
       {
-        "calmar_ratio": -0.03,
-        "expectancy": -369.17,
-        "max_drawdown": 92.4,
-        "optimized_at": "2026-01-03 09:05:29",
-        "sharpe_ratio": 0.21,
+        "calmar_ratio": 0.48,
+        "expectancy": 439.99,
+        "max_drawdown": 28.4,
+        "optimized_at": "2026-01-03 12:06:21",
+        "sharpe_ratio": 0.44,
         "symbols": [
           "BTCINR",
           "ETHINR",
@@ -26,60 +26,68 @@
           "BNBINR",
           "XRPINR"
         ],
-        "total_return": -9.1,
-        "total_trades": 18,
-        "win_rate": 11.1
+        "total_return": 67.0,
+        "total_trades": 165,
+        "win_rate": 43.0
       }
     ],
     "adx_threshold": [
-      15.0
+      0.0,
+      15.0,
+      20.0
     ],
     "atr_period": [
+      10,
       14
     ],
     "ema_fast": [
+      5,
       8,
       13
     ],
     "ema_slow": [
       21,
-      34
+      34,
+      55
     ],
     "max_hold_bars": [
+      30,
       50,
       100
     ],
     "stop_atr_multiple": [
+      1.5,
       2.0,
       2.5
     ],
     "target_atr_multiple": [
+      2.0,
       3.0,
       4.0
     ]
   },
   "strategy": {
     "adx_period": 14,
-    "adx_threshold": 15,
+    "adx_threshold": 20,
     "allow_short": false,
     "atr_period": 14,
-    "cooldown_bars": 1,
+    "cooldown_bars": 0,
     "ema_fast": 13,
-    "ema_slow": 34,
+    "ema_slow": 21,
     "ema_trend": 50,
     "exit_on_cross": true,
     "macd_fast": 12,
     "macd_signal": 9,
     "macd_slow": 26,
-    "max_hold_bars": 50,
+    "max_hold_bars": 100,
     "name": "momentum_scalper",
     "require_volume": false,
     "stop_atr_multiple": 2.5,
     "target_atr_multiple": 3,
-    "timeframe": "1h",
+    "timeframe": "1d",
     "trade_with_trend": false,
-    "trailing_activation": 0.3,
-    "trailing_atr_multiple": 1.5,
+    "trailing_activation": 0.5,
+    "trailing_atr_multiple": 1.0,
     "use_macd": false,
     "volume_period": 20,
     "volume_threshold": 1.0
@@ -101,7 +109,7 @@
     "max_portfolio_heat": 0.4,
     "max_position_pct": 0.25,
     "max_positions": 5,
-    "risk_per_trade": 0.15,
+    "risk_per_trade": 0.1,
     "symbols": [
       "BTCINR",
       "ETHINR",

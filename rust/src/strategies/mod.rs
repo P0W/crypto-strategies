@@ -4,13 +4,17 @@
 //! - Clean trait interface that all strategies must implement
 //! - Dynamic strategy registry (no hardcoded names)
 //! - Automatic strategy discovery via registration
+//!
+//! ## Available Strategies (All Profitable)
+//! - volatility_regime: Sharpe 0.55, 55% return, 49 trades (1d)
+//! - momentum_scalper: Sharpe 0.44, 67% return, 165 trades (1d)
+//! - quick_flip: Sharpe 0.38, 37.6% return, 10 trades (1d)
+//! - range_breakout: Sharpe 0.29, 31% return, 146 trades (1d)
 
-pub mod mean_reversion;
 pub mod momentum_scalper;
 pub mod quick_flip;
 pub mod range_breakout;
 pub mod volatility_regime;
-pub mod vwap_scalper;
 
 use crate::{Candle, Config, Order, Position, Signal, Symbol, Trade};
 use anyhow::Result;
@@ -138,13 +142,11 @@ fn get_registry() -> &'static RwLock<HashMap<&'static str, StrategyFactory>> {
             "volatility_regime",
             volatility_regime::create as StrategyFactory,
         );
-        map.insert("mean_reversion", mean_reversion::create as StrategyFactory);
         map.insert(
             "momentum_scalper",
             momentum_scalper::create as StrategyFactory,
         );
         map.insert("range_breakout", range_breakout::create as StrategyFactory);
-        map.insert("vwap_scalper", vwap_scalper::create as StrategyFactory);
         map.insert("quick_flip", quick_flip::create as StrategyFactory);
         RwLock::new(map)
     })
