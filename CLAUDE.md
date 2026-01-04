@@ -264,7 +264,7 @@ This repository contains both Python and Rust implementations:
 **Current Status:**
 - ✅ Backtest mode: Production-ready
 - ✅ Optimize mode: Production-ready
-- ⚠️ Live mode: Core components ready (exchange client, state manager, risk controls), awaiting async event loop implementation
+- ✅ Live mode: Production-ready (async event loop, MTF support, long/short positions, crash recovery)
 
 ## Important Implementation Notes
 
