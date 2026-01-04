@@ -1195,7 +1195,7 @@ async fn test_sharpe_ratio_excludes_zero_return_days() {
     mtf_data.add_timeframe("1d", candles.clone());
     data.insert(symbol.clone(), mtf_data);
 
-    let result = backtester.run(data);
+    let result = backtester.run(&data);
 
     println!("\n=== Sharpe Ratio Validation ===");
     println!("Total trades: {}", result.metrics.total_trades);

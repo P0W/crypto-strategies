@@ -39,9 +39,12 @@ impl Optimizer {
     }
 
     /// Run optimization with MTF data (unified interface)
+    ///
+    /// Takes a reference to data to avoid cloning for each parallel iteration.
+    /// This significantly reduces memory usage with large datasets.
     pub fn optimize<F>(
         &self,
-        data: MultiSymbolMultiTimeframeData,
+        data: &MultiSymbolMultiTimeframeData,
         configs: Vec<Config>,
         strategy_factory: F,
     ) -> Vec<OptimizationResult>
@@ -55,7 +58,7 @@ impl Optimizer {
             .map(|config| {
                 let strategy = strategy_factory(config);
                 let mut backtester = Backtester::new(config.clone(), strategy);
-                let result = backtester.run(data.clone());
+                let result = backtester.run(data);
 
                 OptimizationResult {
                     params: crate::grid::extract_params(config),
@@ -75,7 +78,7 @@ impl Optimizer {
     /// Run optimization with progress tracking
     pub fn optimize_with_progress<F>(
         &self,
-        data: MultiSymbolMultiTimeframeData,
+        data: &MultiSymbolMultiTimeframeData,
         configs: Vec<Config>,
         strategy_factory: F,
         progress_bar: ProgressBar,
@@ -93,7 +96,7 @@ impl Optimizer {
             .map(|config| {
                 let strategy = strategy_factory(config);
                 let mut backtester = Backtester::new(config.clone(), strategy);
-                let result = backtester.run(data.clone());
+                let result = backtester.run(data);
                 progress_bar.inc(1);
 
                 OptimizationResult {
@@ -114,7 +117,7 @@ impl Optimizer {
     /// Run optimization sequentially (for debugging)
     pub fn optimize_sequential<F>(
         &self,
-        data: MultiSymbolMultiTimeframeData,
+        data: &MultiSymbolMultiTimeframeData,
         configs: Vec<Config>,
         strategy_factory: &F,
     ) -> Vec<OptimizationResult>
@@ -131,7 +134,7 @@ impl Optimizer {
             .map(|config| {
                 let strategy = strategy_factory(config);
                 let mut backtester = Backtester::new(config.clone(), strategy);
-                let result = backtester.run(data.clone());
+                let result = backtester.run(data);
 
                 OptimizationResult {
                     params: crate::grid::extract_params(config),

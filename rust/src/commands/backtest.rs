@@ -122,7 +122,7 @@ pub fn run(
 
     // Run backtest
     let mut backtester = Backtester::new(config.clone(), strategy);
-    let result = backtester.run(mtf_data);
+    let result = backtester.run(&mtf_data);
 
     // Print results
     println!("\n{}", "=".repeat(60));

@@ -310,6 +310,75 @@ impl RiskManager {
         !self.should_halt_trading() && current_positions.len() < self.max_positions
     }
 
+    /// Can open a new position? (count-based, avoids allocation)
+    #[inline]
+    pub fn can_open_position_count(&self, position_count: usize) -> bool {
+        !self.should_halt_trading() && position_count < self.max_positions
+    }
+
+    /// Calculate position size using an iterator (avoids Vec allocation)
+    pub fn calculate_position_size_with_regime_iter<'a, I>(
+        &self,
+        entry_price: f64,
+        stop_price: f64,
+        current_positions: I,
+        regime_score: f64,
+    ) -> f64
+    where
+        I: Iterator<Item = &'a Position>,
+    {
+        if self.should_halt_trading() {
+            return 0.0;
+        }
+
+        // Base risk amount
+        let base_risk = self.current_capital * self.risk_per_trade;
+
+        // Apply regime score
+        let regime_adjusted = base_risk * regime_score;
+
+        // Apply drawdown multiplier
+        let dd_multiplier = self.drawdown_multiplier();
+
+        // Apply consecutive loss multiplier
+        let cl_multiplier = self.consecutive_loss_multiplier();
+
+        // Combined risk amount
+        let adjusted_risk = regime_adjusted * dd_multiplier * cl_multiplier;
+
+        // Calculate position size based on stop distance
+        let stop_distance = (entry_price - stop_price).abs();
+        if stop_distance == 0.0 {
+            return 0.0;
+        }
+
+        let position_size = adjusted_risk / stop_distance;
+
+        // Check position size limits
+        let max_position_value = self.current_capital * self.max_position_pct;
+        let position_value = position_size * entry_price;
+
+        if position_value > max_position_value {
+            return max_position_value / entry_price;
+        }
+
+        // Check portfolio heat (sum risk amounts from iterator)
+        let current_heat: f64 = current_positions.map(|p| p.risk_amount).sum();
+
+        let max_allowed_heat = self.current_capital * self.max_portfolio_heat;
+
+        if current_heat + adjusted_risk > max_allowed_heat {
+            let remaining_heat = max_allowed_heat - current_heat;
+            if remaining_heat > 0.0 {
+                return (remaining_heat / stop_distance).min(position_size);
+            } else {
+                return 0.0;
+            }
+        }
+
+        position_size
+    }
+
     /// Record a winning trade
     pub fn record_win(&mut self) {
         self.consecutive_wins += 1;

@@ -66,7 +66,9 @@ impl Backtester {
     ///
     /// For single-TF strategies: pass data with only primary timeframe
     /// For MTF strategies: pass data with all required timeframes
-    pub fn run(&mut self, data: crate::MultiSymbolMultiTimeframeData) -> BacktestResult {
+    ///
+    /// Takes a reference to avoid cloning in the optimizer (memory optimization).
+    pub fn run(&mut self, data: &crate::MultiSymbolMultiTimeframeData) -> BacktestResult {
         if data.is_empty() {
             tracing::error!("No data provided for backtesting");
             return BacktestResult::default();
@@ -81,7 +83,7 @@ impl Backtester {
         }
 
         // Align data across symbols
-        let aligned = crate::multi_timeframe::align_multi_timeframe_data(&data);
+        let aligned = crate::multi_timeframe::align_multi_timeframe_data(data);
         if aligned.is_empty() {
             tracing::error!("No aligned data after filtering");
             return BacktestResult::default();
@@ -370,7 +372,7 @@ impl Backtester {
             })
             .collect();
 
-        self.run(mtf_data)
+        self.run(&mtf_data)
     }
 
     #[inline]
@@ -382,9 +384,8 @@ impl Backtester {
         price: f64,
         positions: &HashMap<Symbol, Position>,
     ) -> Option<PendingOrder> {
-        let current_positions: Vec<Position> = positions.values().cloned().collect();
-
-        if !self.risk_manager.can_open_position(&current_positions) {
+        // Avoid allocating a Vec by using the HashMap directly
+        if !self.risk_manager.can_open_position_count(positions.len()) {
             return None;
         }
 
@@ -392,10 +393,10 @@ impl Backtester {
         let target_price = self.strategy.calculate_take_profit(candles, price);
         let regime_score = self.strategy.get_regime_score(candles);
 
-        let quantity = self.risk_manager.calculate_position_size_with_regime(
+        let quantity = self.risk_manager.calculate_position_size_with_regime_iter(
             price,
             stop_price,
-            &current_positions,
+            positions.values(),
             regime_score,
         );
 

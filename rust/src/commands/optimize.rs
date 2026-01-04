@@ -630,7 +630,7 @@ fn run_baseline_backtest(
 
     let strategy = strategies::create_strategy(config).ok()?;
     let mut backtester = Backtester::new(config.clone(), strategy);
-    let result = backtester.run(mtf_data);
+    let result = backtester.run(&mtf_data);
 
     Some(match sort_by {
         "sharpe" => result.metrics.sharpe_ratio,
@@ -817,7 +817,7 @@ fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<Optimiza
     };
 
     let mut backtester = Backtester::new(param_config.clone(), strategy);
-    let result = backtester.run(mtf_data);
+    let result = backtester.run(&mtf_data);
 
     // Build params with metadata
     let mut params: HashMap<String, f64> = HashMap::new();
