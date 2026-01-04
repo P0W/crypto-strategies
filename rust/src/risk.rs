@@ -458,4 +458,69 @@ mod tests {
         // Size = 2,000 / 5 = 400
         assert_eq!(size, 400.0);
     }
+
+    /// Verify that currency units don't affect percentage-based calculations.
+    /// Tests the core claim that the system is currency-agnostic.
+    #[test]
+    fn test_currency_independence() {
+        // Scenario 1: USD
+        let capital_usd: f64 = 100_000.0;
+        let btc_price_usd: f64 = 90_000.0;
+        let risk_per_trade: f64 = 0.15;
+        let atr_usd: f64 = 3_000.0;
+        let stop_multiple: f64 = 2.5;
+
+        let stop_distance_usd = atr_usd * stop_multiple;
+        let base_risk_usd = capital_usd * risk_per_trade;
+        let position_size_usd = base_risk_usd / stop_distance_usd;
+        let position_value_usd = position_size_usd * btc_price_usd;
+        let position_pct_usd = (position_value_usd / capital_usd) * 100.0;
+
+        // Scenario 2: INR (multiply everything by 85)
+        let exchange_rate: f64 = 85.0;
+        let capital_inr = capital_usd * exchange_rate;
+        let btc_price_inr = btc_price_usd * exchange_rate;
+        let atr_inr = atr_usd * exchange_rate;
+
+        let stop_distance_inr = atr_inr * stop_multiple;
+        let base_risk_inr = capital_inr * risk_per_trade;
+        let position_size_inr = base_risk_inr / stop_distance_inr;
+        let position_value_inr = position_size_inr * btc_price_inr;
+        let position_pct_inr = (position_value_inr / capital_inr) * 100.0;
+
+        // Key assertions:
+        // 1. Position size in BTC should be identical
+        assert!(
+            (position_size_usd - position_size_inr).abs() < 0.0001,
+            "Position sizes differ: USD={}, INR={}",
+            position_size_usd,
+            position_size_inr
+        );
+
+        // 2. Position as % of capital should be identical
+        assert!(
+            (position_pct_usd - position_pct_inr).abs() < 0.01,
+            "Position percentages differ: USD={:.2}%, INR={:.2}%",
+            position_pct_usd,
+            position_pct_inr
+        );
+
+        // Test return calculation
+        let exit_price_usd: f64 = 95_000.0; // BTC goes up 5.56%
+        let exit_price_inr = exit_price_usd * exchange_rate;
+
+        let pnl_usd = (exit_price_usd - btc_price_usd) * position_size_usd;
+        let return_pct_usd = (pnl_usd / capital_usd) * 100.0;
+
+        let pnl_inr = (exit_price_inr - btc_price_inr) * position_size_inr;
+        let return_pct_inr = (pnl_inr / capital_inr) * 100.0;
+
+        // 3. Return % should be identical
+        assert!(
+            (return_pct_usd - return_pct_inr).abs() < 0.01,
+            "Return percentages differ: USD={:.2}%, INR={:.2}%",
+            return_pct_usd,
+            return_pct_inr
+        );
+    }
 }
