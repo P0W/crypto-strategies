@@ -658,6 +658,22 @@ fn update_config_with_best(
     let mut config_json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(config_path)?)?;
 
+    // Detect which grid params are booleans from the original config
+    let boolean_params: std::collections::HashSet<String> = config_json
+        .get("grid")
+        .and_then(|g| g.as_object())
+        .map(|grid| {
+            grid.iter()
+                .filter(|(_, v)| {
+                    // Check if the array contains boolean values
+                    v.as_array()
+                        .is_some_and(|arr| arr.iter().any(|val| val.is_boolean()))
+                })
+                .map(|(k, _)| k.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+
     // Update strategy params including timeframe
     if let Some(obj) = config_json
         .get_mut("strategy")
@@ -669,8 +685,8 @@ fn update_config_with_best(
         // Update other strategy params
         for key in grid_keys {
             if let Some(&value) = best.params.get(key) {
-                // Handle booleans (conservative_target) specially
-                let json_val = if key == "conservative_target" {
+                // Handle booleans dynamically based on original grid config
+                let json_val = if boolean_params.contains(key) {
                     serde_json::json!(value != 0.0)
                 } else if value.fract() == 0.0 && value >= 0.0 && value < i64::MAX as f64 {
                     serde_json::json!(value as i64)
