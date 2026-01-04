@@ -2,12 +2,30 @@
 //!
 //! Implements portfolio-level risk controls including position sizing,
 //! drawdown-based de-risking, and consecutive loss protection.
+//!
+//! # Currency-Agnostic Design
+//!
+//! All position sizing and risk calculations are **currency-agnostic**.
+//! The code treats all monetary values as dimensionless numbers and works
+//! correctly as long as `initial_capital` and price data share the same
+//! currency denomination.
+//!
+//! Position sizing formula:
+//! ```text
+//! position_size = (capital * risk_per_trade) / (entry_price - stop_price)
+//! ```
+//!
+//! This formula produces the same risk exposure percentage regardless of
+//! currency unit (USD, INR, EUR, etc.), as long as capital and prices
+//! are consistent.
 
 use crate::Position;
 
 /// Configuration for RiskManager using builder pattern
 #[derive(Debug, Clone)]
 pub struct RiskManagerConfig {
+    /// Initial capital in the same currency as price data.
+    /// No currency conversion is performed.
     pub initial_capital: f64,
     pub risk_per_trade: f64,
     pub max_positions: usize,

@@ -43,6 +43,14 @@ Both implementations share common resources in the root directory:
 └── .env.example      # Environment template
 ```
 
+### ⚠️ Important: Currency Handling
+
+The system is **currency-agnostic** - all calculations work with dimensionless numbers. No currency conversion is performed. Simply ensure your `initial_capital` (in config) and price data (in CSV files) are in the **same currency**.
+
+**Current data files contain USD prices** despite the "INR" suffix in filenames.
+
+See [CURRENCY.md](CURRENCY.md) for detailed explanation of currency handling.
+
 ## Core Strategy: Volatility Regime Adaptive Strategy
 
 ### Edge Hypothesis
