@@ -49,8 +49,6 @@ The system is **currency-agnostic** - all calculations work with dimensionless n
 
 **Current data files contain USD prices** despite the "INR" suffix in filenames.
 
-See [CURRENCY.md](CURRENCY.md) for detailed explanation of currency handling.
-
 ## Core Strategy: Volatility Regime Adaptive Strategy
 
 ### Edge Hypothesis
