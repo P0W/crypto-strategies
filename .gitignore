@@ -66,6 +66,8 @@ rust/data/
 
 # Results
 results/
+!results/STRATEGY_VERIFICATION.md
+!results/charts/
 
 # Logs
 *.log
