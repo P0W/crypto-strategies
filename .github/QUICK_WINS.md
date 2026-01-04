@@ -10,7 +10,7 @@ Go to: https://github.com/P0W/crypto-strategies/settings
 
 **Description:**
 ```
-High-performance crypto backtester & live trading engine in Rust. 94% returns, 1.6 Sharpe ratio. India tax-aware. Open source (MIT).
+High-performance crypto backtester & live trading engine in Rust. 55% returns, 0.53 Sharpe ratio. India tax-aware. Open source (MIT).
 ```
 
 **Topics** (add these):
@@ -120,8 +120,8 @@ First public release of the high-performance crypto trading backtester in Rust!
 
 ## 📈 Verified Results
 
-**Volatility Regime Strategy:** 94.67% returns, 1.60 Sharpe, 13.25% max drawdown  
-**Period:** Oct 2022 - Dec 2025 (3+ years, bull + bear markets)  
+**Volatility Regime Strategy:** 55.36% returns, 0.53 Sharpe, 13.61% max drawdown  
+**Period:** Jan 2022 - Dec 2025 (4 years, bull + bear markets)  
 **Fully reproducible** - clone repo, run one command, verify results
 
 ## 🚀 Quick Start
@@ -130,7 +130,7 @@ First public release of the high-performance crypto trading backtester in Rust!
 git clone https://github.com/P0W/crypto-strategies.git
 cd crypto-strategies/rust
 cargo build --release
-cargo run --release -- backtest --config ../configs/sample_config.json
+cargo run --release -- backtest --config ../configs/volatility_regime_config.json
 ```
 
 ## 📚 Documentation

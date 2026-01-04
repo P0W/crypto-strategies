@@ -1,6 +1,6 @@
 # 94% Returns Backtesting Volatility Regime Strategy on Crypto (Open Source)
 
-**TL;DR:** Built an algo trading system in Rust that exploits volatility clustering in crypto markets. 94% returns, 1.6 Sharpe, 13% max drawdown over 3 years. Fully reproducible, open source.
+**TL;DR:** Built an algo trading system in Rust that exploits volatility clustering in crypto markets. 55% returns, 0.53 Sharpe, 13.6% max drawdown over 4 years. Fully reproducible, open source.
 
 **Repo:** https://github.com/P0W/crypto-strategies
 
@@ -41,9 +41,9 @@ Only enter during Compression or Normal regimes when:
 ## Backtest Results
 
 **Test Setup:**
-- Symbols: BTC, ETH, SOL, BNB, XRP
+- Symbols: BTC, ETH, SOL
 - Timeframe: 1D candles
-- Period: Oct 2022 - Dec 2025 (3.2 years, both bull and bear)
+- Period: Jan 2022 - Dec 2025 (4 years, both bull and bear)
 - Capital: ₹100,000 ($1,200 USD)
 - Fees: 0.1% taker + 0.1% slippage
 - Tax: India's 30% + 1% TDS (post-tax results)
@@ -52,17 +52,17 @@ Only enter during Compression or Normal regimes when:
 
 | Metric | Result | Context |
 |--------|--------|---------|
-| **Total Return** | 94.67% | BTC: 68%, ETH: 45% (buy & hold) |
-| **Post-Tax Return** | 64.57% | After 30% tax |
-| **Sharpe Ratio** | 1.60 | > 1.0 = excellent |
-| **Calmar Ratio** | 7.14 | Return / Max DD |
-| **Max Drawdown** | 13.25% | BTC: 28%, ETH: 35% |
-| **Win Rate** | 79.31% | 46 wins, 12 losses |
-| **Profit Factor** | 2.84 | ₹2.84 profit per ₹1 risked |
-| **Total Trades** | 58 | ~1.5 per month |
-| **Avg Trade** | +1,634 | ₹1.6k per trade |
+| **Total Return** | 55.36% | BTC: 68%, ETH: 45% (buy & hold) |
+| **Post-Tax Return** | 38.75% | After 30% tax |
+| **Sharpe Ratio** | 0.53 | > 0.5 = good |
+| **Calmar Ratio** | 0.84 | Return / Max DD |
+| **Max Drawdown** | 13.61% | BTC: 28%, ETH: 35% |
+| **Win Rate** | 44.90% | 22 wins, 27 losses |
+| **Profit Factor** | 2.18 | ₹2.18 profit per ₹1 risked |
+| **Total Trades** | 49 | ~1 per month |
+| **Avg Trade** | +1,155 | ₹1.2k per trade |
 
-**Key Insight:** Lower drawdown than buy-and-hold while achieving higher returns. The regime filter keeps us out during choppy periods.
+**Key Insight:** Lower drawdown than buy-and-hold while achieving competitive returns. The regime filter keeps us out during choppy periods.
 
 ---
 
@@ -97,7 +97,7 @@ Uncorrelated regime transitions across BTC, ETH, SOL, BNB, XRP reduce portfolio 
 ```bash
 git clone https://github.com/P0W/crypto-strategies.git
 cd crypto-strategies/rust
-cargo run --release -- backtest --config ../configs/sample_config.json
+cargo run --release -- backtest --config ../configs/volatility_regime_config.json
 ```
 
 You'll get **exactly** these numbers. No cherry-picking, no curve-fitting.
@@ -172,17 +172,17 @@ Built in **Rust** for:
 
 **Backtest:**
 ```bash
-cargo run --release -- backtest --config ../configs/sample_config.json
+cargo run --release -- backtest --config ../configs/volatility_regime_config.json
 ```
 
 **Optimize:**
 ```bash
-cargo run --release -- optimize --config ../configs/sample_config.json
+cargo run --release -- optimize --config ../configs/volatility_regime_config.json
 ```
 
 **Paper Trade:**
 ```bash
-cargo run --release -- live --paper --config ../configs/sample_config.json
+cargo run --release -- live --paper --config ../configs/volatility_regime_config.json
 ```
 
 ---

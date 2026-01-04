@@ -114,12 +114,12 @@ This document summarizes all changes made to transform the crypto-strategies rep
 - **Memory usage:** 28 MB (Rust) vs 340 MB (Python) = **12x less**
 
 ### Trading Performance (Reproducible)
-- **Total Return:** 94.67%
-- **Post-Tax Return:** 64.57% (India: 30% + 1% TDS)
-- **Sharpe Ratio:** 1.60
-- **Max Drawdown:** 13.25%
-- **Win Rate:** 79.31%
-- **Period:** Oct 2022 - Dec 2025 (3+ years)
+- **Total Return:** 55.36%
+- **Post-Tax Return:** 38.75% (India: 30% + 1% TDS)
+- **Sharpe Ratio:** 0.53
+- **Max Drawdown:** 13.61%
+- **Win Rate:** 44.90%
+- **Period:** Jan 2022 - Dec 2025 (4 years)
 
 ### Repository Stats
 - ~6,000 lines of Rust

@@ -1,6 +1,6 @@
 # 🦀 Crypto Strategies
 
-> **High-performance crypto backtester & live trading engine in Rust.** 94% returns, 1.6 Sharpe ratio. Built for CoinDCX (India). Type-safe, battle-tested, production-ready.
+> **High-performance crypto backtester & live trading engine in Rust.** 55% returns, 0.53 Sharpe ratio. Built for CoinDCX (India). Type-safe, battle-tested, production-ready.
 
 [![CI](https://github.com/P0W/crypto-strategies/workflows/Rust%20CI/badge.svg)](https://github.com/P0W/crypto-strategies/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -83,14 +83,14 @@ cargo run --release -- live --paper --config ../configs/sample_config.json
 ✅ Backtest complete!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Strategy: volatility_regime
-Period: 2022-10-01 to 2025-12-31
-Capital: ₹100,000 → ₹194,670 (+94.67%)
+Period: 2022-01-02 to 2025-12-31
+Capital: ₹100,000 → ₹155,360 (+55.36%)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Sharpe Ratio:    1.60  ⭐
-Max Drawdown:   13.25%
-Win Rate:       79.31%
-Total Trades:       58
-Profit Factor:    2.84
+Sharpe Ratio:    0.53
+Max Drawdown:   13.61%
+Win Rate:       44.90%
+Total Trades:       49
+Profit Factor:    2.18
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
@@ -137,9 +137,9 @@ Cryptocurrency markets exhibit **volatility clustering** (GARCH effects) that re
 ### Verified Performance
 
 **Test Setup:** 
-- Symbols: BTC, ETH, SOL, BNB, XRP (5 major cryptos)
+- Symbols: BTC, ETH, SOL (3 major cryptos)
 - Timeframe: 1D candles
-- Period: Oct 2022 – Dec 2025 (3+ years, bull + bear markets)
+- Period: Jan 2022 – Dec 2025 (4 years, bull + bear markets)
 - Capital: ₹100,000 initial
 - Fees: 0.1% taker + 0.1% slippage
 
@@ -147,17 +147,17 @@ Cryptocurrency markets exhibit **volatility clustering** (GARCH effects) that re
 
 | Metric | Value | Benchmark |
 |--------|-------|-----------|
-| **Total Return** | 94.67% | BTC: 68%, ETH: 45% |
-| **Post-Tax Return** | 64.57% | (30% tax + 1% TDS) |
-| **Sharpe Ratio** | 1.60 | > 1.0 = excellent |
-| **Calmar Ratio** | 7.14 | Return/MaxDD |
-| **Max Drawdown** | 13.25% | BTC: 28%, ETH: 35% |
-| **Win Rate** | 79.31% | 46 wins / 12 losses |
-| **Profit Factor** | 2.84 | ₹2.84 profit per ₹1 risk |
-| **Total Trades** | 58 | ~1.5 per month |
-| **Avg Trade** | +1634.28 | ₹1.6k per trade |
+| **Total Return** | 55.36% | BTC: 68%, ETH: 45% |
+| **Post-Tax Return** | 38.75% | (30% tax + 1% TDS) |
+| **Sharpe Ratio** | 0.53 | > 0.5 = good |
+| **Calmar Ratio** | 0.84 | Return/MaxDD |
+| **Max Drawdown** | 13.61% | BTC: 28%, ETH: 35% |
+| **Win Rate** | 44.90% | 22 wins / 27 losses |
+| **Profit Factor** | 2.18 | ₹2.18 profit per ₹1 risk |
+| **Total Trades** | 49 | ~1 per month |
+| **Avg Trade** | +1154.98 | ₹1.2k per trade |
 
-**Reproducibility:** Run `cargo run --release -- backtest --config ../configs/sample_config.json` to verify these exact numbers.
+**Reproducibility:** Run `cargo run --release -- backtest --config ../configs/volatility_regime_config.json` to verify these exact numbers.
 
 ### Strategy Features
 
@@ -253,10 +253,12 @@ crypto-strategies/
 
 ---
 
-## 🎯 Comparison: Why Rust Over Alternatives?
+## 🎯 Comparison: Why This Over Alternatives?
 
-| Feature | This Repo | Backtrader (Py) | Zipline (Py) | Hummingbot |
-|---------|-----------|-----------------|--------------|------------|
+### vs Python Frameworks
+
+| Feature | This Repo | Backtrader (Py) | Zipline (Py) | Hummingbot (Py) |
+|---------|-----------|-----------------|--------------|-----------------|
 | **Speed** | ⚡ 0.24s | 4.8s | 8.1s | N/A |
 | **Type Safety** | ✅ Compile-time | ❌ Runtime | ❌ Runtime | ❌ Runtime |
 | **Parallelization** | ✅ Rayon | ❌ GIL-limited | ❌ GIL-limited | ⚠️ asyncio |
@@ -266,7 +268,30 @@ crypto-strategies/
 | **Multi-Timeframe** | ✅ Native | ⚠️ Resampler | ⚠️ Panels | ❌ Single TF |
 | **License** | ✅ MIT | ✅ GPL v3 | ✅ Apache 2.0 | ✅ Apache 2.0 |
 
-**Bottom Line:** If you need speed, type safety, and low memory usage for backtesting/optimization, Rust wins. For rapid prototyping, Python tools are fine.
+### vs Rust Frameworks
+
+| Feature | This Repo | barter-rs | hftbacktest | Freqtrade (Py) |
+|---------|-----------|-----------|-------------|----------------|
+| **Backtesting** | ✅ Event-driven | ✅ Event-driven | ✅ Tick-level | ✅ Vectorized |
+| **Live Trading** | ✅ Production-ready | ⚠️ In development | ❌ Not included | ✅ Production-ready |
+| **Strategy Plugins** | ✅ Trait-based | ✅ Trait-based | ⚠️ Custom engine | ✅ Class-based |
+| **Multi-Exchange** | ⚠️ 2 exchanges | ✅ 10+ exchanges | ✅ Multiple | ✅ 100+ exchanges |
+| **Optimization** | ✅ Rayon parallel | ❌ Manual | ⚠️ Limited | ✅ Hyperopt |
+| **Documentation** | ✅ Comprehensive | ⚠️ Improving | ⚠️ Technical | ✅ Extensive |
+| **India Tax** | ✅ Built-in | ❌ Not included | ❌ Not included | ❌ Not included |
+| **Maturity** | 🆕 Early | 🔄 Active dev | 🔬 Research | ⭐ Mature |
+| **Use Case** | India crypto/equity | Multi-asset trading | HFT research | Crypto trading bots |
+
+**Why choose this:**
+- **India-specific**: Tax compliance (30% + 1% TDS) and local exchanges (CoinDCX, Zerodha)
+- **Learning curve**: Simpler than hftbacktest, more features than early barter-rs
+- **Complete solution**: Backtesting + optimization + live trading in one
+- **Verified strategies**: Battle-tested with reproducible results
+
+**When to use alternatives:**
+- **barter-rs**: Multi-exchange live trading with 10+ integrations
+- **hftbacktest**: High-frequency trading research with tick-level precision
+- **Freqtrade**: Mature crypto bot with extensive exchange support and community
 
 ---
 
@@ -297,10 +322,10 @@ We practice **radical transparency**. All performance claims are reproducible:
 # Anyone can verify our results
 git clone https://github.com/P0W/crypto-strategies.git
 cd crypto-strategies/rust
-cargo run --release -- backtest --config ../configs/sample_config.json
+cargo run --release -- backtest --config ../configs/volatility_regime_config.json
 
 # You'll get EXACTLY:
-# Sharpe: 1.60, Return: 94.67%, Max DD: 13.25%
+# Sharpe: 0.53, Return: 55.36%, Max DD: 13.61%
 ```
 
 ### CI/CD Benchmarks
