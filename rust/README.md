@@ -189,30 +189,190 @@ cargo run -- live --live
 
 ## Architecture
 
+```mermaid
+flowchart TB
+    subgraph CLI["CLI Entry (main.rs)"]
+        MAIN[main.rs<br/>clap CLI]
+    end
+
+    subgraph Commands["Commands"]
+        CMD_BT[backtest.rs]
+        CMD_OPT[optimize.rs]
+        CMD_LIVE[live.rs]
+        CMD_DL[download.rs]
+    end
+
+    subgraph Core["Core Engine"]
+        BACKTEST[backtest.rs<br/>Event-driven simulation]
+        OPTIMIZER[optimizer.rs<br/>Rayon parallel grid search]
+        RISK[risk.rs<br/>Position sizing<br/>Drawdown control]
+    end
+
+    subgraph Strategies["Strategy Layer (strategies/)"]
+        TRAIT[Strategy Trait<br/>+ Factory Registry]
+        VOL[volatility_regime<br/>ATR regime classification]
+        MOM[momentum_scalper<br/>EMA crossover]
+        RNG[range_breakout<br/>N-bar breakout]
+        QF[quick_flip<br/>Range reversal]
+    end
+
+    subgraph Data["Data Layer"]
+        DATA[data.rs<br/>CSV loading<br/>Auto-download]
+        MTF[multi_timeframe.rs<br/>MTF alignment]
+        IND[indicators.rs<br/>ATR, EMA, ADX, RSI<br/>MACD, Bollinger, etc.]
+    end
+
+    subgraph Exchange["Exchange Clients"]
+        BINANCE[binance/client.rs<br/>Klines API]
+        COINDCX[coindcx/client.rs<br/>Trading API]
+        ZERODHA[zerodha/client.rs<br/>Kite API]
+    end
+
+    subgraph Infra["Infrastructure"]
+        CONFIG[config.rs<br/>JSON parsing]
+        TYPES[types.rs<br/>Candle, Position<br/>Trade, Signal]
+        STATE[state_manager.rs<br/>SQLite persistence]
+        CB[common/circuit_breaker.rs]
+        RL[common/rate_limiter.rs]
+    end
+
+    %% CLI to Commands
+    MAIN --> CMD_BT
+    MAIN --> CMD_OPT
+    MAIN --> CMD_LIVE
+    MAIN --> CMD_DL
+
+    %% Commands to Core
+    CMD_BT --> BACKTEST
+    CMD_OPT --> OPTIMIZER
+    CMD_LIVE --> BACKTEST
+    OPTIMIZER --> BACKTEST
+
+    %% Core relationships
+    BACKTEST --> RISK
+    BACKTEST --> TRAIT
+    BACKTEST --> IND
+
+    %% Strategy relationships
+    TRAIT --> VOL
+    TRAIT --> MOM
+    TRAIT --> RNG
+    TRAIT --> QF
+
+    %% Data flow
+    CMD_BT --> DATA
+    CMD_OPT --> DATA
+    CMD_LIVE --> MTF
+    DATA --> MTF
+    CMD_DL --> BINANCE
+    CMD_DL --> COINDCX
+
+    %% Exchange usage
+    CMD_LIVE --> COINDCX
+    CMD_LIVE --> ZERODHA
+    COINDCX --> CB
+    COINDCX --> RL
+    ZERODHA --> CB
+    ZERODHA --> RL
+
+    %% Infrastructure usage
+    CMD_BT --> CONFIG
+    CMD_LIVE --> STATE
+    BACKTEST --> TYPES
+    DATA --> TYPES
+```
+
+### Module Dependency Flow
+
+```mermaid
+flowchart LR
+    subgraph Input
+        JSON[config.json]
+        CSV[OHLCV CSVs]
+        ENV[.env credentials]
+    end
+
+    subgraph Processing
+        CONFIG[Config]
+        DATA[Data Loader]
+        STRATEGY[Strategy]
+        BACKTEST[Backtester]
+        RISK[RiskManager]
+    end
+
+    subgraph Output
+        METRICS[PerformanceMetrics]
+        TRADES[Trade History]
+        STATE[SQLite State]
+    end
+
+    JSON --> CONFIG
+    CSV --> DATA
+    ENV --> CONFIG
+    CONFIG --> BACKTEST
+    DATA --> BACKTEST
+    STRATEGY --> BACKTEST
+    RISK --> BACKTEST
+    BACKTEST --> METRICS
+    BACKTEST --> TRADES
+    BACKTEST --> STATE
+```
+
+### Live Trading Event Loop
+
+```mermaid
+stateDiagram-v2
+    [*] --> Init: cargo run -- live
+    Init --> Bootstrap: Load config + credentials
+    Bootstrap --> Recovery: Load SQLite state
+    Recovery --> FetchCandles: Bootstrap historical candles
+
+    FetchCandles --> TradingLoop: Start async loop
+
+    state TradingLoop {
+        [*] --> FetchLatest
+        FetchLatest --> CheckPositions: Update MTF candles
+        CheckPositions --> CheckStops: For each symbol
+        CheckStops --> CheckTargets: Stop loss check
+        CheckTargets --> UpdateTrailing: Take profit check
+        UpdateTrailing --> GenerateSignal: Trailing stop
+        GenerateSignal --> ExecuteTrade: Strategy signal
+        ExecuteTrade --> SaveState: Open/Close position
+        SaveState --> [*]: Checkpoint to SQLite
+    }
+
+    TradingLoop --> Shutdown: Ctrl+C
+    Shutdown --> ClosePositions: Graceful exit
+    ClosePositions --> SaveFinal: Close all positions
+    SaveFinal --> [*]: Final checkpoint
+```
+
+### Directory Structure
+
 ```
 src/
-├── main.rs                  # CLI entry point
+├── main.rs                  # CLI entry point (clap)
 ├── lib.rs                   # Library exports
 │
 ├── commands/                # Command implementations
 │   ├── backtest.rs          # Historical simulation
 │   ├── optimize.rs          # Grid search optimization
-│   ├── live.rs              # Real-time trading
+│   ├── live.rs              # Real-time trading (async)
 │   └── download.rs          # Data fetching
 │
 ├── strategies/              # Strategy implementations
-│   ├── mod.rs               # Strategy trait + registry
-│   ├── volatility_regime/   # ATR regime classification (Sharpe 0.55)
-│   ├── momentum_scalper/    # EMA crossover momentum (Sharpe 0.46)
-│   ├── range_breakout/      # N-bar high/low breakout (Sharpe 0.29)
-│   └── quick_flip/          # Range reversal/breakout (Sharpe 0.26)
+│   ├── mod.rs               # Strategy trait + factory registry
+│   ├── volatility_regime/   # ATR regime classification
+│   ├── momentum_scalper/    # EMA crossover momentum
+│   ├── range_breakout/      # N-bar high/low breakout
+│   └── quick_flip/          # Range reversal/breakout
 │
 ├── binance/                 # Binance API (data only)
-│   ├── client.rs
-│   └── types.rs
+│   ├── client.rs            # Klines fetching
+│   └── types.rs             # API types
 │
 ├── coindcx/                 # CoinDCX API (trading)
-│   ├── client.rs            # REST client
+│   ├── client.rs            # REST client with retries
 │   ├── auth.rs              # HMAC-SHA256 signing
 │   ├── circuit_breaker.rs   # Fault tolerance
 │   └── rate_limiter.rs      # Token bucket
@@ -220,22 +380,23 @@ src/
 ├── zerodha/                 # Zerodha Kite API (equity)
 │   ├── client.rs            # HFT-grade client
 │   ├── auth.rs              # OAuth handling
-│   └── types.rs
+│   └── types.rs             # Kite types
 │
 ├── common/                  # Shared utilities
-│   ├── circuit_breaker.rs
-│   └── rate_limiter.rs
+│   ├── circuit_breaker.rs   # Generic circuit breaker
+│   └── rate_limiter.rs      # Generic rate limiter
 │
-├── backtest.rs              # Simulation engine
-├── grid.rs                  # Grid generation
-├── optimizer.rs             # Parallel optimization
-├── risk.rs                  # Position sizing
+├── backtest.rs              # Event-driven simulation engine
+├── optimizer.rs             # Rayon parallel optimization
+├── grid.rs                  # Parameter grid generation
+├── risk.rs                  # Position sizing + drawdown
 ├── indicators.rs            # 25+ technical indicators
-├── config.rs                # Configuration parsing
-├── types.rs                 # Domain model
-├── data.rs                  # Data loading
-├── state_manager.rs         # SQLite persistence
-└── multi_timeframe.rs       # Multi-TF data management
+├── config.rs                # JSON configuration parsing
+├── types.rs                 # Domain model (Candle, Position, Trade)
+├── data.rs                  # CSV loading + Binance download
+├── state_manager.rs         # SQLite persistence + recovery
+├── multi_timeframe.rs       # MTF data container
+└── monthly_pnl.rs           # P&L matrix generation
 ```
 
 ## Available Strategies
