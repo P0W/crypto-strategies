@@ -98,9 +98,28 @@ impl Default for ExchangeConfig {
 }
 
 /// Trading configuration
+///
+/// # Currency Handling
+///
+/// This system is **currency-agnostic** - all calculations work with dimensionless numbers.
+/// The code does NOT perform any currency conversion. It only requires that `initial_capital`
+/// and price data are denominated in the **same currency**.
+///
+/// For example:
+/// - If your CSV price data is in USD, set `initial_capital` in USD (e.g., 100000 = $100,000)
+/// - If your CSV price data is in INR, set `initial_capital` in INR (e.g., 100000 = ₹1,00,000)
+///
+/// Performance metrics (returns, Sharpe ratio, drawdown) are calculated as **percentages**,
+/// making them currency-independent. The absolute currency unit does not affect results
+/// as long as capital and prices are consistent.
+///
+/// Note: File names like "BTCINR.csv" are just labels - they don't enforce currency.
+/// Always verify your data source's actual currency denomination.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingConfig {
     pub symbols: Vec<String>,
+    /// Initial trading capital in the same currency as your price data.
+    /// No currency conversion is performed - ensure this matches your CSV data currency.
     pub initial_capital: f64,
     pub risk_per_trade: f64,
     pub max_positions: usize,

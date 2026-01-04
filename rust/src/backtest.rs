@@ -5,6 +5,28 @@
 //! - Unified MTF support: single code path for all strategies
 //! - T+1 execution model with realistic commission/slippage
 //! - Memory efficient: uses slices, not copies
+//!
+//! # Currency Handling
+//!
+//! The backtesting engine is **currency-agnostic**. All calculations work with
+//! dimensionless numbers, requiring only that `initial_capital` (from config) and
+//! price data (from CSV files) are in the **same currency**.
+//!
+//! Key calculations:
+//! - Position value = quantity × price
+//! - PnL = (exit_price - entry_price) × quantity
+//! - Return % = (final_equity - initial_capital) / initial_capital × 100
+//!
+//! Performance metrics (Sharpe, Calmar, returns) are percentage-based and
+//! currency-independent. No currency conversion or exchange rate handling is performed.
+//!
+//! Example:
+//! - Config: `initial_capital: 100000` (in USD)
+//! - CSV data: prices in USD (e.g., BTC at $90,000)
+//! - Result: All calculations consistent in USD
+//!
+//! Changing both capital and prices to INR (or any other currency) produces
+//! identical percentage returns, as the system only cares about relative values.
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
