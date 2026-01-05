@@ -29,8 +29,7 @@ pub enum MarketRegime {
 
 /// Create strategy from config (called by registry)
 pub fn create(config: &Config) -> Result<Box<dyn Strategy>> {
-    let strategy_config: RegimeGridConfig =
-        serde_json::from_value(config.strategy.clone())
-            .map_err(|e| anyhow::anyhow!("Failed to parse regime_grid config: {}", e))?;
+    let strategy_config: RegimeGridConfig = serde_json::from_value(config.strategy.clone())
+        .map_err(|e| anyhow::anyhow!("Failed to parse regime_grid config: {}", e))?;
     Ok(Box::new(RegimeGridStrategy::new(strategy_config)))
 }
