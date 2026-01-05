@@ -8,8 +8,9 @@
 //! and reused to avoid O(N²) complexity.
 
 use crate::indicators::{adx, atr, ema, rsi};
+use crate::oms::{Fill, OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
-use crate::{Candle, Position, Signal, Symbol};
+use crate::{Candle, Position, Side};
 use chrono::{DateTime, Utc};
 
 use super::config::RegimeGridConfig;
@@ -134,6 +135,116 @@ impl RegimeGridStrategy {
         Some(MarketRegime::HighVolatility)
     }
 
+    /// Place grid of limit orders in sideways market
+    fn place_grid_orders(&self, ctx: &StrategyContext, current_price: f64, orders: &mut Vec<OrderRequest>) {
+        // Calculate grid spacing based on volatility
+        let atr = Indicators::atr_only(ctx.candles, self.config.adx_period)
+            .unwrap_or(current_price * 0.02);
+        
+        let grid_spacing = atr * 0.5; // Half ATR between grid levels
+        let num_grids = 3; // Place 3 buy and 3 sell orders
+        
+        // Check existing orders to avoid duplicates
+        let existing_buy_prices: Vec<f64> = ctx.open_orders
+            .iter()
+            .filter(|o| o.side == Side::Buy && o.limit_price.is_some())
+            .map(|o| o.limit_price.unwrap())
+            .collect();
+        
+        let existing_sell_prices: Vec<f64> = ctx.open_orders
+            .iter()
+            .filter(|o| o.side == Side::Sell && o.limit_price.is_some())
+            .map(|o| o.limit_price.unwrap())
+            .collect();
+        
+        // Place buy limit orders below current price
+        for i in 1..=num_grids {
+            let buy_price = current_price - (grid_spacing * i as f64);
+            
+            // Check if we already have an order near this price
+            let has_nearby_order = existing_buy_prices.iter()
+                .any(|&p| (p - buy_price).abs() < grid_spacing * 0.2);
+            
+            if !has_nearby_order {
+                orders.push(
+                    OrderRequest::limit_buy(ctx.symbol.clone(), 0.1, buy_price)
+                        .with_client_id(format!("grid_buy_{}", i))
+                );
+            }
+        }
+        
+        // Place sell limit orders above current price (if we have position)
+        if ctx.current_position.is_some() {
+            for i in 1..=num_grids {
+                let sell_price = current_price + (grid_spacing * i as f64);
+                
+                let has_nearby_order = existing_sell_prices.iter()
+                    .any(|&p| (p - sell_price).abs() < grid_spacing * 0.2);
+                
+                if !has_nearby_order {
+                    orders.push(
+                        OrderRequest::limit_sell(ctx.symbol.clone(), 0.1, sell_price)
+                            .with_client_id(format!("grid_sell_{}", i))
+                    );
+                }
+            }
+        }
+    }
+
+    /// Place grid biased for bull market
+    fn place_bull_grid_orders(&self, ctx: &StrategyContext, current_price: f64, orders: &mut Vec<OrderRequest>) {
+        // In bull market, place more buy orders and fewer sell orders
+        let atr = Indicators::atr_only(ctx.candles, self.config.adx_period)
+            .unwrap_or(current_price * 0.02);
+        
+        let grid_spacing = atr * 0.6; // Slightly wider spacing in trending market
+        
+        // Check existing orders
+        let existing_buy_prices: Vec<f64> = ctx.open_orders
+            .iter()
+            .filter(|o| o.side == Side::Buy && o.limit_price.is_some())
+            .map(|o| o.limit_price.unwrap())
+            .collect();
+        
+        // Place more buy orders (5 levels) to catch dips
+        for i in 1..=5 {
+            let buy_price = current_price - (grid_spacing * i as f64);
+            
+            let has_nearby_order = existing_buy_prices.iter()
+                .any(|&p| (p - buy_price).abs() < grid_spacing * 0.2);
+            
+            if !has_nearby_order {
+                orders.push(
+                    OrderRequest::limit_buy(ctx.symbol.clone(), 0.1, buy_price)
+                        .with_client_id(format!("bull_grid_buy_{}", i))
+                );
+            }
+        }
+        
+        // Place fewer sell orders (2 levels) at higher prices
+        if ctx.current_position.is_some() {
+            let existing_sell_prices: Vec<f64> = ctx.open_orders
+                .iter()
+                .filter(|o| o.side == Side::Sell && o.limit_price.is_some())
+                .map(|o| o.limit_price.unwrap())
+                .collect();
+            
+            for i in 1..=2 {
+                let sell_price = current_price + (grid_spacing * i as f64 * 1.5);
+                
+                let has_nearby_order = existing_sell_prices.iter()
+                    .any(|&p| (p - sell_price).abs() < grid_spacing * 0.2);
+                
+                if !has_nearby_order {
+                    orders.push(
+                        OrderRequest::limit_sell(ctx.symbol.clone(), 0.1, sell_price)
+                            .with_client_id(format!("bull_grid_sell_{}", i))
+                    );
+                }
+            }
+        }
+    }
+
     /// Generate signal for sideways regime (full grid)
     fn sideways_grid_signal(&self, _candles: &[Candle], position: Option<&Position>) -> Signal {
         // In sideways market, we want to buy on dips
@@ -164,12 +275,9 @@ impl Strategy for RegimeGridStrategy {
         "regime_grid"
     }
 
-    fn generate_signal(
-        &self,
-        _symbol: &Symbol,
-        candles: &[Candle],
-        position: Option<&Position>,
-    ) -> Signal {
+    fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest> {
+        let mut orders = Vec::new();
+        
         // Need minimum data for indicators
         let min_period = self
             .config
@@ -177,42 +285,56 @@ impl Strategy for RegimeGridStrategy {
             .max(self.config.adx_period)
             .max(self.config.rsi_period);
 
-        if candles.len() < min_period {
-            return Signal::Flat;
+        if ctx.candles.len() < min_period {
+            return orders;
         }
 
         // 1. Check volatility kill switch
         if self.is_volatility_paused() {
-            return Signal::Flat;
+            return orders;
         }
 
         // 2. Calculate all indicators once
-        let ind = Indicators::new(candles, &self.config);
+        let ind = Indicators::new(ctx.candles, &self.config);
 
         // 3. Classify market regime
-        let regime = match self.classify_regime(candles, &ind) {
+        let regime = match self.classify_regime(ctx.candles, &ind) {
             Some(r) => r,
-            None => return Signal::Flat,
+            None => return orders,
         };
 
-        // 4. Apply regime-specific logic
+        // 4. Apply regime-specific logic with actual grid orders
+        let current_price = ctx.candles.last().unwrap().close;
+        
         match regime {
-            MarketRegime::Bearish | MarketRegime::HighVolatility => Signal::Flat,
-            MarketRegime::Sideways => self.sideways_grid_signal(candles, position),
-            MarketRegime::Bullish => self.bull_grid_signal(candles, position),
+            MarketRegime::Bearish | MarketRegime::HighVolatility => {
+                // Close positions in unfavorable regimes
+                if let Some(pos) = ctx.current_position {
+                    orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity));
+                }
+                orders
+            }
+            MarketRegime::Sideways => {
+                // Place grid of limit orders around current price
+                self.place_grid_orders(ctx, current_price, &mut orders);
+                orders
+            }
+            MarketRegime::Bullish => {
+                // Modified grid - bias towards buy side
+                self.place_bull_grid_orders(ctx, current_price, &mut orders);
+                orders
+            }
         }
     }
 
     fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64 {
         let atr =
-            Indicators::atr_only(candles, self.config.adx_period).unwrap_or(entry_price * 0.02); // Fallback to 2% if ATR not available
+            Indicators::atr_only(candles, self.config.adx_period).unwrap_or(entry_price * 0.02);
 
         entry_price - (atr * self.config.stop_atr_multiple)
     }
 
     fn calculate_take_profit(&self, _candles: &[Candle], entry_price: f64) -> f64 {
-        // Use regime-specific sell target
-        // Since we don't have access to current regime here, use default
         entry_price * (1.0 + self.config.sell_target_pct)
     }
 
@@ -222,7 +344,7 @@ impl Strategy for RegimeGridStrategy {
         current_price: f64,
         candles: &[Candle],
     ) -> Option<f64> {
-        let unrealized_pnl_pct = (current_price - position.entry_price) / position.entry_price;
+        let unrealized_pnl_pct = (current_price - position.average_entry_price) / position.average_entry_price;
 
         // Activate trailing stop if profit exceeds threshold
         if unrealized_pnl_pct < self.config.trailing_activation_pct {
@@ -233,17 +355,8 @@ impl Strategy for RegimeGridStrategy {
             Indicators::atr_only(candles, self.config.adx_period).unwrap_or(current_price * 0.02);
 
         let trailing_stop = current_price - (atr * self.config.trailing_atr_multiple);
-
-        // Only update if new stop is higher than current
-        if let Some(current_stop) = position.trailing_stop {
-            if trailing_stop > current_stop {
-                Some(trailing_stop)
-            } else {
-                None
-            }
-        } else {
-            Some(trailing_stop)
-        }
+        
+        Some(trailing_stop)
     }
 
     fn get_regime_score(&self, candles: &[Candle]) -> f64 {

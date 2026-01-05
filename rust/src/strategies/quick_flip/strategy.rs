@@ -18,17 +18,17 @@
 //! - Trailing: Move to breakeven when price re-enters box
 
 use crate::indicators::atr;
+use crate::oms::{Fill, OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
-use crate::{Candle, MultiTimeframeCandles, Position, Side, Signal, Symbol};
+use crate::{Candle, Position, Side};
 use std::sync::Mutex;
 
 use super::config::QuickFlipConfig;
 
-/// Internal state for tracking trade cooldowns and last signal direction
+/// Internal state for tracking trade cooldowns
 /// Uses Mutex for thread-safe interior mutability (no unsafe code)
 struct State {
     last_trade_bar: usize,
-    last_signal: Signal,
     range_high: f64,
     range_low: f64,
 }
@@ -37,7 +37,6 @@ impl Default for State {
     fn default() -> Self {
         Self {
             last_trade_bar: 0,
-            last_signal: Signal::Flat,
             range_high: 0.0,
             range_low: 0.0,
         }
@@ -55,6 +54,80 @@ impl QuickFlipStrategy {
             config,
             state: Mutex::new(State::default()),
         }
+    }
+
+    /// Generate orders using multi-timeframe data
+    fn generate_orders_mtf(&self, ctx: &StrategyContext, mtf: &MultiTimeframeCandles) -> Vec<OrderRequest> {
+        let mut orders = Vec::new();
+        
+        let candles_primary = mtf.primary();
+        let candles_4h = mtf.get("4h").unwrap_or(&[]);
+        let candles_1d = mtf.get("1d").unwrap_or(&[]);
+
+        // Minimum data requirements
+        if candles_primary.len() < 20 || candles_4h.len() < 3 || candles_1d.len() < 15 {
+            return orders;
+        }
+
+        let current_bar = candles_primary.len();
+
+        // If in position, hold
+        if ctx.current_position.is_some() {
+            return orders;
+        }
+
+        // Cooldown after last trade
+        {
+            let state = self.state.lock().unwrap();
+            if current_bar.saturating_sub(state.last_trade_bar) < self.config.cooldown_bars {
+                return orders;
+            }
+        }
+
+        // Daily ATR volatility filter
+        let atr_val = match Self::compute_atr(candles_1d, self.config.atr_period) {
+            Some(a) => a,
+            None => return orders,
+        };
+
+        // Range box = past N bars of the range TF (e.g., 4h)
+        let (range_high, range_low) = Self::compute_range(candles_4h);
+        let range_size = range_high - range_low;
+
+        // Filter: ignore tiny ranges (noise)
+        if range_size < atr_val * self.config.min_range_pct {
+            return orders;
+        }
+
+        {
+            let mut state = self.state.lock().unwrap();
+            state.range_high = range_high;
+            state.range_low = range_low;
+        }
+
+        let curr = &candles_primary[candles_primary.len() - 1];
+        let prev = &candles_primary[candles_primary.len() - 2];
+
+        // BREAKOUT LONG: Price breaks above range high with momentum
+        let breakout_long =
+            curr.close > range_high && Self::is_bullish(curr) && Self::is_strong_candle(curr);
+        if breakout_long {
+            let mut state = self.state.lock().unwrap();
+            state.last_trade_bar = current_bar;
+            orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
+            return orders;
+        }
+
+        // REVERSAL LONG: Price near/below range low, bullish candle
+        let touch_threshold = range_size * 0.30;
+        let near_low = curr.close <= range_low + touch_threshold || curr.low <= range_low;
+        if near_low && Self::is_bullish_pattern(prev, curr) {
+            let mut state = self.state.lock().unwrap();
+            state.last_trade_bar = current_bar;
+            orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
+        }
+
+        orders
     }
 
     /// Compute ATR from candle slices
@@ -138,6 +211,82 @@ impl Strategy for QuickFlipStrategy {
     fn required_timeframes(&self) -> Vec<&'static str> {
         // Return empty to use single-TF mode - works better for all timeframes
         vec![]
+    }
+
+    fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest> {
+        let mut orders = Vec::new();
+
+        // Check if we have multi-timeframe data
+        if let Some(mtf) = ctx.mtf_candles {
+            // Use multi-timeframe logic
+            return self.generate_orders_mtf(ctx, mtf);
+        }
+
+        // Single-timeframe logic
+        let min_len = self.config.atr_period + self.config.opening_bars + 20;
+        if ctx.candles.len() < min_len {
+            return orders;
+        }
+
+        let current_bar = ctx.candles.len();
+
+        if let Some(pos) = ctx.current_position {
+            // Hold position
+            return orders;
+        }
+
+        {
+            let state = self.state.lock().unwrap();
+            if current_bar.saturating_sub(state.last_trade_bar) < self.config.cooldown_bars {
+                return orders;
+            }
+        }
+
+        // Single-TF mode: use same data for ATR and range
+        let atr_val = match Self::compute_atr(ctx.candles, self.config.atr_period) {
+            Some(a) => a,
+            None => return orders,
+        };
+
+        let window_size = self.config.opening_bars.max(2);
+        let window_end = ctx.candles.len() - 1;
+        let window_start = window_end.saturating_sub(window_size);
+        let (range_high, range_low) = Self::compute_range(&ctx.candles[window_start..window_end]);
+
+        let range_size = range_high - range_low;
+        if range_size < atr_val * self.config.min_range_pct {
+            return orders;
+        }
+
+        {
+            let mut state = self.state.lock().unwrap();
+            state.range_high = range_high;
+            state.range_low = range_low;
+        }
+
+        let curr = &ctx.candles[ctx.candles.len() - 1];
+        let prev = &ctx.candles[ctx.candles.len() - 2];
+
+        // BREAKOUT LONG: Price breaks above range high with momentum
+        let breakout_long =
+            curr.close > range_high && Self::is_bullish(curr) && Self::is_strong_candle(curr);
+        if breakout_long {
+            let mut state = self.state.lock().unwrap();
+            state.last_trade_bar = current_bar;
+            orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
+            return orders;
+        }
+
+        // REVERSAL LONG: Price near/below range low, bullish candle
+        let touch_threshold = range_size * 0.30;
+        let near_low = curr.close <= range_low + touch_threshold || curr.low <= range_low;
+        if near_low && Self::is_bullish_pattern(prev, curr) {
+            let mut state = self.state.lock().unwrap();
+            state.last_trade_bar = current_bar;
+            orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
+        }
+
+        orders
     }
 
     fn generate_signal_mtf(
