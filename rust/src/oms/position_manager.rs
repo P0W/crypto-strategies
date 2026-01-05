@@ -101,7 +101,7 @@ impl PositionManager {
     pub fn get_position(&self, symbol: &Symbol) -> Option<&Position> {
         self.positions.get(symbol).filter(|p| p.quantity > 0.0)
     }
-    
+
     /// Get raw position for symbol (even if qty=0, for trade creation)
     pub fn get_position_raw(&self, symbol: &Symbol) -> Option<&Position> {
         self.positions.get(symbol)
@@ -112,9 +112,10 @@ impl PositionManager {
         self.positions.get_mut(symbol)
     }
 
-    /// Get all positions as an iterator over (Symbol, &Position)
+    /// Get all open positions as an iterator over (Symbol, &Position)
+    /// Only returns positions with quantity > 0
     pub fn get_all_positions(&self) -> impl Iterator<Item = (&Symbol, &Position)> {
-        self.positions.iter()
+        self.positions.iter().filter(|(_, p)| p.quantity > 0.0)
     }
 
     /// Update unrealized P&L for all positions
@@ -146,9 +147,9 @@ impl PositionManager {
         self.positions.clear();
     }
 
-    /// Get count of open positions
+    /// Get count of open positions (only counts positions with quantity > 0)
     pub fn open_position_count(&self) -> usize {
-        self.positions.len()
+        self.positions.values().filter(|p| p.quantity > 0.0).count()
     }
 
     /// Get number of positions on specific symbol

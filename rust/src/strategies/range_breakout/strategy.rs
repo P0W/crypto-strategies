@@ -145,6 +145,12 @@ impl Strategy for RangeBreakoutStrategy {
         self.cooldown_counter = self.config.cooldown;
     }
 
+    fn on_bar(&mut self, _ctx: &StrategyContext) {
+        if self.cooldown_counter > 0 {
+            self.cooldown_counter -= 1;
+        }
+    }
+
     fn init(&mut self) {
         self.cooldown_counter = 0;
     }
