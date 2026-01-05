@@ -64,14 +64,28 @@ trait Strategy {
 
 All strategies backtested with **₹100,000 initial capital** on crypto pairs (BTC, ETH, SOL, BNB, XRP) with INR.
 
-| Strategy | Timeframe | Date Range | Sharpe | Return | Win Rate | Trades | Max DD |
-|----------|-----------|------------|--------|--------|----------|--------|--------|
-| **volatility_regime** | 1d | 2022-01-02 to 2025-12-31 | 0.55 | 55.36% | 44.9% | 49 | 13.61% |
-| **momentum_scalper** | 1d | Full data range | 0.46 | 70.07% | 43.56% | 163 | 27.46% |
-| **range_breakout** | 1d | 2023-01-01 to 2025-12-31 | 0.29 | 31.16% | 38.36% | 146 | 5.05% |
-| **quick_flip** | 1d | 2022-01-01 to 2025-01-01 | 0.26 | 25.19% | 45.45% | 11 | 60.68% |
+### With Risk Management Disabled (`--no-risk-limits`)
 
-*Results verified on 2026-01-03. All strategies use 1d timeframe for optimal Sharpe ratios.*
+| Strategy | Timeframe | Sharpe | Return | Win Rate | Trades | Max DD |
+|----------|-----------|--------|--------|----------|--------|--------|
+| **volatility_regime** | 1d | 0.53 | 55.36% | 44.9% | 49 | 13.61% |
+| **momentum_scalper** | 1d | 0.29 | 46.15% | 44.24% | 269 | 31.38% |
+| **range_breakout** | 1d | 0.35 | 34.57% | 37.18% | 156 | 5.39% |
+| **quick_flip** | 1d (MTF) | 0.43 | 44.18% | 22.95% | 61 | 67.39% |
+
+### With Production Risk Management (Default)
+
+| Strategy | Timeframe | Sharpe | Return | Win Rate | Trades | Max DD | Notes |
+|----------|-----------|--------|--------|----------|--------|--------|-------|
+| **volatility_regime** | 1d | 0.30 | 41.22% | 60.0% | 45 | 20.86% | Early exit threshold reduces returns |
+| **momentum_scalper** | 1d | -1.29 | -25.36% | 10.53% | 19 | 26.46% | Risk manager blocks 93% of trades |
+| **range_breakout** | 1d | -1.64 | -9.16% | 13.54% | 96 | 10.32% | Long-only struggles in bear periods |
+
+**Risk Management Impact**: The default risk parameters (max portfolio heat 0.4, max position 0.25, consecutive loss limits) 
+significantly reduce trade frequency and returns to protect capital during drawdowns. For backtesting-only comparisons, 
+use `--no-risk-limits`. For live trading, tune risk parameters in config files to balance safety vs performance.
+
+*Results verified on 2026-01-05 after OMS implementation.*
 
 ## Features
 
