@@ -10,16 +10,17 @@
 use chrono::{Duration, Utc};
 use std::collections::HashMap;
 
+use crypto_strategies::backtest::Backtester;
 use crypto_strategies::multi_timeframe::MultiTimeframeData;
 use crypto_strategies::oms::{
-    ExecutionEngine, Fill, Order, OrderBook, OrderRequest, OrderState, OrderType, Position,
-    PositionManager, StrategyContext, TimeInForce,
+    ExecutionEngine, Fill, Order, OrderBook, OrderRequest, OrderState, OrderType, PositionManager,
+    StrategyContext, TimeInForce,
 };
 use crypto_strategies::strategies::volatility_regime::{
     VolatilityRegimeConfig, VolatilityRegimeStrategy,
 };
 use crypto_strategies::strategies::Strategy;
-use crypto_strategies::{Backtest, Backtester, Candle, Config, Side, Symbol};
+use crypto_strategies::{Candle, Config, Side, Symbol};
 
 // =============================================================================
 // Test Data Generation
@@ -268,10 +269,10 @@ fn test_backtest_with_real_strategy() {
         "maker_fee": 0.0004,
         "taker_fee": 0.0006,
         "assumed_slippage": 0.001,
-        "rate_limit_per_second": 10
+        "rate_limit": 10
     },
     "trading": {
-        "pairs": ["BTCINR"],
+        "symbols": ["BTCINR"],
         "initial_capital": 100000.0,
         "risk_per_trade": 0.02,
         "max_positions": 2,
@@ -295,9 +296,8 @@ fn test_backtest_with_real_strategy() {
     },
     "backtest": {
         "data_dir": "../data",
-        "start_date": "2024-01-01",
-        "end_date": "2024-12-31",
-        "timeframe": "1d"
+        "results_dir": "../results",
+        "commission": 0.001
     }
 }
 "#;

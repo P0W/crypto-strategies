@@ -4,7 +4,6 @@
 
 use crate::oms::types::{Order, OrderId, OrderState};
 use crate::Side;
-use chrono::Utc;
 use ordered_float::OrderedFloat;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
@@ -144,7 +143,7 @@ impl OrderBook {
     pub fn get_all_orders(&self) -> Vec<&Order> {
         self.orders.values().collect()
     }
-    
+
     /// Update order state to filled
     pub fn mark_filled(&mut self, order_id: OrderId) -> Option<()> {
         if let Some(order) = self.orders.get_mut(&order_id) {
