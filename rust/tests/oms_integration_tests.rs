@@ -1,7 +1,11 @@
-//! OMS Integration Tests
+//! Integration Tests for Crypto-Strategies System
 //!
-//! These tests verify the Order Management System works correctly with real strategies
-//! and actual market data structures.
+//! Comprehensive integration tests covering:
+//! - OMS (Order Management System) components
+//! - Risk management
+//! - Indicators
+//! - Data validation
+//! - Strategy lifecycle
 
 use chrono::{Duration, Utc};
 use std::collections::HashMap;
