@@ -1260,5 +1260,3 @@ async fn test_sharpe_ratio_excludes_zero_return_days() {
         );
     }
 }
-
-

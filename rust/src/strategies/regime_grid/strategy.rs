@@ -51,25 +51,15 @@ impl Indicators {
         let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
         let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
         let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
-        atr(&high, &low, &close, atr_period)
-            .last()
-            .and_then(|&x| x)
+        atr(&high, &low, &close, atr_period).last().and_then(|&x| x)
     }
 }
 
 /// Grid state tracking
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct GridState {
     /// When volatility kill switch was activated (None if not active)
     paused_until: Option<DateTime<Utc>>,
-}
-
-impl Default for GridState {
-    fn default() -> Self {
-        GridState {
-            paused_until: None,
-        }
-    }
 }
 
 /// Regime-Aware Grid Trading Strategy
@@ -105,7 +95,8 @@ impl RegimeGridStrategy {
         let current_price = current_candle.close;
 
         // Check for high volatility single candle
-        let candle_change = ((current_candle.close - current_candle.open) / current_candle.open).abs();
+        let candle_change =
+            ((current_candle.close - current_candle.open) / current_candle.open).abs();
         if candle_change > self.config.high_volatility_candle_pct {
             return Some(MarketRegime::HighVolatility);
         }
@@ -185,7 +176,7 @@ impl Strategy for RegimeGridStrategy {
             .ema_long_period
             .max(self.config.adx_period)
             .max(self.config.rsi_period);
-        
+
         if candles.len() < min_period {
             return Signal::Flat;
         }
@@ -213,9 +204,9 @@ impl Strategy for RegimeGridStrategy {
     }
 
     fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64 {
-        let atr = Indicators::atr_only(candles, self.config.adx_period)
-            .unwrap_or(entry_price * 0.02); // Fallback to 2% if ATR not available
-        
+        let atr =
+            Indicators::atr_only(candles, self.config.adx_period).unwrap_or(entry_price * 0.02); // Fallback to 2% if ATR not available
+
         entry_price - (atr * self.config.stop_atr_multiple)
     }
 
@@ -232,17 +223,17 @@ impl Strategy for RegimeGridStrategy {
         candles: &[Candle],
     ) -> Option<f64> {
         let unrealized_pnl_pct = (current_price - position.entry_price) / position.entry_price;
-        
+
         // Activate trailing stop if profit exceeds threshold
         if unrealized_pnl_pct < self.config.trailing_activation_pct {
             return None;
         }
 
-        let atr = Indicators::atr_only(candles, self.config.adx_period)
-            .unwrap_or(current_price * 0.02);
-        
+        let atr =
+            Indicators::atr_only(candles, self.config.adx_period).unwrap_or(current_price * 0.02);
+
         let trailing_stop = current_price - (atr * self.config.trailing_atr_multiple);
-        
+
         // Only update if new stop is higher than current
         if let Some(current_stop) = position.trailing_stop {
             if trailing_stop > current_stop {
@@ -257,11 +248,11 @@ impl Strategy for RegimeGridStrategy {
 
     fn get_regime_score(&self, candles: &[Candle]) -> f64 {
         let ind = Indicators::new(candles, &self.config);
-        
+
         match self.classify_regime(candles, &ind) {
-            Some(MarketRegime::Sideways) => 1.5,  // Ideal conditions
-            Some(MarketRegime::Bullish) => 1.0,    // Modified grid
-            _ => 0.0,                              // No trading
+            Some(MarketRegime::Sideways) => 1.5, // Ideal conditions
+            Some(MarketRegime::Bullish) => 1.0,  // Modified grid
+            _ => 0.0,                            // No trading
         }
     }
 }
