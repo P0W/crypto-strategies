@@ -20,7 +20,7 @@
 use crate::indicators::atr;
 use crate::oms::{Fill, OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
-use crate::{Candle, Position, Side};
+use crate::{Candle, MultiTimeframeCandles, Position, Side};
 use std::sync::Mutex;
 
 use super::config::QuickFlipConfig;
@@ -57,9 +57,13 @@ impl QuickFlipStrategy {
     }
 
     /// Generate orders using multi-timeframe data
-    fn generate_orders_mtf(&self, ctx: &StrategyContext, mtf: &MultiTimeframeCandles) -> Vec<OrderRequest> {
+    fn generate_orders_mtf(
+        &self,
+        ctx: &StrategyContext,
+        mtf: &MultiTimeframeCandles,
+    ) -> Vec<OrderRequest> {
         let mut orders = Vec::new();
-        
+
         let candles_primary = mtf.primary();
         let candles_4h = mtf.get("4h").unwrap_or(&[]);
         let candles_1d = mtf.get("1d").unwrap_or(&[]);
@@ -289,239 +293,20 @@ impl Strategy for QuickFlipStrategy {
         orders
     }
 
-    fn generate_signal_mtf(
-        &self,
-        _symbol: &Symbol,
-        mtf: &MultiTimeframeCandles,
-        position: Option<&Position>,
-    ) -> Signal {
-        let candles_primary = mtf.primary();
-        let candles_4h = mtf.get("4h").unwrap_or(&[]);
-        let candles_1d = mtf.get("1d").unwrap_or(&[]);
-
-        // Minimum data requirements
-        if candles_primary.len() < 20 || candles_4h.len() < 3 || candles_1d.len() < 15 {
-            return Signal::Flat;
-        }
-
-        let current_bar = candles_primary.len();
-
-        // If in position, maintain it
-        if let Some(pos) = position {
-            return match pos.side {
-                Side::Buy => Signal::Long,
-                Side::Sell => Signal::Short,
-            };
-        }
-
-        // Cooldown check
-        {
-            let state = self.state.lock().unwrap();
-            if current_bar.saturating_sub(state.last_trade_bar) < self.config.cooldown_bars {
-                return Signal::Flat;
-            }
-        }
-
-        // Step 1: Calculate daily ATR
-        let daily_atr = match Self::compute_atr(candles_1d, 14) {
-            Some(atr) => atr,
-            None => return Signal::Flat,
-        };
-
-        // Step 2: Compute 4h range box from PREVIOUS N bars (not including current)
-        let window_size = self.config.opening_bars.max(1);
-        if candles_4h.len() < window_size + 1 {
-            return Signal::Flat;
-        }
-        // Exclude the last bar to avoid look-ahead bias
-        let window_end = candles_4h.len() - 1;
-        let window_start = window_end.saturating_sub(window_size);
-        let (range_high, range_low) = Self::compute_range(&candles_4h[window_start..window_end]);
-
-        if range_high <= range_low {
-            return Signal::Flat;
-        }
-
-        // Step 3: ATR filter - range must be meaningful relative to volatility (skip if min_range_pct is 0)
-        let range_size = range_high - range_low;
-        if self.config.min_range_pct > 0.0 {
-            let min_required = daily_atr * self.config.min_range_pct;
-            if range_size < min_required {
-                return Signal::Flat;
-            }
-        }
-
-        // Cache range for stop/target
-        {
-            let mut state = self.state.lock().unwrap();
-            state.range_high = range_high;
-            state.range_low = range_low;
-        }
-
-        // Step 4: Check for breakout/bounce with pattern confirmation
-        let curr = &candles_primary[candles_primary.len() - 1];
-        let prev = &candles_primary[candles_primary.len() - 2];
-
-        // Calculate proximity threshold (% of range for touch detection)
-        // Using 20% threshold for more trade opportunities
-        let touch_threshold = range_size * 0.20;
-
-        // BULLISH SETUPS:
-        // Price near or below range_low with bullish pattern
-        let near_low = curr.close <= range_low + touch_threshold || curr.low <= range_low;
-        let bullish_setup = near_low && Self::is_bullish_pattern(prev, curr);
-
-        if bullish_setup {
-            let mut state = self.state.lock().unwrap();
-            state.last_signal = Signal::Long;
-            state.last_trade_bar = current_bar;
-            return Signal::Long;
-        }
-
-        // BEARISH SETUPS:
-        // Price near or above range_high with bearish pattern
-        let near_high = curr.close >= range_high - touch_threshold || curr.high >= range_high;
-        let bearish_setup = near_high && Self::is_bearish_pattern(prev, curr);
-
-        if bearish_setup {
-            let mut state = self.state.lock().unwrap();
-            state.last_signal = Signal::Short;
-            state.last_trade_bar = current_bar;
-            return Signal::Short;
-        }
-
-        Signal::Flat
-    }
-
-    fn generate_signal(
-        &self,
-        _symbol: &Symbol,
-        candles: &[Candle],
-        position: Option<&Position>,
-    ) -> Signal {
-        let min_len = self.config.atr_period + self.config.opening_bars + 20;
-        if candles.len() < min_len {
-            return Signal::Flat;
-        }
-
-        let current_bar = candles.len();
-
-        if let Some(pos) = position {
-            return match pos.side {
-                Side::Buy => Signal::Long,
-                Side::Sell => Signal::Short,
-            };
-        }
-
-        {
-            let state = self.state.lock().unwrap();
-            if current_bar.saturating_sub(state.last_trade_bar) < self.config.cooldown_bars {
-                return Signal::Flat;
-            }
-        }
-
-        // Single-TF mode: use same data for ATR and range
-        let atr_val = match Self::compute_atr(candles, self.config.atr_period) {
-            Some(a) => a,
-            None => return Signal::Flat,
-        };
-
-        let window_size = self.config.opening_bars.max(2);
-        let window_end = candles.len() - 1;
-        let window_start = window_end.saturating_sub(window_size);
-        let (range_high, range_low) = Self::compute_range(&candles[window_start..window_end]);
-
-        let range_size = range_high - range_low;
-        if range_size < atr_val * self.config.min_range_pct {
-            return Signal::Flat;
-        }
-
-        {
-            let mut state = self.state.lock().unwrap();
-            state.range_high = range_high;
-            state.range_low = range_low;
-        }
-
-        let curr = &candles[candles.len() - 1];
-        let prev = &candles[candles.len() - 2];
-
-        // STRATEGY: Quick Flip = trade BOTH reversals AND breakouts
-        // This generates more trades by capturing both mean reversion and momentum
-
-        // BREAKOUT LONG: Price breaks above range high with momentum
-        let breakout_long =
-            curr.close > range_high && Self::is_bullish(curr) && Self::is_strong_candle(curr);
-        if breakout_long {
-            let mut state = self.state.lock().unwrap();
-            state.last_signal = Signal::Long;
-            state.last_trade_bar = current_bar;
-            return Signal::Long;
-        }
-
-        // BREAKOUT SHORT: Price breaks below range low with momentum
-        let breakout_short =
-            curr.close < range_low && Self::is_bearish(curr) && Self::is_strong_candle(curr);
-        if breakout_short {
-            let mut state = self.state.lock().unwrap();
-            state.last_signal = Signal::Short;
-            state.last_trade_bar = current_bar;
-            return Signal::Short;
-        }
-
-        // REVERSAL LONG: Price near/below range low, bullish candle
-        let touch_threshold = range_size * 0.30; // 30% threshold for more signals
-        let near_low = curr.close <= range_low + touch_threshold || curr.low <= range_low;
-        if near_low && Self::is_bullish_pattern(prev, curr) {
-            let mut state = self.state.lock().unwrap();
-            state.last_signal = Signal::Long;
-            state.last_trade_bar = current_bar;
-            return Signal::Long;
-        }
-
-        // REVERSAL SHORT: Price near/above range high, bearish candle
-        let near_high = curr.close >= range_high - touch_threshold || curr.high >= range_high;
-        if near_high && Self::is_bearish_pattern(prev, curr) {
-            let mut state = self.state.lock().unwrap();
-            state.last_signal = Signal::Short;
-            state.last_trade_bar = current_bar;
-            return Signal::Short;
-        }
-
-        Signal::Flat
-    }
-
     fn calculate_stop_loss(&self, candles: &[Candle], _entry_price: f64) -> f64 {
-        let signal_candle = candles.last().unwrap();
         let state = self.state.lock().unwrap();
-        match state.last_signal {
-            Signal::Long => signal_candle.low * 0.998, // Just below the low
-            Signal::Short => signal_candle.high * 1.002, // Just above the high
-            Signal::Flat => signal_candle.low * 0.998,
-        }
+        let atr_val = Self::compute_atr(candles, self.config.atr_period).unwrap_or(1.0);
+        state.range_low - atr_val * 0.5
     }
 
     fn calculate_take_profit(&self, _candles: &[Candle], entry_price: f64) -> f64 {
         let state = self.state.lock().unwrap();
-        let range_high = state.range_high;
-        let range_low = state.range_low;
-        let mid = (range_high + range_low) / 2.0;
+        let range_mid = (state.range_high + state.range_low) / 2.0;
 
-        match state.last_signal {
-            Signal::Long => {
-                if self.config.conservative_target {
-                    mid
-                } else {
-                    range_high
-                }
-            }
-            Signal::Short => {
-                if self.config.conservative_target {
-                    mid
-                } else {
-                    range_low
-                }
-            }
-            Signal::Flat => entry_price * 1.02,
+        if self.config.conservative_target {
+            entry_price + (range_mid - entry_price) * 0.5
+        } else {
+            state.range_high
         }
     }
 

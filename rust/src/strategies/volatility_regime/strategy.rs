@@ -8,7 +8,7 @@
 use crate::indicators::{adx, atr, ema};
 use crate::oms::{OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
-use crate::{Candle, Position, Side};
+use crate::{Candle, Position};
 
 use super::config::VolatilityRegimeConfig;
 use super::VolatilityRegime;
@@ -140,7 +140,7 @@ impl Strategy for VolatilityRegimeStrategy {
 
     fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest> {
         let mut orders = Vec::new();
-        
+
         let min_warmup = (self.config.atr_period + 2 * self.config.adx_period)
             .max(self.config.atr_period + self.config.volatility_lookback)
             .max(self.config.ema_slow);

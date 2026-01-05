@@ -2,7 +2,7 @@
 
 use crate::oms::types::{Fill, Order, OrderId, OrderState, OrderType};
 use crate::{Candle, Side};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 /// Fill price with maker/taker flag
 #[derive(Debug, Clone)]
@@ -102,6 +102,7 @@ impl ExecutionEngine {
         fill_price: f64,
         max_fill_qty: f64,
         is_maker: bool,
+        timestamp: DateTime<Utc>,
     ) -> Fill {
         let fill_qty = f64::min(order.remaining_quantity, max_fill_qty);
 
@@ -136,27 +137,33 @@ impl ExecutionEngine {
             OrderState::PartiallyFilled
         };
 
-        order.updated_at = Utc::now();
+        order.updated_at = timestamp;
 
         Fill {
             order_id: order.id,
             price: fill_price,
             quantity: fill_qty,
-            timestamp: candle.datetime,
+            timestamp,
             commission,
             is_maker,
         }
     }
 
     /// Execute a complete fill (convenience wrapper)
-    pub fn execute_fill(&self, order: &mut Order, fill_price: f64, is_maker: bool) -> Fill {
-        self.execute_partial_fill(order, fill_price, order.remaining_quantity, is_maker)
-    }
-}
-
-impl Default for ExecutionEngine {
-    fn default() -> Self {
-        Self::new(0.0004, 0.0006, 0.001) // Default: 0.04% maker, 0.06% taker, 0.1% slippage
+    pub fn execute_fill(
+        &self,
+        order: &mut Order,
+        fill_price: f64,
+        is_maker: bool,
+        timestamp: DateTime<Utc>,
+    ) -> Fill {
+        self.execute_partial_fill(
+            order,
+            fill_price,
+            order.remaining_quantity,
+            is_maker,
+            timestamp,
+        )
     }
 }
 
@@ -172,7 +179,7 @@ mod tests {
 
     #[test]
     fn test_buy_limit_fill() {
-        let engine = ExecutionEngine::default();
+        let engine = ExecutionEngine::new(0.0004, 0.0006, 0.001);
         let order = Order::new(
             Symbol::new("BTCUSDT"),
             Side::Buy,
@@ -196,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_buy_limit_no_fill() {
-        let engine = ExecutionEngine::default();
+        let engine = ExecutionEngine::new(0.0004, 0.0006, 0.001);
         let order = Order::new(
             Symbol::new("BTCUSDT"),
             Side::Buy,
@@ -217,7 +224,7 @@ mod tests {
 
     #[test]
     fn test_sell_limit_fill() {
-        let engine = ExecutionEngine::default();
+        let engine = ExecutionEngine::new(0.0004, 0.0006, 0.001);
         let order = Order::new(
             Symbol::new("BTCUSDT"),
             Side::Sell,
@@ -241,7 +248,7 @@ mod tests {
 
     #[test]
     fn test_buy_stop_fill() {
-        let engine = ExecutionEngine::default();
+        let engine = ExecutionEngine::new(0.0004, 0.0006, 0.001);
         let order = Order::new(
             Symbol::new("BTCUSDT"),
             Side::Buy,
@@ -265,7 +272,7 @@ mod tests {
 
     #[test]
     fn test_market_order_fill() {
-        let engine = ExecutionEngine::default();
+        let engine = ExecutionEngine::new(0.0004, 0.0006, 0.001);
         let order = Order::new(
             Symbol::new("BTCUSDT"),
             Side::Buy,
@@ -288,7 +295,7 @@ mod tests {
 
     #[test]
     fn test_partial_fill() {
-        let engine = ExecutionEngine::default();
+        let engine = ExecutionEngine::new(0.0004, 0.0006, 0.001);
         let mut order = Order::new(
             Symbol::new("BTCUSDT"),
             Side::Buy,
@@ -300,15 +307,17 @@ mod tests {
             None,
         );
 
+        let timestamp = Utc::now();
+
         // Fill 3 out of 10
-        let fill1 = engine.execute_partial_fill(&mut order, 50000.0, 3.0, true);
+        let fill1 = engine.execute_partial_fill(&mut order, 50000.0, 3.0, true, timestamp);
         assert_eq!(fill1.quantity, 3.0);
         assert_eq!(order.filled_quantity, 3.0);
         assert_eq!(order.remaining_quantity, 7.0);
         assert_eq!(order.state, OrderState::PartiallyFilled);
 
         // Fill remaining 7
-        let fill2 = engine.execute_partial_fill(&mut order, 50100.0, 7.0, true);
+        let fill2 = engine.execute_partial_fill(&mut order, 50100.0, 7.0, true, timestamp);
         assert_eq!(fill2.quantity, 7.0);
         assert_eq!(order.filled_quantity, 10.0);
         assert!(order.remaining_quantity < 1e-8);

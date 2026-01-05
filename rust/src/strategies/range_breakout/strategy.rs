@@ -67,7 +67,7 @@ impl Strategy for RangeBreakoutStrategy {
 
     fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest> {
         let mut orders = Vec::new();
-        
+
         let min_bars = self.config.lookback + self.config.atr_period + 2;
         if ctx.candles.len() < min_bars {
             return orders;

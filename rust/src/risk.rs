@@ -295,8 +295,12 @@ impl RiskManager {
             return max_position_value / entry_price;
         }
 
-        // Check portfolio heat
-        let current_heat: f64 = current_positions.iter().map(|p| p.risk_amount).sum();
+        // Check portfolio heat - use position value as risk (conservative)
+        // In OMS, stop prices are managed via orders, not stored in positions
+        let current_heat: f64 = current_positions
+            .iter()
+            .map(|p| p.quantity * entry_price)
+            .sum();
 
         let max_allowed_heat = self.current_capital * self.max_portfolio_heat;
 
@@ -310,22 +314,6 @@ impl RiskManager {
         }
 
         position_size
-    }
-
-    /// Calculate position size for a trade
-    pub fn calculate_position_size(
-        &self,
-        entry_price: f64,
-        stop_price: f64,
-        current_positions: &[Position],
-    ) -> f64 {
-        // Default to regime_score of 1.0 for backward compatibility
-        self.calculate_position_size_with_regime(entry_price, stop_price, current_positions, 1.0)
-    }
-
-    /// Can open a new position?
-    pub fn can_open_position(&self, current_positions: &[Position]) -> bool {
-        !self.should_halt_trading() && current_positions.len() < self.max_positions
     }
 
     /// Can open a new position? (count-based, avoids allocation)
@@ -380,8 +368,8 @@ impl RiskManager {
             return max_position_value / entry_price;
         }
 
-        // Check portfolio heat (sum risk amounts from iterator)
-        let current_heat: f64 = current_positions.map(|p| p.risk_amount).sum();
+        // Check portfolio heat (sum position values from iterator - conservative)
+        let current_heat: f64 = current_positions.map(|p| p.quantity * entry_price).sum();
 
         let max_allowed_heat = self.current_capital * self.max_portfolio_heat;
 
