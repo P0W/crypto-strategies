@@ -42,13 +42,13 @@ impl OrderBook {
             Side::Buy => {
                 self.buy_orders
                     .entry(OrderedFloat(price))
-                    .or_insert_with(VecDeque::new)
+                    .or_default()
                     .push_back(order_id);
             }
             Side::Sell => {
                 self.sell_orders
                     .entry(OrderedFloat(price))
-                    .or_insert_with(VecDeque::new)
+                    .or_default()
                     .push_back(order_id);
             }
         }

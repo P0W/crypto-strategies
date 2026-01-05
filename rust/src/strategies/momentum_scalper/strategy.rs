@@ -17,7 +17,7 @@
 use crate::indicators::{adx, atr, ema, macd};
 use crate::oms::{Fill, OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
-use crate::{Candle, Position, Side};
+use crate::{Candle, Position, Side, Trade};
 
 use super::config::MomentumScalperConfig;
 use super::MomentumState;
@@ -285,6 +285,19 @@ impl Strategy for MomentumScalperStrategy {
     fn on_order_filled(&mut self, _fill: &Fill, _position: &Position) {
         self.bars_in_position = 0;
         self.cooldown_counter = 0;
+    }
+
+    fn on_trade_closed(&mut self, trade: &Trade) {
+        self.cooldown_counter = self.config.cooldown_bars;
+        self.bars_in_position = 0;
+
+        let return_pct = ((trade.exit_price - trade.entry_price) / trade.entry_price) * 100.0;
+        tracing::info!(
+            symbol = %trade.symbol,
+            return_pct = format!("{:.2}%", return_pct),
+            net_pnl = format!("{:.2}", trade.net_pnl),
+            "Momentum Scalper trade closed"
+        );
     }
 
     fn init(&mut self) {

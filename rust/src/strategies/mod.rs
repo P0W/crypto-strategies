@@ -17,7 +17,7 @@ pub mod regime_grid;
 pub mod volatility_regime;
 
 use crate::oms::{Fill, Order, OrderRequest, Position, StrategyContext};
-use crate::{Candle, Config};
+use crate::{Candle, Config, Trade};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
@@ -73,6 +73,11 @@ pub trait Strategy: Send + Sync {
 
     /// Notification when an order is cancelled
     fn on_order_cancelled(&mut self, _order: &Order) {
+        // Default: no-op
+    }
+
+    /// Notification when a complete trade cycle closes (position fully exited)
+    fn on_trade_closed(&mut self, _trade: &Trade) {
         // Default: no-op
     }
 

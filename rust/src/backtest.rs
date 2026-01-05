@@ -18,8 +18,7 @@ use std::collections::HashMap;
 
 use crate::multi_timeframe::MultiTimeframeCandles;
 use crate::oms::{
-    ExecutionEngine, Order, OrderBook, OrderRequest, Position, PositionManager,
-    StrategyContext,
+    ExecutionEngine, Order, OrderBook, OrderRequest, Position, PositionManager, StrategyContext,
 };
 use crate::risk::RiskManager;
 use crate::Strategy;
@@ -372,10 +371,10 @@ impl Backtester {
                     {
                         // Calculate position size based on risk
                         let regime_score = self.strategy.get_regime_score(current_slice);
-                        
+
                         // Get all current positions for portfolio heat calculation
                         let all_positions = position_manager.get_all_positions();
-                        
+
                         let quantity = self.risk_manager.calculate_position_size_with_regime(
                             price,
                             self.strategy.calculate_stop_loss(current_slice, price),
@@ -417,6 +416,17 @@ impl Backtester {
                 let exit_price = last_candle.close;
 
                 let trade = self.create_trade_from_position(&pos, exit_price, last_candle.datetime);
+                
+                // Record win/loss for risk manager
+                if trade.net_pnl > 0.0 {
+                    self.risk_manager.record_win();
+                } else {
+                    self.risk_manager.record_loss();
+                }
+                
+                // Notify strategy
+                self.strategy.on_trade_closed(&trade);
+                
                 trades.push(trade);
             }
         }
