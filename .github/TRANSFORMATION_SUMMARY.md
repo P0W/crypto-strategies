@@ -98,10 +98,10 @@ This document summarizes all changes made to transform the crypto-strategies rep
 ### 7. Launch Materials
 
 **Files Created:**
-- `.github/launch/README.md` - Launch strategy & timeline
-- `.github/launch/reddit_r_rust.md` - Technical announcement
-- `.github/launch/reddit_r_algotrading.md` - Trading results focus
-- `.github/launch/hackernews.md` - "Show HN" post
+- `content/social-media/README.md` - Launch strategy & timeline
+- `content/social-media/reddit_r_rust.md` - Technical announcement
+- `content/social-media/reddit_r_algotrading.md` - Trading results focus
+- `content/social-media/hackernews.md` - "Show HN" post
 - `.github/QUICK_WINS.md` - 5-minute action checklist
 
 **Impact:** Ready-to-use launch materials for maximum visibility.
@@ -291,13 +291,18 @@ What makes this project stand out:
 ├── workflows/
 │   ├── ci.yml
 │   └── release.yml
-├── launch/
+├── PULL_REQUEST_TEMPLATE.md
+├── QUICK_WINS.md
+└── TRANSFORMATION_SUMMARY.md
+
+content/
+├── social-media/
 │   ├── README.md
 │   ├── reddit_r_rust.md
 │   ├── reddit_r_algotrading.md
 │   └── hackernews.md
-├── PULL_REQUEST_TEMPLATE.md
-└── QUICK_WINS.md
+└── blog/
+    └── (coming soon)
 
 examples/
 └── custom_strategy/
