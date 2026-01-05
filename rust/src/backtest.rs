@@ -16,14 +16,14 @@
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
-use crate::multi_timeframe::{MultiTimeframeCandles, MultiTimeframeData};
+use crate::multi_timeframe::MultiTimeframeCandles;
 use crate::oms::{
-    ExecutionEngine, Fill, Order, OrderBook, OrderRequest, OrderState, Position, PositionManager,
+    ExecutionEngine, Order, OrderBook, OrderRequest, Position, PositionManager,
     StrategyContext,
 };
 use crate::risk::RiskManager;
 use crate::Strategy;
-use crate::{Candle, Config, PerformanceMetrics, Side, Symbol, Trade};
+use crate::{Config, PerformanceMetrics, Side, Symbol, Trade};
 
 /// Backtest result container
 #[derive(Debug, Default)]
@@ -221,14 +221,16 @@ impl Backtester {
                 let candle = current_slice.last().unwrap();
                 let price = candle.close;
 
-                // Get current position
+                // Update position unrealized P&L first (before borrowing position)
+                let mut prices = HashMap::new();
+                prices.insert(symbol.clone(), price);
+                position_manager.update_unrealized_pnl(&prices);
+
+                // Get current position AFTER update
                 let position = position_manager.get_position(symbol);
 
-                // Update position unrealized P&L
+                // Calculate total value
                 if let Some(pos) = position {
-                    let mut prices = HashMap::new();
-                    prices.insert(symbol.clone(), price);
-                    position_manager.update_unrealized_pnl(&prices);
                     total_value += pos.quantity * price;
 
                     // Check stop loss and take profit
@@ -312,10 +314,12 @@ impl Backtester {
                     .map(|ob| ob.get_all_orders().into_iter().cloned().collect())
                     .unwrap_or_default();
 
+                // Build strategy context
+                let mut mtf_view_storage;
                 let ctx = if is_mtf {
-                    // Build MTF view
-                    let mut mtf_view = MultiTimeframeCandles::new(&primary_tf, candle.datetime);
-                    mtf_view.add_timeframe(&primary_tf, current_slice);
+                    // Build MTF view - store in outer scope for lifetime
+                    mtf_view_storage = MultiTimeframeCandles::new(&primary_tf, candle.datetime);
+                    mtf_view_storage.add_timeframe(&primary_tf, current_slice);
 
                     for tf in mtf_data.timeframes() {
                         if tf == primary_tf {
@@ -330,14 +334,15 @@ impl Backtester {
 
                             if aligned_end > 0 {
                                 let tf_start = aligned_end.saturating_sub(LOOKBACK);
-                                mtf_view.add_timeframe(tf, &tf_candles[tf_start..aligned_end]);
+                                mtf_view_storage
+                                    .add_timeframe(tf, &tf_candles[tf_start..aligned_end]);
                             }
                         }
                     }
 
                     StrategyContext::multi_timeframe(
                         symbol,
-                        &mtf_view,
+                        &mtf_view_storage,
                         position,
                         &open_orders,
                         cash,
@@ -370,12 +375,11 @@ impl Backtester {
                         
                         // Get all current positions for portfolio heat calculation
                         let all_positions = position_manager.get_all_positions();
-                        let positions_slice: Vec<&Position> = all_positions.iter().copied().collect();
                         
                         let quantity = self.risk_manager.calculate_position_size_with_regime(
                             price,
                             self.strategy.calculate_stop_loss(current_slice, price),
-                            &positions_slice,
+                            &all_positions,
                             regime_score,
                         );
 

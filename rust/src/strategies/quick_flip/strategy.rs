@@ -18,7 +18,7 @@
 //! - Trailing: Move to breakeven when price re-enters box
 
 use crate::indicators::atr;
-use crate::oms::{Fill, OrderRequest, StrategyContext};
+use crate::oms::{OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
 use crate::{Candle, MultiTimeframeCandles, Position, Side};
 use std::sync::Mutex;
@@ -176,6 +176,7 @@ impl QuickFlipStrategy {
     }
 
     /// Check if candle is bearish (red)
+    #[allow(dead_code)]
     #[inline]
     fn is_bearish(candle: &Candle) -> bool {
         candle.close < candle.open
@@ -200,6 +201,7 @@ impl QuickFlipStrategy {
     }
 
     /// Check for bearish setup - simplified for more trades
+    #[allow(dead_code)]
     #[inline]
     fn is_bearish_pattern(_prev: &Candle, curr: &Candle) -> bool {
         // Any bearish candle counts
@@ -234,7 +236,7 @@ impl Strategy for QuickFlipStrategy {
 
         let current_bar = ctx.candles.len();
 
-        if let Some(pos) = ctx.current_position {
+        if ctx.current_position.is_some() {
             // Hold position
             return orders;
         }
@@ -325,14 +327,14 @@ impl Strategy for QuickFlipStrategy {
         match position.side {
             Side::Buy => {
                 if current_price >= mid {
-                    Some(position.entry_price)
+                    Some(position.average_entry_price)
                 } else {
                     None
                 }
             }
             Side::Sell => {
                 if current_price <= mid {
-                    Some(position.entry_price)
+                    Some(position.average_entry_price)
                 } else {
                     None
                 }

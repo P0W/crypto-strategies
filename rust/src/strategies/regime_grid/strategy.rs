@@ -8,7 +8,7 @@
 //! and reused to avoid O(N²) complexity.
 
 use crate::indicators::{adx, atr, ema, rsi};
-use crate::oms::{Fill, OrderRequest, StrategyContext};
+use crate::oms::{OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
 use crate::{Candle, Position, Side};
 use chrono::{DateTime, Utc};
