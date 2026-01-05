@@ -2,7 +2,6 @@
 
 use crate::oms::types::{Order, OrderType, Position, TimeInForce};
 use crate::{Candle, MultiTimeframeCandles, Side, Symbol};
-use std::collections::HashMap;
 
 /// Context provided to strategy for decision-making
 #[derive(Debug)]

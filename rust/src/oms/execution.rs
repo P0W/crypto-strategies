@@ -1,6 +1,6 @@
 //! Execution engine with intra-candle fill detection
 
-use crate::oms::types::{Fill, Order, OrderId, OrderState, OrderType};
+use crate::oms::types::{Fill, Order, OrderState, OrderType};
 use crate::{Candle, Side};
 use chrono::{DateTime, Utc};
 

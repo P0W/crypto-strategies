@@ -257,7 +257,7 @@ impl RiskManager {
         &self,
         entry_price: f64,
         stop_price: f64,
-        current_positions: &[Position],
+        current_positions: &[&Position],
         regime_score: f64,
     ) -> f64 {
         if self.should_halt_trading() {
@@ -437,9 +437,9 @@ mod tests {
 
         let entry = 100.0;
         let stop = 95.0;
-        let positions = vec![];
+        let positions: Vec<&Position> = vec![];
 
-        let size = rm.calculate_position_size(entry, stop, &positions);
+        let size = rm.calculate_position_size_with_regime(entry, stop, &positions, 1.0);
 
         // Risk = 100,000 * 0.02 = 2,000
         // Stop distance = 5
