@@ -6,8 +6,9 @@
 //! and reused across all helper methods to avoid O(N²) complexity.
 
 use crate::indicators::{adx, atr, ema};
+use crate::oms::{OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
-use crate::{Candle, Position, Signal, Symbol};
+use crate::{Candle, Position, Side};
 
 use super::config::VolatilityRegimeConfig;
 use super::VolatilityRegime;
@@ -137,60 +138,65 @@ impl Strategy for VolatilityRegimeStrategy {
         "volatility_regime"
     }
 
-    fn generate_signal(
-        &self,
-        _symbol: &Symbol,
-        candles: &[Candle],
-        position: Option<&Position>,
-    ) -> Signal {
+    fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest> {
+        let mut orders = Vec::new();
+        
         let min_warmup = (self.config.atr_period + 2 * self.config.adx_period)
             .max(self.config.atr_period + self.config.volatility_lookback)
             .max(self.config.ema_slow);
 
-        if candles.len() < min_warmup {
-            return Signal::Flat;
+        if ctx.candles.len() < min_warmup {
+            return orders;
         }
 
         // Calculate all indicators ONCE
-        let ind = Indicators::new(candles, &self.config);
-        let current_price = candles.last().unwrap().close;
+        let ind = Indicators::new(ctx.candles, &self.config);
+        let current_price = ctx.candles.last().unwrap().close;
 
         // Position exit logic
-        if let Some(pos) = position {
-            if let Some(VolatilityRegime::Extreme) = self.classify_regime(candles, &ind) {
-                return Signal::Flat;
+        if let Some(pos) = ctx.current_position {
+            if let Some(VolatilityRegime::Extreme) = self.classify_regime(ctx.candles, &ind) {
+                // Close position in extreme regime
+                orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity));
+                return orders;
             }
 
-            if pos.unrealized_pnl(current_price) >= 0.0 {
+            if pos.unrealized_pnl >= 0.0 {
                 if let Some(slow_ema) = ind.current_ema_slow {
                     if current_price < slow_ema {
-                        return Signal::Flat;
+                        // Exit profitable position when price crosses below slow EMA
+                        orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity));
+                        return orders;
                     }
                 }
             }
 
-            return Signal::Long;
+            // Hold existing position
+            return orders;
         }
 
-        // Entry logic
-        let regime = match self.classify_regime(candles, &ind) {
+        // Entry logic - only if no position
+        let regime = match self.classify_regime(ctx.candles, &ind) {
             Some(r) => r,
-            None => return Signal::Flat,
+            None => return orders,
         };
 
         if regime != VolatilityRegime::Compression && regime != VolatilityRegime::Normal {
-            return Signal::Flat;
+            return orders;
         }
 
         if !self.is_trend_confirmed(&ind) {
-            return Signal::Flat;
+            return orders;
         }
 
-        if self.is_breakout(candles, &ind) {
-            Signal::Long
-        } else {
-            Signal::Flat
+        if self.is_breakout(ctx.candles, &ind) {
+            // Generate market buy order
+            // Quantity will be determined by risk manager in backtest engine
+            // For now, use a placeholder - backtest will override this
+            orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
         }
+
+        orders
     }
 
     fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64 {
@@ -215,18 +221,16 @@ impl Strategy for VolatilityRegimeStrategy {
             Indicators::atr_only(candles, self.config.atr_period).unwrap_or(current_price * 0.05);
 
         let profit_atr = if current_atr > 0.0 {
-            (current_price - position.entry_price) / current_atr
+            (current_price - position.average_entry_price) / current_atr
         } else {
             0.0
         };
 
-        let current_stop = position.trailing_stop.unwrap_or(position.stop_price);
-
+        // For now, no trailing stop until position has trailing_stop field or we track it in backtest
+        // This is a simplified implementation
         if profit_atr >= self.config.trailing_activation {
             let new_stop = current_price - self.config.trailing_atr_multiple * current_atr;
-            Some(new_stop.max(current_stop))
-        } else if position.trailing_stop.is_some() {
-            Some(current_stop)
+            Some(new_stop)
         } else {
             None
         }

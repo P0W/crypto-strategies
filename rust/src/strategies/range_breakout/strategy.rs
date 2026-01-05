@@ -4,8 +4,9 @@
 //! Exit: ATR-based stop/target
 
 use crate::indicators::atr;
+use crate::oms::{Fill, OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
-use crate::{Candle, Position, Signal, Symbol, Trade};
+use crate::{Candle, Position};
 
 use super::config::RangeBreakoutConfig;
 
@@ -33,19 +34,6 @@ impl RangeBreakoutStrategy {
             .iter()
             .map(|c| c.high)
             .fold(None, |max, h| Some(max.map_or(h, |m: f64| m.max(h))))
-    }
-
-    #[allow(dead_code)]
-    fn get_range_low(&self, candles: &[Candle]) -> Option<f64> {
-        if candles.len() < self.config.lookback + 1 {
-            return None;
-        }
-        let start = candles.len() - self.config.lookback - 1;
-        let end = candles.len() - 1;
-        candles[start..end]
-            .iter()
-            .map(|c| c.low)
-            .fold(None, |min, l| Some(min.map_or(l, |m: f64| m.min(l))))
     }
 
     /// Check if volatility is expanding (good for breakouts)
@@ -77,46 +65,43 @@ impl Strategy for RangeBreakoutStrategy {
         "range_breakout"
     }
 
-    fn generate_signal(
-        &self,
-        _symbol: &Symbol,
-        candles: &[Candle],
-        position: Option<&Position>,
-    ) -> Signal {
+    fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest> {
+        let mut orders = Vec::new();
+        
         let min_bars = self.config.lookback + self.config.atr_period + 2;
-        if candles.len() < min_bars {
-            return Signal::Flat;
+        if ctx.candles.len() < min_bars {
+            return orders;
         }
 
         // If in position, hold
-        if position.is_some() {
-            return Signal::Long;
+        if ctx.current_position.is_some() {
+            return orders;
         }
 
         // Cooldown
         if self.cooldown_counter > 0 {
-            return Signal::Flat;
+            return orders;
         }
 
-        let current = candles.last().unwrap();
-        let prev = &candles[candles.len() - 2];
+        let current = ctx.candles.last().unwrap();
+        let prev = &ctx.candles[ctx.candles.len() - 2];
 
         // Get range high (excluding current bar)
-        let range_high = match self.get_range_high(candles) {
+        let range_high = match self.get_range_high(ctx.candles) {
             Some(h) => h,
-            None => return Signal::Flat,
+            None => return orders,
         };
 
         // Breakout: current close > range high AND previous close <= range high
         // Plus volatility filter to avoid false breakouts
         if current.close > range_high
             && prev.close <= range_high
-            && self.is_volatility_expanding(candles)
+            && self.is_volatility_expanding(ctx.candles)
         {
-            return Signal::Long;
+            orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
         }
 
-        Signal::Flat
+        orders
     }
 
     fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64 {
@@ -156,13 +141,8 @@ impl Strategy for RangeBreakoutStrategy {
         None // No trailing for simplicity
     }
 
-    fn notify_trade(&mut self, trade: &Trade) {
+    fn on_order_filled(&mut self, _fill: &Fill, _position: &Position) {
         self.cooldown_counter = self.config.cooldown;
-        tracing::debug!(
-            symbol = %trade.symbol,
-            pnl = format!("{:.2}", trade.net_pnl),
-            "Range breakout trade"
-        );
     }
 
     fn init(&mut self) {

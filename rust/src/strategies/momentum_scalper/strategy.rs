@@ -15,8 +15,9 @@
 //! 5. Max hold bars exceeded
 
 use crate::indicators::{adx, atr, ema, macd};
+use crate::oms::{Fill, OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
-use crate::{Candle, Order, OrderStatus, Position, Signal, Symbol, Trade};
+use crate::{Candle, Position, Side};
 
 use super::config::MomentumScalperConfig;
 use super::MomentumState;
@@ -85,7 +86,6 @@ pub struct MomentumScalperStrategy {
     config: MomentumScalperConfig,
     bars_in_position: usize,
     cooldown_counter: usize,
-    last_signal: Signal,
 }
 
 impl MomentumScalperStrategy {
@@ -94,21 +94,20 @@ impl MomentumScalperStrategy {
             config,
             bars_in_position: 0,
             cooldown_counter: 0,
-            last_signal: Signal::Flat,
         }
     }
 
     /// Get EMA alignment signal from pre-calculated indicators
-    fn get_ema_alignment(&self, ind: &Indicators) -> Option<Signal> {
+    fn get_ema_alignment(&self, ind: &Indicators) -> Option<Side> {
         let fast = ind.current_ema_fast?;
         let slow = ind.current_ema_slow?;
 
         if fast > slow {
-            Some(Signal::Long)
+            Some(Side::Buy)
         } else if fast < slow {
-            Some(Signal::Short)
+            Some(Side::Sell)
         } else {
-            Some(Signal::Flat)
+            None
         }
     }
 
@@ -162,12 +161,9 @@ impl Strategy for MomentumScalperStrategy {
         "momentum_scalper"
     }
 
-    fn generate_signal(
-        &self,
-        _symbol: &Symbol,
-        candles: &[Candle],
-        position: Option<&Position>,
-    ) -> Signal {
+    fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest> {
+        let mut orders = Vec::new();
+        
         let min_bars = self
             .config
             .ema_slow
@@ -175,25 +171,27 @@ impl Strategy for MomentumScalperStrategy {
             .max(self.config.macd_slow + self.config.macd_signal)
             .max(self.config.adx_period * 2);
 
-        if candles.len() < min_bars + 5 {
-            return Signal::Flat;
+        if ctx.candles.len() < min_bars + 5 {
+            return orders;
         }
 
-        if self.cooldown_counter > 0 && position.is_none() {
-            return Signal::Flat;
+        if self.cooldown_counter > 0 && ctx.current_position.is_none() {
+            return orders;
         }
 
         // Calculate all indicators ONCE
-        let ind = Indicators::new(candles, &self.config);
+        let ind = Indicators::new(ctx.candles, &self.config);
 
         // If in position, check exit conditions
-        if let Some(_pos) = position {
+        if let Some(pos) = ctx.current_position {
             if self.should_exit_on_cross(&ind, true) {
-                return Signal::Flat;
+                orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity));
+                return orders;
             }
 
             if self.bars_in_position >= self.config.max_hold_bars {
-                return Signal::Flat;
+                orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity));
+                return orders;
             }
 
             let momentum = self.get_momentum_state(&ind);
@@ -201,41 +199,43 @@ impl Strategy for MomentumScalperStrategy {
                 momentum,
                 MomentumState::WeakBearish | MomentumState::StrongBearish
             ) {
-                return Signal::Flat;
+                orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity));
+                return orders;
             }
 
-            return Signal::Long;
+            // Hold position
+            return orders;
         }
 
         // Entry logic using pre-calculated indicators
-        let signal = match self.get_ema_alignment(&ind) {
-            Some(s) => s,
-            None => return Signal::Flat,
+        let should_buy = match self.get_ema_alignment(&ind) {
+            Some(side) => side == Side::Buy,
+            None => false,
         };
 
+        if !should_buy {
+            return orders;
+        }
+
         if self.config.adx_threshold > 0.0 && !self.is_adx_strong(&ind) {
-            return Signal::Flat;
+            return orders;
         }
 
         if self.config.use_macd {
             let momentum = self.get_momentum_state(&ind);
-            if signal == Signal::Long
-                && !matches!(
-                    momentum,
-                    MomentumState::StrongBullish
-                        | MomentumState::WeakBullish
-                        | MomentumState::Neutral
-                )
-            {
-                return Signal::Flat;
+            if !matches!(
+                momentum,
+                MomentumState::StrongBullish
+                    | MomentumState::WeakBullish
+                    | MomentumState::Neutral
+            ) {
+                return orders;
             }
         }
 
-        if signal == Signal::Short && !self.config.allow_short {
-            return Signal::Flat;
-        }
-
-        signal
+        // Generate buy order
+        orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
+        orders
     }
 
     fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64 {
@@ -260,18 +260,14 @@ impl Strategy for MomentumScalperStrategy {
             Indicators::atr_only(candles, self.config.atr_period).unwrap_or(current_price * 0.01);
 
         let profit_atr = if current_atr > 0.0 {
-            (current_price - position.entry_price) / current_atr
+            (current_price - position.average_entry_price) / current_atr
         } else {
             0.0
         };
 
-        let current_stop = position.trailing_stop.unwrap_or(position.stop_price);
-
         if profit_atr >= self.config.trailing_activation {
             let new_stop = current_price - self.config.trailing_atr_multiple * current_atr;
-            Some(new_stop.max(current_stop))
-        } else if position.trailing_stop.is_some() {
-            Some(current_stop)
+            Some(new_stop)
         } else {
             None
         }
@@ -288,30 +284,14 @@ impl Strategy for MomentumScalperStrategy {
         }
     }
 
-    fn notify_order(&mut self, order: &Order) {
-        if order.status == OrderStatus::Completed {
-            self.bars_in_position = 0;
-            self.cooldown_counter = 0;
-        }
-    }
-
-    fn notify_trade(&mut self, trade: &Trade) {
-        self.cooldown_counter = self.config.cooldown_bars;
+    fn on_order_filled(&mut self, _fill: &Fill, _position: &Position) {
         self.bars_in_position = 0;
-
-        let return_pct = trade.return_pct();
-        tracing::info!(
-            symbol = %trade.symbol,
-            return_pct = format!("{:.2}%", return_pct),
-            net_pnl = format!("{:.2}", trade.net_pnl),
-            "Momentum Scalper trade closed"
-        );
+        self.cooldown_counter = 0;
     }
 
     fn init(&mut self) {
         self.bars_in_position = 0;
         self.cooldown_counter = 0;
-        self.last_signal = Signal::Flat;
         tracing::info!("Momentum Scalper strategy initialized");
     }
 }
