@@ -382,6 +382,10 @@ impl Strategy for QuickFlipStrategy {
         }
     }
 
+    fn on_bar(&mut self, _ctx: &StrategyContext) {
+        // No per-bar counter decrement needed as it uses absolute candle length
+    }
+
     fn init(&mut self) {
         *self.state.lock().unwrap() = State::default();
     }

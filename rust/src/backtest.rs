@@ -17,9 +17,7 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
 use crate::multi_timeframe::MultiTimeframeCandles;
-use crate::oms::{
-    ExecutionEngine, Order, OrderBook, OrderRequest, Position, PositionManager, StrategyContext,
-};
+use crate::oms::{ExecutionEngine, Order, OrderBook, Position, PositionManager, StrategyContext};
 use crate::risk::RiskManager;
 use crate::Strategy;
 use crate::{Config, PerformanceMetrics, Side, Symbol, Trade};
@@ -176,7 +174,8 @@ impl Backtester {
                                 }
 
                                 // Check if position exists BEFORE fill (to detect closes)
-                                let had_position_before = position_manager.get_position(symbol).is_some();
+                                let had_position_before =
+                                    position_manager.get_position(symbol).is_some();
                                 let prev_pos = if had_position_before {
                                     // Get raw position (even if qty=0) for trade creation
                                     position_manager.get_position_raw(symbol).cloned()
@@ -188,34 +187,35 @@ impl Backtester {
                                 position_manager.add_fill(fill.clone(), symbol.clone(), order.side);
 
                                 // Check if position closed (had position before, none after)
-                                let has_position_after = position_manager.get_position(symbol).is_some();
-                                
+                                let has_position_after =
+                                    position_manager.get_position(symbol).is_some();
+
                                 if had_position_before && !has_position_after {
                                     // Position just closed - create trade
                                     if let Some(closed_pos) = prev_pos {
                                         let trade = self.create_trade_from_position(
                                             &closed_pos,
                                             fill.price,
-                                            candle.datetime
+                                            candle.datetime,
                                         );
-                                        
+
                                         // Record win/loss for risk manager
                                         if trade.net_pnl > 0.0 {
                                             self.risk_manager.record_win();
                                         } else {
                                             self.risk_manager.record_loss();
                                         }
-                                        
+
                                         tracing::debug!(
                                             "{} TRADE CLOSED {} PnL={:.2}",
                                             candle.datetime.format("%Y-%m-%d"),
                                             symbol,
                                             trade.net_pnl
                                         );
-                                        
+
                                         // Notify strategy
                                         self.strategy.on_trade_closed(&trade);
-                                        
+
                                         trades.push(trade);
                                     }
                                 }
@@ -267,17 +267,27 @@ impl Backtester {
                 prices.insert(symbol.clone(), price);
                 position_manager.update_unrealized_pnl(&prices);
 
-                // Get current position AFTER update
-                let position = position_manager.get_position(symbol);
+                // Get current position AFTER update (clone to allow mutation of manager later)
+                let position_data = position_manager.get_position(symbol).cloned();
 
                 // Calculate total value
-                if let Some(pos) = position {
+                if let Some(pos) = &position_data {
                     total_value += pos.quantity * price;
+
+                    // FIX: Use entry slice for fixed stop/target calculation to avoid stop drift
+                    let entry_slice =
+                        match primary.binary_search_by_key(&pos.first_entry_time, |c| c.datetime) {
+                            Ok(idx) => {
+                                let start = idx.saturating_sub(LOOKBACK - 1);
+                                &primary[start..=idx]
+                            }
+                            Err(_) => current_slice,
+                        };
 
                     // Check stop loss and take profit
                     let stop_price = self
                         .strategy
-                        .calculate_stop_loss(current_slice, pos.average_entry_price);
+                        .calculate_stop_loss(entry_slice, pos.average_entry_price);
                     let target_price = self
                         .strategy
                         .calculate_take_profit(current_slice, pos.average_entry_price);
@@ -293,24 +303,99 @@ impl Backtester {
                     };
 
                     if stopped || target_hit {
-                        // Place market order to close position
-                        let close_order = match pos.side {
-                            Side::Buy => OrderRequest::market_sell(symbol.clone(), pos.quantity),
-                            Side::Sell => OrderRequest::market_buy(symbol.clone(), pos.quantity),
+                        // IMMMEDIATE FILL LOGIC
+                        let reason = if stopped { "Stop" } else { "Target" };
+                        let trigger_price = if stopped { stop_price } else { target_price };
+
+                        // Determine execution price (handle gaps)
+                        let exec_price = match pos.side {
+                            Side::Buy => {
+                                if candle.open < trigger_price {
+                                    candle.open
+                                } else {
+                                    trigger_price
+                                }
+                            }
+                            Side::Sell => {
+                                if candle.open > trigger_price {
+                                    candle.open
+                                } else {
+                                    trigger_price
+                                }
+                            }
                         };
 
-                        if let Some(orderbook) = orderbooks.get_mut(symbol) {
-                            orderbook.add_order(close_order.into_order());
+                        // Create synthetic order for execution
+                        let mut close_order = Order::new(
+                            symbol.clone(),
+                            match pos.side {
+                                Side::Buy => Side::Sell,
+                                Side::Sell => Side::Buy,
+                            },
+                            crate::oms::types::OrderType::Market,
+                            pos.quantity,
+                            None,
+                            None,
+                            crate::oms::types::TimeInForce::GTC,
+                            Some(reason.to_string()),
+                        );
+
+                        // Execute immediate fill with slippage
+                        let slippage_factor = if pos.side == Side::Buy {
+                            1.0 - self.config.exchange.assumed_slippage
+                        } else {
+                            1.0 + self.config.exchange.assumed_slippage
+                        };
+
+                        let fill = self.execution_engine.execute_fill(
+                            &mut close_order,
+                            exec_price * slippage_factor,
+                            false, // Taker
+                            candle.datetime,
+                        );
+
+                        // Update cash
+                        match close_order.side {
+                            Side::Buy => cash -= fill.price * fill.quantity + fill.commission,
+                            Side::Sell => cash += fill.price * fill.quantity - fill.commission,
                         }
 
-                        let reason = if stopped { "Stop" } else { "Target" };
+                        // Update position manager
+                        position_manager.add_fill(fill.clone(), symbol.clone(), close_order.side);
+
+                        // Record trade
+                        if position_manager.get_position(symbol).is_none() {
+                            // CRITICAL: Clear closed position from manager to prevent P&L accumulation
+                            position_manager.close_position(symbol);
+
+                            let trade = self.create_trade_from_position(
+                                pos, // Use the cloned position data
+                                fill.price,
+                                candle.datetime,
+                            );
+
+                            if trade.net_pnl > 0.0 {
+                                self.risk_manager.record_win();
+                            } else {
+                                self.risk_manager.record_loss();
+                            }
+
+                            self.strategy.on_trade_closed(&trade);
+                            trades.push(trade);
+                        }
+
                         tracing::debug!(
-                            "{} {} close order @ {:.2} ({})",
+                            "{} {} closed @ {:.2} ({}) PnL={:.2}",
                             candle.datetime.format("%Y-%m-%d"),
                             symbol,
-                            price,
-                            reason
+                            fill.price,
+                            reason,
+                            trades.last().map(|t| t.net_pnl).unwrap_or(0.0)
                         );
+
+                        // Notify strategy
+                        self.strategy.on_order_filled(&fill, pos);
+
                         continue;
                     }
 
@@ -325,25 +410,91 @@ impl Backtester {
                         };
 
                         if trailing_stopped {
-                            let close_order = match pos.side {
+                            // Determine execution price (handle gaps)
+                            let exec_price = match pos.side {
                                 Side::Buy => {
-                                    OrderRequest::market_sell(symbol.clone(), pos.quantity)
+                                    if candle.open < new_stop {
+                                        candle.open
+                                    } else {
+                                        new_stop
+                                    }
                                 }
                                 Side::Sell => {
-                                    OrderRequest::market_buy(symbol.clone(), pos.quantity)
+                                    if candle.open > new_stop {
+                                        candle.open
+                                    } else {
+                                        new_stop
+                                    }
                                 }
                             };
 
-                            if let Some(orderbook) = orderbooks.get_mut(symbol) {
-                                orderbook.add_order(close_order.into_order());
+                            let mut close_order = Order::new(
+                                symbol.clone(),
+                                match pos.side {
+                                    Side::Buy => Side::Sell,
+                                    Side::Sell => Side::Buy,
+                                },
+                                crate::oms::types::OrderType::Market,
+                                pos.quantity,
+                                None,
+                                None,
+                                crate::oms::types::TimeInForce::GTC,
+                                Some("TrailingStop".to_string()),
+                            );
+
+                            let slippage_factor = if pos.side == Side::Buy {
+                                1.0 - self.config.exchange.assumed_slippage
+                            } else {
+                                1.0 + self.config.exchange.assumed_slippage
+                            };
+
+                            let fill = self.execution_engine.execute_fill(
+                                &mut close_order,
+                                exec_price * slippage_factor,
+                                false,
+                                candle.datetime,
+                            );
+
+                            match close_order.side {
+                                Side::Buy => cash -= fill.price * fill.quantity + fill.commission,
+                                Side::Sell => cash += fill.price * fill.quantity - fill.commission,
+                            }
+
+                            position_manager.add_fill(
+                                fill.clone(),
+                                symbol.clone(),
+                                close_order.side,
+                            );
+
+                            if position_manager.get_position(symbol).is_none() {
+                                // CRITICAL: Clear closed position from manager to prevent P&L accumulation
+                                position_manager.close_position(symbol);
+
+                                let trade = self.create_trade_from_position(
+                                    pos,
+                                    fill.price,
+                                    candle.datetime,
+                                );
+
+                                if trade.net_pnl > 0.0 {
+                                    self.risk_manager.record_win();
+                                } else {
+                                    self.risk_manager.record_loss();
+                                }
+
+                                self.strategy.on_trade_closed(&trade);
+                                trades.push(trade);
                             }
 
                             tracing::debug!(
-                                "{} {} trailing stop @ {:.2}",
+                                "{} {} trailing stop @ {:.2} PnL={:.2}",
                                 candle.datetime.format("%Y-%m-%d"),
                                 symbol,
-                                price
+                                fill.price,
+                                trades.last().map(|t| t.net_pnl).unwrap_or(0.0)
                             );
+
+                            self.strategy.on_order_filled(&fill, pos);
                             continue;
                         }
                     }
@@ -384,7 +535,7 @@ impl Backtester {
                     StrategyContext::multi_timeframe(
                         symbol,
                         &mtf_view_storage,
-                        position,
+                        position_data.as_ref(),
                         &open_orders,
                         cash,
                         total_value,
@@ -393,12 +544,15 @@ impl Backtester {
                     StrategyContext::single_timeframe(
                         symbol,
                         current_slice,
-                        position,
+                        position_data.as_ref(),
                         &open_orders,
                         cash,
                         total_value,
                     )
                 };
+
+                // Notify strategy of new bar (to update counters etc)
+                self.strategy.on_bar(&ctx);
 
                 // Get orders from strategy
                 let order_requests = self.strategy.generate_orders(&ctx);
@@ -406,21 +560,24 @@ impl Backtester {
                 // Process each order request
                 for order_req in order_requests {
                     let order = order_req.into_order();
-                    let is_entry_order = position.is_none();
-                    
+                    let is_entry_order = position_data.is_none();
+
                     // For entry orders: calculate quantity via risk manager
                     // For exit/grid orders: use strategy's specified quantity
-                    let final_order = if is_entry_order {
+                    let mut final_order = if is_entry_order {
                         // Validate with risk manager
                         let position_count = position_manager.open_position_count();
-                        
+
                         if self.risk_manager.should_halt_trading() {
                             tracing::debug!("Risk manager halted trading - skipping order");
                             continue;
                         }
-                        
+
                         if !self.risk_manager.can_open_position_count(position_count) {
-                            tracing::debug!("Max positions reached ({}) - skipping order", position_count);
+                            tracing::debug!(
+                                "Max positions reached ({}) - skipping order",
+                                position_count
+                            );
                             continue;
                         }
 
@@ -439,7 +596,7 @@ impl Backtester {
                             &all_positions,
                             regime_score,
                         );
-                        
+
                         if quantity <= 0.0 {
                             tracing::debug!("Risk manager returned zero quantity - skipping order");
                             continue;
@@ -455,19 +612,63 @@ impl Backtester {
                         order
                     };
 
-                    // Add to orderbook
-                    if let Some(orderbook) = orderbooks.get_mut(symbol) {
-                        orderbook.add_order(final_order.clone());
+                    // GENERIC FIX: Execute Market orders immediately at Close (Market-On-Close)
+                    // This matches the behavior of signal-based backtesters and prevents gap slippage
+                    if final_order.order_type == crate::oms::types::OrderType::Market {
+                        let slippage_factor = match final_order.side {
+                            Side::Buy => 1.0 + self.config.exchange.assumed_slippage,
+                            Side::Sell => 1.0 - self.config.exchange.assumed_slippage,
+                        };
+                        let fill_price = price * slippage_factor;
+
+                        let fill = self.execution_engine.execute_fill(
+                            &mut final_order,
+                            fill_price,
+                            false, // Taker
+                            candle.datetime,
+                        );
+
+                        // Update cash
+                        match final_order.side {
+                            Side::Buy => cash -= fill.price * fill.quantity + fill.commission,
+                            Side::Sell => cash += fill.price * fill.quantity - fill.commission,
+                        }
+
+                        // Update position manager
+                        position_manager.add_fill(fill.clone(), symbol.clone(), final_order.side);
 
                         tracing::debug!(
-                            "{} ORDER {:?} {} @ {:.2} qty={:.4} {}",
+                            "{} FILL {:?} {} @ {:.2} qty={:.4} (MOC)",
                             candle.datetime.format("%Y-%m-%d"),
                             final_order.side,
                             symbol,
-                            final_order.limit_price.unwrap_or(price),
-                            final_order.quantity,
-                            if is_entry_order { "(ENTRY)" } else { "(EXIT/GRID)" }
+                            fill.price,
+                            fill.quantity
                         );
+
+                        // Notify strategy
+                        if let Some(pos) = position_manager.get_position(symbol) {
+                            self.strategy.on_order_filled(&fill, pos);
+                        }
+                    } else {
+                        // Limit/Stop orders go to book for next execution
+                        if let Some(orderbook) = orderbooks.get_mut(symbol) {
+                            orderbook.add_order(final_order.clone());
+
+                            tracing::debug!(
+                                "{} ORDER {:?} {} @ {:.2} qty={:.4} {}",
+                                candle.datetime.format("%Y-%m-%d"),
+                                final_order.side,
+                                symbol,
+                                final_order.limit_price.unwrap_or(price),
+                                final_order.quantity,
+                                if is_entry_order {
+                                    "(ENTRY)"
+                                } else {
+                                    "(EXIT/GRID)"
+                                }
+                            );
+                        }
                     }
                 }
             }
@@ -644,9 +845,11 @@ impl Backtester {
             0.0
         };
 
-        // Tax calculation (India: 30% flat)
+        // Tax calculation (Net Profit model)
         let tax_rate = self.config.tax.tax_rate;
-        let taxable_gains = total_wins;
+        // Use net profit for tax base (simplified)
+        let net_profit = total_wins - total_losses;
+        let taxable_gains = if net_profit > 0.0 { net_profit } else { 0.0 };
         let tax = taxable_gains * tax_rate;
         let post_tax_return = ((final_equity - initial_capital - tax) / initial_capital) * 100.0;
 

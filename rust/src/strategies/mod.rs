@@ -81,6 +81,11 @@ pub trait Strategy: Send + Sync {
         // Default: no-op
     }
 
+    /// Notification when a new bar/candle is processed
+    fn on_bar(&mut self, _ctx: &StrategyContext) {
+        // Default: no-op
+    }
+
     /// Initialize strategy (called once before trading starts)
     fn init(&mut self) {}
 }

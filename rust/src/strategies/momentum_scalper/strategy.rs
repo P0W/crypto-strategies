@@ -300,6 +300,15 @@ impl Strategy for MomentumScalperStrategy {
         );
     }
 
+    fn on_bar(&mut self, ctx: &StrategyContext) {
+        if ctx.current_position.is_some() {
+            self.bars_in_position += 1;
+            self.cooldown_counter = 0;
+        } else if self.cooldown_counter > 0 {
+            self.cooldown_counter -= 1;
+        }
+    }
+
     fn init(&mut self) {
         self.bars_in_position = 0;
         self.cooldown_counter = 0;
