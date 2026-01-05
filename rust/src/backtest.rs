@@ -190,6 +190,14 @@ impl Backtester {
                                 let has_position_after =
                                     position_manager.get_position(symbol).is_some();
 
+                                tracing::trace!(
+                                    "{} Fill check: had_before={} has_after={} prev_pos_qty={}",
+                                    candle.datetime.format("%Y-%m-%d"),
+                                    had_position_before,
+                                    has_position_after,
+                                    prev_pos.as_ref().map(|p| p.quantity).unwrap_or(0.0)
+                                );
+
                                 if had_position_before && !has_position_after {
                                     // Position just closed - create trade
                                     if let Some(closed_pos) = prev_pos {
@@ -291,6 +299,18 @@ impl Backtester {
                     let target_price = self
                         .strategy
                         .calculate_take_profit(current_slice, pos.average_entry_price);
+
+                    tracing::trace!(
+                        "{} {} position check: entry={:.2} current={:.2} stop={:.2} target={:.2} low={:.2} high={:.2}",
+                        candle.datetime.format("%Y-%m-%d"),
+                        symbol,
+                        pos.average_entry_price,
+                        price,
+                        stop_price,
+                        target_price,
+                        candle.low,
+                        candle.high
+                    );
 
                     let stopped = match pos.side {
                         Side::Buy => price <= stop_price || candle.low <= stop_price,
@@ -562,16 +582,18 @@ impl Backtester {
                     let order = order_req.into_order();
                     let is_entry_order = position_data.is_none();
 
+                    // CRITICAL FIX: Exit orders must be allowed even when trading is halted
+                    // Otherwise positions can't close and drawdown stays above threshold
+                    if is_entry_order && self.risk_manager.should_halt_trading() {
+                        tracing::debug!("Risk manager halted trading - skipping ENTRY order");
+                        continue;
+                    }
+
                     // For entry orders: calculate quantity via risk manager
                     // For exit/grid orders: use strategy's specified quantity
                     let mut final_order = if is_entry_order {
                         // Validate with risk manager
                         let position_count = position_manager.open_position_count();
-
-                        if self.risk_manager.should_halt_trading() {
-                            tracing::debug!("Risk manager halted trading - skipping order");
-                            continue;
-                        }
 
                         if !self.risk_manager.can_open_position_count(position_count) {
                             tracing::debug!(
@@ -634,8 +656,47 @@ impl Backtester {
                             Side::Sell => cash += fill.price * fill.quantity - fill.commission,
                         }
 
+                        // Check if we had a position before this fill
+                        let had_position_before = position_manager.get_position(symbol).is_some();
+                        let prev_pos = if had_position_before {
+                            position_manager.get_position_raw(symbol).cloned()
+                        } else {
+                            None
+                        };
+
                         // Update position manager
                         position_manager.add_fill(fill.clone(), symbol.clone(), final_order.side);
+
+                        // Check if position closed
+                        let has_position_after = position_manager.get_position(symbol).is_some();
+
+                        if had_position_before && !has_position_after {
+                            // Position just closed - create trade
+                            if let Some(closed_pos) = prev_pos {
+                                let trade = self.create_trade_from_position(
+                                    &closed_pos,
+                                    fill.price,
+                                    candle.datetime,
+                                );
+
+                                // Record win/loss
+                                if trade.net_pnl > 0.0 {
+                                    self.risk_manager.record_win();
+                                } else {
+                                    self.risk_manager.record_loss();
+                                }
+
+                                tracing::debug!(
+                                    "{} TRADE CLOSED {} PnL={:.2} (Strategy Exit)",
+                                    candle.datetime.format("%Y-%m-%d"),
+                                    symbol,
+                                    trade.net_pnl
+                                );
+
+                                self.strategy.on_trade_closed(&trade);
+                                trades.push(trade);
+                            }
+                        }
 
                         tracing::debug!(
                             "{} FILL {:?} {} @ {:.2} qty={:.4} (MOC)",
