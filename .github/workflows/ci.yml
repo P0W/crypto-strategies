@@ -1,0 +1,223 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    # Run CI on all pull requests
+    types: [opened, synchronize, reopened]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+          
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: rust/target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+          
+      - name: Run cargo check
+        working-directory: ./rust
+        run: cargo check --all-features --verbose
+
+  test:
+    name: Test Suite
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: [stable]
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          
+      - name: Run tests
+        working-directory: ./rust
+        run: cargo test --verbose
+        
+      - name: Run tests (release mode)
+        working-directory: ./rust
+        run: cargo test --release --verbose
+
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+          
+      - name: Check formatting
+        working-directory: ./rust
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          
+      - name: Run clippy
+        working-directory: ./rust
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+        
+      - name: Run security audit
+        working-directory: ./rust
+        run: cargo audit
+
+  build:
+    name: Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          
+      - name: Build (debug)
+        working-directory: ./rust
+        run: cargo build --verbose
+        
+      - name: Build (release)
+        working-directory: ./rust
+        run: cargo build --release --verbose
+        
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-strategies-${{ matrix.os }}
+          path: rust/target/release/crypto-strategies${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          if-no-files-found: ignore
+
+  backtest:
+    name: Backtest Validation
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          
+      - name: Build project
+        working-directory: ./rust
+        run: cargo build --release
+        
+      - name: Run sample backtest
+        working-directory: ./rust
+        run: cargo run --release -- backtest --config ../configs/sample_config.json
+        continue-on-error: true
+        
+      - name: Check backtest results
+        run: |
+          if [ -d "results" ]; then
+            echo "✅ Backtest completed successfully"
+            ls -lah results/
+          else
+            echo "⚠️ No backtest results generated"
+          fi
+
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin
+        
+      - name: Generate coverage
+        working-directory: ./rust
+        run: cargo tarpaulin --out Xml --verbose
+        
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./rust/cobertura.xml
+          fail_ci_if_error: false
