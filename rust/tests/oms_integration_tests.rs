@@ -324,7 +324,7 @@ fn test_backtest_with_real_strategy() {
     let result = backtester.run(&mtf_data);
 
     // Verify result structure
-    assert!(result.equity_curve.len() > 0);
+    assert!(!result.equity_curve.is_empty());
     assert!(result.metrics.total_return.is_finite());
 
     // Metrics should be calculated
