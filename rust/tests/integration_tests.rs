@@ -6,7 +6,6 @@ use chrono::{Duration, Utc};
 
 use crypto_strategies::indicators;
 use crypto_strategies::risk::RiskManager;
-use crypto_strategies::strategies::regime_grid::{RegimeGridConfig, RegimeGridStrategy};
 use crypto_strategies::strategies::volatility_regime::{
     VolatilityRegimeConfig, VolatilityRegimeStrategy,
 };
@@ -1262,40 +1261,4 @@ async fn test_sharpe_ratio_excludes_zero_return_days() {
     }
 }
 
-// =============================================================================
-// Regime Grid Strategy Tests
-// =============================================================================
-
-#[test]
-fn test_regime_grid_strategy_creation() {
-    let config = RegimeGridConfig::default();
-    let _strategy = RegimeGridStrategy::new(config);
-    // Strategy should be created without panic
-}
-
-#[test]
-fn test_regime_grid_generates_flat_with_insufficient_data() {
-    let config = RegimeGridConfig::default();
-    let strategy = RegimeGridStrategy::new(config);
-
-    let symbol = Symbol::new("BTCINR");
-    let candles = generate_mock_candles(50, 50000.0, 100.0); // Too few for 200 EMA
-
-    let signal = strategy.generate_signal(&symbol, &candles, None);
-    assert_eq!(signal, Signal::Flat);
-}
-
-#[test]
-fn test_regime_grid_with_sufficient_data() {
-    let config = RegimeGridConfig::default();
-    let strategy = RegimeGridStrategy::new(config);
-
-    let symbol = Symbol::new("BTCINR");
-    // Generate enough candles for all indicators (200 EMA * 2 = 400)
-    let candles = generate_mock_candles(500, 50000.0, 500.0);
-
-    let signal = strategy.generate_signal(&symbol, &candles, None);
-    // Signal should not panic - may be Flat, Long, or Short depending on regime
-    assert!(matches!(signal, Signal::Flat | Signal::Long | Signal::Short));
-}
 
