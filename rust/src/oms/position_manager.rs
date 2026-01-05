@@ -107,9 +107,9 @@ impl PositionManager {
         self.positions.get_mut(symbol)
     }
 
-    /// Get all positions
-    pub fn get_all_positions(&self) -> Vec<&Position> {
-        self.positions.values().collect()
+    /// Get all positions as an iterator over (Symbol, &Position)
+    pub fn get_all_positions(&self) -> impl Iterator<Item = (&Symbol, &Position)> {
+        self.positions.iter()
     }
 
     /// Update unrealized P&L for all positions

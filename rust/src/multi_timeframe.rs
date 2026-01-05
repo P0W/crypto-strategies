@@ -60,6 +60,11 @@ impl MultiTimeframeData {
     pub fn has_timeframe(&self, timeframe: &str) -> bool {
         self.timeframes.contains_key(timeframe)
     }
+    
+    /// Get mutable access to timeframe data (for live updates)
+    pub fn get_mut(&mut self, timeframe: &str) -> Option<&mut Vec<Candle>> {
+        self.timeframes.get_mut(timeframe)
+    }
 
     /// Get the length of the primary timeframe data
     pub fn len(&self) -> usize {
@@ -97,6 +102,20 @@ impl<'a> MultiTimeframeCandles<'a> {
             primary_timeframe: primary_timeframe.into(),
             current_datetime,
         }
+    }
+    
+    /// Create from MultiTimeframeData (all timeframes available)
+    pub fn from_data(data: &'a MultiTimeframeData) -> Self {
+        let mut mtf = Self::new(
+            data.primary_timeframe().to_string(),
+            data.primary().last().map(|c| c.datetime).unwrap_or_else(|| Utc::now()),
+        );
+        for tf in data.timeframes() {
+            if let Some(candles) = data.get(tf) {
+                mtf.add_timeframe(tf.to_string(), candles);
+            }
+        }
+        mtf
     }
 
     /// Add a timeframe slice

@@ -1,6 +1,64 @@
 # Crypto Strategies - Rust Implementation
 
-High-performance Rust implementation of trading strategies for CoinDCX and Zerodha.
+High-performance Rust implementation with **production-grade Order Management System (OMS)** for backtesting and live trading.
+
+## 🎯 OMS Architecture (New in 2026)
+
+The system has been upgraded with a complete Order Management System that enables:
+- **Order lifecycle management**: Pending → Submitted → Open → Filled/Cancelled
+- **Intra-candle fill detection**: Buy limit fills if `candle.low <= limit_price`
+- **FIFO position accounting**: Multiple fills per position with weighted average entry
+- **Grid trading support**: Place multiple simultaneous limit orders per symbol
+- **Multi-timeframe strategies**: Access multiple timeframes in strategy logic
+- **Order-based execution**: Strategies generate orders, not just signals
+
+### OMS Components (`rust/src/oms/`)
+
+**Core Modules:**
+- `types.rs` - OrderId (atomic u64), OrderType, OrderState, TimeInForce, Order, Fill, Position
+- `orderbook.rs` - BTreeMap-based order book with price-time priority (O(log N) insert)
+- `execution.rs` - ExecutionEngine with intra-candle fill detection
+- `position_manager.rs` - PositionManager tracking FIFO-weighted P&L  
+- `strategy.rs` - StrategyContext with multi-timeframe candles, OrderRequest builders
+
+**Key Dependencies:**
+- `ordered-float = "4.2"` - Total ordering for f64 in BTreeMap (required because f64 lacks `Ord` due to NaN)
+
+### Strategy Interface Evolution
+
+**Before (Signal-Based):**
+```rust
+fn generate_signal(&self, symbol: &Symbol, candles: &[Candle], 
+                   position: Option<&Position>) -> Signal
+```
+
+**After (Order-Based):**
+```rust
+fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest>
+```
+
+**Complete Lifecycle Hooks:**
+```rust
+trait Strategy {
+    fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest>;
+    fn on_order_filled(&mut self, fill: &Fill, position: &Position);
+    fn on_order_cancelled(&mut self, order: &Order);
+    fn on_trade_closed(&mut self, trade: &Trade);  // Entry → Exit complete
+}
+```
+
+### Backtest Engine Rewrite
+
+**Event Loop per Candle:**
+1. Check all orders for fills via `ExecutionEngine::check_fill(order, candle)`
+2. Update positions with FIFO P&L on fills
+3. Notify strategy via `on_order_filled()`
+4. Generate new orders via `strategy.generate_orders()`
+5. Validate via RiskManager
+6. Add to OrderBook
+7. Notify strategy via `on_trade_closed()` when position exits
+
+**Critical:** Historical timestamp preservation - fills use `candle.datetime`, NOT `Utc::now()`
 
 ## Verified Backtest Results
 
@@ -17,12 +75,32 @@ All strategies backtested with **₹100,000 initial capital** on crypto pairs (B
 
 ## Features
 
-- **Performance**: 10-100x faster backtests enabling thorough optimization
-- **Type Safety**: Compile-time guarantees eliminate runtime type errors
-- **Multi-Timeframe**: Strategies can use multiple timeframes (1d ATR + 15m range + 5m patterns)
-- **Parallel Optimization**: Rayon-based grid search across all CPU cores
-- **Production Ready**: Circuit breakers, rate limiting, state persistence
-- **Multiple Exchanges**: CoinDCX (crypto) and Zerodha Kite (equity) integrations
+- **🎯 Order Management System**: Production-grade OMS with order lifecycle, FIFO P&L, grid trading
+- **⚡ Performance**: 10-100x faster backtests enabling thorough optimization
+- **🔒 Type Safety**: Compile-time guarantees eliminate runtime type errors
+- **📊 Multi-Timeframe**: Strategies access multiple timeframes (e.g., 1d + 4h + 1h)
+- **⚙️ Parallel Optimization**: Rayon-based grid search across all CPU cores
+- **🏭 Production Ready**: Circuit breakers, rate limiting, state persistence
+- **🌐 Multiple Exchanges**: CoinDCX (crypto) and Zerodha Kite (equity)
+
+## Architecture Highlights
+
+**Module Organization:**
+- `src/oms/` - Order management system (new)
+- `src/strategies/` - Trading strategies (all migrated to OMS API)
+- `src/backtest.rs` - Backtesting engine (rewritten for OMS)
+- `src/risk.rs` - Risk management (drawdown, position limits)
+- `src/types.rs` - Core domain types (Candle, Symbol, Side, Trade, PerformanceMetrics)
+- `src/indicators.rs` - Technical indicators (ATR, EMA, RSI, ADX, etc.)
+- `src/data.rs` - CSV data loading and validation
+- `src/multi_timeframe.rs` - Multi-timeframe data management
+- `src/coindcx/` - CoinDCX exchange integration
+- `src/zerodha/` - Zerodha Kite integration
+
+**Key Design Decisions:**
+- **Why `types.rs` at root?** Core domain primitives used across all modules
+- **Why `risk.rs` at root?** Cross-cutting concern orchestrating OMS, strategies, portfolio
+- **Why ordered-float?** BTreeMap requires `Ord` trait; f64 doesn't have it (NaN); OrderedFloat provides total ordering
 
 ## Prerequisites
 
@@ -355,17 +433,26 @@ src/
 ├── lib.rs                   # Library exports
 │
 ├── commands/                # Command implementations
-│   ├── backtest.rs          # Historical simulation
+│   ├── backtest.rs          # Historical simulation (OMS-based)
 │   ├── optimize.rs          # Grid search optimization
-│   ├── live.rs              # Real-time trading (async)
+│   ├── live.rs              # Real-time trading (async, OMS migration in progress)
 │   └── download.rs          # Data fetching
 │
-├── strategies/              # Strategy implementations
+├── oms/                     # Order Management System (NEW)
+│   ├── mod.rs               # Module exports
+│   ├── types.rs             # Order, Fill, Position types
+│   ├── orderbook.rs         # BTreeMap-based order book
+│   ├── execution.rs         # Fill detection engine
+│   ├── position_manager.rs  # FIFO position tracking
+│   └── strategy.rs          # StrategyContext, OrderRequest
+│
+├── strategies/              # Strategy implementations (all migrated to OMS)
 │   ├── mod.rs               # Strategy trait + factory registry
 │   ├── volatility_regime/   # ATR regime classification
 │   ├── momentum_scalper/    # EMA crossover momentum
 │   ├── range_breakout/      # N-bar high/low breakout
-│   └── quick_flip/          # Range reversal/breakout
+│   ├── quick_flip/          # Multi-timeframe reversal (4h+1d)
+│   └── regime_grid/         # Grid trading with regime adaptation
 │
 ├── binance/                 # Binance API (data only)
 │   ├── client.rs            # Klines fetching
