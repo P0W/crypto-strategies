@@ -279,7 +279,7 @@ async fn main() -> Result<()> {
             config,
             paper,
             live,
-            interval,
+            interval: _,
             state_db,
         } => {
             commands::live::run(

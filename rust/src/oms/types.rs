@@ -273,6 +273,21 @@ impl Position {
     pub fn total_pnl(&self) -> f64 {
         self.realized_pnl + self.unrealized_pnl
     }
+    
+    /// Get total commission from all fills
+    pub fn total_commission(&self) -> f64 {
+        self.fills.iter().map(|f| f.commission).sum()
+    }
+    
+    /// Get total quantity traded (sum of all fills)
+    pub fn total_quantity_traded(&self) -> f64 {
+        self.fills.iter().map(|f| f.quantity).sum()
+    }
+    
+    /// Get entry time (first fill timestamp)
+    pub fn entry_time(&self) -> chrono::DateTime<chrono::Utc> {
+        self.first_entry_time
+    }
 }
 
 #[cfg(test)]

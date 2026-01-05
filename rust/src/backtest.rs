@@ -373,7 +373,8 @@ impl Backtester {
                         let regime_score = self.strategy.get_regime_score(current_slice);
 
                         // Get all current positions for portfolio heat calculation
-                        let all_positions = position_manager.get_all_positions();
+                        let all_positions: Vec<&crate::oms::types::Position> = 
+                            position_manager.get_all_positions().map(|(_, p)| p).collect();
 
                         let quantity = self.risk_manager.calculate_position_size_with_regime(
                             price,
