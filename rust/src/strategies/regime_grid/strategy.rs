@@ -107,10 +107,6 @@ impl RegimeGridStrategy {
         // Check for high volatility single candle
         let candle_change = ((current_candle.close - current_candle.open) / current_candle.open).abs();
         if candle_change > self.config.high_volatility_candle_pct {
-            tracing::debug!(
-                candle_change = format!("{:.2}%", candle_change * 100.0),
-                "High volatility candle detected"
-            );
             return Some(MarketRegime::HighVolatility);
         }
 
@@ -124,11 +120,6 @@ impl RegimeGridStrategy {
         if adx < self.config.adx_sideways_threshold {
             let distance_from_ema = (current_price - ema_short).abs() / ema_short;
             if distance_from_ema <= self.config.ema_band_pct {
-                tracing::debug!(
-                    adx = adx,
-                    distance_from_ema = format!("{:.2}%", distance_from_ema * 100.0),
-                    "Sideways regime detected (IDEAL)"
-                );
                 return Some(MarketRegime::Sideways);
             }
         }
@@ -136,12 +127,6 @@ impl RegimeGridStrategy {
         // Regime 3: Bear Market (NO TRADING)
         // Price < long EMA AND RSI < bear threshold
         if current_price < ema_long && rsi < self.config.rsi_bear_threshold {
-            tracing::debug!(
-                price = current_price,
-                ema_long = ema_long,
-                rsi = rsi,
-                "Bear market regime detected (NO TRADING)"
-            );
             return Some(MarketRegime::Bearish);
         }
 
@@ -151,34 +136,18 @@ impl RegimeGridStrategy {
             && rsi >= self.config.rsi_bull_min
             && rsi <= self.config.rsi_bull_max
         {
-            tracing::debug!(
-                price = current_price,
-                ema_long = ema_long,
-                rsi = rsi,
-                "Bull market regime detected (MODIFIED GRID)"
-            );
             return Some(MarketRegime::Bullish);
         }
 
         // Default to high volatility if no clear regime
-        tracing::debug!(
-            adx = adx,
-            rsi = rsi,
-            "No clear regime - defaulting to high volatility"
-        );
         Some(MarketRegime::HighVolatility)
     }
 
     /// Generate signal for sideways regime (full grid)
-    fn sideways_grid_signal(&self, candles: &[Candle], position: Option<&Position>) -> Signal {
-        if candles.is_empty() {
-            return Signal::Flat;
-        }
-
+    fn sideways_grid_signal(&self, _candles: &[Candle], position: Option<&Position>) -> Signal {
         // In sideways market, we want to buy on dips
         // For simplicity in backtest mode, generate Long signal when no position
         if position.is_none() {
-            tracing::info!("Sideways regime: Generating Long signal (full grid)");
             Signal::Long
         } else {
             // Hold existing position
@@ -187,15 +156,10 @@ impl RegimeGridStrategy {
     }
 
     /// Generate signal for bull regime (modified grid)
-    fn bull_grid_signal(&self, candles: &[Candle], position: Option<&Position>) -> Signal {
-        if candles.is_empty() {
-            return Signal::Flat;
-        }
-
+    fn bull_grid_signal(&self, _candles: &[Candle], position: Option<&Position>) -> Signal {
         // In bull market, be more selective - only buy on smaller dips
         // For simplicity in backtest mode, generate Long signal when no position
         if position.is_none() {
-            tracing::info!("Bull regime: Generating Long signal (modified grid)");
             Signal::Long
         } else {
             // Hold existing position
@@ -211,7 +175,7 @@ impl Strategy for RegimeGridStrategy {
 
     fn generate_signal(
         &self,
-        symbol: &Symbol,
+        _symbol: &Symbol,
         candles: &[Candle],
         position: Option<&Position>,
     ) -> Signal {
@@ -222,19 +186,12 @@ impl Strategy for RegimeGridStrategy {
             .max(self.config.adx_period)
             .max(self.config.rsi_period);
         
-        if candles.len() < min_period * 2 {
-            tracing::trace!(
-                symbol = %symbol,
-                candles_len = candles.len(),
-                min_required = min_period * 2,
-                "Insufficient data for indicators"
-            );
+        if candles.len() < min_period {
             return Signal::Flat;
         }
 
         // 1. Check volatility kill switch
         if self.is_volatility_paused() {
-            tracing::debug!("Volatility kill switch is active - no trading");
             return Signal::Flat;
         }
 
@@ -244,18 +201,12 @@ impl Strategy for RegimeGridStrategy {
         // 3. Classify market regime
         let regime = match self.classify_regime(candles, &ind) {
             Some(r) => r,
-            None => {
-                tracing::trace!(symbol = %symbol, "Failed to classify regime");
-                return Signal::Flat;
-            }
+            None => return Signal::Flat,
         };
 
         // 4. Apply regime-specific logic
         match regime {
-            MarketRegime::Bearish | MarketRegime::HighVolatility => {
-                tracing::debug!(symbol = %symbol, regime = ?regime, "No trading in this regime");
-                Signal::Flat
-            }
+            MarketRegime::Bearish | MarketRegime::HighVolatility => Signal::Flat,
             MarketRegime::Sideways => self.sideways_grid_signal(candles, position),
             MarketRegime::Bullish => self.bull_grid_signal(candles, position),
         }
