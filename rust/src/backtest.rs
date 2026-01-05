@@ -416,17 +416,17 @@ impl Backtester {
                 let exit_price = last_candle.close;
 
                 let trade = self.create_trade_from_position(&pos, exit_price, last_candle.datetime);
-                
+
                 // Record win/loss for risk manager
                 if trade.net_pnl > 0.0 {
                     self.risk_manager.record_win();
                 } else {
                     self.risk_manager.record_loss();
                 }
-                
+
                 // Notify strategy
                 self.strategy.on_trade_closed(&trade);
-                
+
                 trades.push(trade);
             }
         }

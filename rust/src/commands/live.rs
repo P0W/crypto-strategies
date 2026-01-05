@@ -22,9 +22,7 @@ use tracing::{debug, error, info, warn};
 
 use crypto_strategies::coindcx::{ClientConfig, CoinDCXClient};
 use crypto_strategies::multi_timeframe::{MultiTimeframeCandles, MultiTimeframeData};
-use crypto_strategies::oms::{
-    ExecutionEngine, Fill, OrderBook, PositionManager, StrategyContext,
-};
+use crypto_strategies::oms::{ExecutionEngine, Fill, OrderBook, PositionManager, StrategyContext};
 use crypto_strategies::risk::RiskManager;
 use crypto_strategies::state_manager::{
     create_state_manager, Checkpoint, Position as StatePosition, SqliteStateManager,
@@ -48,7 +46,7 @@ struct PerformanceMetrics {
 impl PerformanceMetrics {
     fn update_cycle_latency(&mut self, latency_us: u64) {
         self.total_cycles += 1;
-        self.avg_cycle_latency_us = 
+        self.avg_cycle_latency_us =
             (self.avg_cycle_latency_us * (self.total_cycles - 1) + latency_us) / self.total_cycles;
         if latency_us > self.max_cycle_latency_us {
             self.max_cycle_latency_us = latency_us;
@@ -77,7 +75,11 @@ impl PerformanceMetrics {
         info!("════════════════════════════════════════════════════════");
         info!("Cycles processed:      {}", self.total_cycles);
         info!("Orders placed:         {}", self.total_orders_placed);
-        info!("Orders filled:         {} ({:.2}% fill ratio)", self.total_fills, self.fill_ratio * 100.0);
+        info!(
+            "Orders filled:         {} ({:.2}% fill ratio)",
+            self.total_fills,
+            self.fill_ratio * 100.0
+        );
         info!("Orders cancelled:      {}", self.total_cancels);
         info!("Avg cycle latency:     {} μs", self.avg_cycle_latency_us);
         info!("Max cycle latency:     {} μs", self.max_cycle_latency_us);
@@ -95,22 +97,22 @@ struct LiveTrader {
     risk_manager: RiskManager,
     exchange: CoinDCXClient,
     state_manager: SqliteStateManager,
-    
+
     // OMS components
     orderbooks: HashMap<Symbol, OrderBook>,
     position_manager: PositionManager,
     execution_engine: ExecutionEngine,
-    
+
     // MTF candle cache
     candle_cache: HashMap<Symbol, MultiTimeframeData>,
     required_timeframes: Vec<String>,
     primary_timeframe: String,
-    
+
     // Trading state
     paper_mode: bool,
     cycle_count: u32,
     paper_cash: f64,
-    
+
     // Performance monitoring
     metrics: PerformanceMetrics,
     last_metrics_log: Instant,
@@ -122,7 +124,11 @@ impl LiveTrader {
         info!("⚙️  Initializing trading engine...");
 
         let strategy = strategies::create_strategy(&config)?;
-        info!("✓ Strategy loaded: {} ({} μs)", strategy.name(), start.elapsed().as_micros());
+        info!(
+            "✓ Strategy loaded: {} ({} μs)",
+            strategy.name(),
+            start.elapsed().as_micros()
+        );
 
         let primary_timeframe = config.timeframe();
         let strategy_tfs = strategy.required_timeframes();
@@ -132,7 +138,10 @@ impl LiveTrader {
             required_timeframes.push(primary_timeframe.clone());
         }
 
-        info!("✓ Timeframes: {:?} (primary: {})", required_timeframes, primary_timeframe);
+        info!(
+            "✓ Timeframes: {:?} (primary: {})",
+            required_timeframes, primary_timeframe
+        );
 
         let risk_manager = RiskManager::new(
             config.trading.initial_capital,
@@ -148,7 +157,10 @@ impl LiveTrader {
             config.trading.consecutive_loss_limit,
             config.trading.consecutive_loss_multiplier,
         );
-        info!("✓ Risk manager initialized (capital: {:.2})", config.trading.initial_capital);
+        info!(
+            "✓ Risk manager initialized (capital: {:.2})",
+            config.trading.initial_capital
+        );
 
         let api_key = config.exchange.api_key.clone().unwrap_or_default();
         let api_secret = config.exchange.api_secret.clone().unwrap_or_default();
@@ -159,7 +171,10 @@ impl LiveTrader {
             .with_timeout(Duration::from_secs(30));
 
         let exchange = CoinDCXClient::with_config(api_key, api_secret, client_config);
-        info!("✓ Exchange client connected (rate limit: {} req/s)", config.exchange.rate_limit);
+        info!(
+            "✓ Exchange client connected (rate limit: {} req/s)",
+            config.exchange.rate_limit
+        );
 
         let state_dir = std::path::Path::new(state_db_path)
             .parent()
@@ -172,13 +187,17 @@ impl LiveTrader {
             config.exchange.taker_fee,
             config.exchange.slippage,
         );
-        info!("✓ Execution engine configured (maker: {:.4}%, taker: {:.4}%, slippage: {:.4}%)",
+        info!(
+            "✓ Execution engine configured (maker: {:.4}%, taker: {:.4}%, slippage: {:.4}%)",
             config.exchange.maker_fee * 100.0,
             config.exchange.taker_fee * 100.0,
             config.exchange.slippage * 100.0
         );
 
-        info!("⚡ Initialization complete ({} μs)", start.elapsed().as_micros());
+        info!(
+            "⚡ Initialization complete ({} μs)",
+            start.elapsed().as_micros()
+        );
 
         Ok(LiveTrader {
             config,
@@ -233,20 +252,28 @@ impl LiveTrader {
 
         for sp in state_positions {
             let symbol = Symbol::new(&sp.symbol);
-            let side = if sp.side == "sell" { Side::Sell } else { Side::Buy };
-            
+            let side = if sp.side == "sell" {
+                Side::Sell
+            } else {
+                Side::Buy
+            };
+
             let fill = Fill {
                 order_id: 0,
                 price: sp.entry_price,
                 quantity: sp.quantity,
-                timestamp: sp.entry_time.and_then(|t| t.parse().ok()).unwrap_or_else(Utc::now),
+                timestamp: sp
+                    .entry_time
+                    .and_then(|t| t.parse().ok())
+                    .unwrap_or_else(Utc::now),
                 commission: 0.0,
                 is_maker: true,
             };
 
             self.position_manager.add_fill(&symbol, side, fill);
 
-            info!("  ✓ {} {} {:.6} @ {:.2} (P&L: {:.2})",
+            info!(
+                "  ✓ {} {} {:.6} @ {:.2} (P&L: {:.2})",
                 symbol,
                 if side == Side::Buy { "LONG " } else { "SHORT" },
                 sp.quantity,
@@ -255,7 +282,10 @@ impl LiveTrader {
             );
         }
 
-        info!("⚡ State recovery complete ({} μs)", start.elapsed().as_micros());
+        info!(
+            "⚡ State recovery complete ({} μs)",
+            start.elapsed().as_micros()
+        );
         Ok(())
     }
 
@@ -268,7 +298,7 @@ impl LiveTrader {
         for tf in &self.required_timeframes {
             let tf_start = Instant::now();
             let candles = self.exchange.get_candles(symbol.as_str(), tf, 500).await?;
-            
+
             if candles.is_empty() {
                 warn!("  ⚠️  No {} candles received for {}", tf, symbol);
                 continue;
@@ -277,7 +307,8 @@ impl LiveTrader {
             let first_ts = candles.first().unwrap().datetime;
             let last_ts = candles.last().unwrap().datetime;
 
-            info!("  ✓ {} candles: {} bars ({} to {}) [{} μs]",
+            info!(
+                "  ✓ {} candles: {} bars ({} to {}) [{} μs]",
                 tf,
                 candles.len(),
                 first_ts.format("%Y-%m-%d %H:%M"),
@@ -289,7 +320,11 @@ impl LiveTrader {
         }
 
         self.candle_cache.insert(symbol.clone(), mtf_data);
-        info!("⚡ Bootstrap complete for {} ({} μs)", symbol, start.elapsed().as_micros());
+        info!(
+            "⚡ Bootstrap complete for {} ({} μs)",
+            symbol,
+            start.elapsed().as_micros()
+        );
         Ok(())
     }
 
@@ -297,7 +332,14 @@ impl LiveTrader {
         info!("════════════════════════════════════════════════════════");
         info!("🚀 LIVE TRADING ENGINE STARTED");
         info!("════════════════════════════════════════════════════════");
-        info!("Mode:     {}", if self.paper_mode { "PAPER TRADING" } else { "LIVE TRADING ⚠️" });
+        info!(
+            "Mode:     {}",
+            if self.paper_mode {
+                "PAPER TRADING"
+            } else {
+                "LIVE TRADING ⚠️"
+            }
+        );
         info!("Strategy: {}", self.strategy.name());
         info!("Symbols:  {:?}", self.config.trading.pairs);
         info!("Capital:  {:.2}", self.paper_cash);
@@ -310,7 +352,10 @@ impl LiveTrader {
             self.bootstrap_candles(&symbol).await?;
             self.orderbooks.insert(symbol.clone(), OrderBook::new());
         }
-        info!("⚡ All symbols bootstrapped ({} ms)", bootstrap_start.elapsed().as_millis());
+        info!(
+            "⚡ All symbols bootstrapped ({} ms)",
+            bootstrap_start.elapsed().as_millis()
+        );
 
         // Main event loop
         let poll_secs = self.parse_tf_seconds(&self.primary_timeframe);
@@ -320,9 +365,13 @@ impl LiveTrader {
         while !shutdown.load(Ordering::Relaxed) {
             ticker.tick().await;
             let cycle_start = Instant::now();
-            
+
             self.cycle_count += 1;
-            debug!("┌─ Cycle {} started at {}", self.cycle_count, Utc::now().format("%H:%M:%S%.3f"));
+            debug!(
+                "┌─ Cycle {} started at {}",
+                self.cycle_count,
+                Utc::now().format("%H:%M:%S%.3f")
+            );
 
             if let Err(e) = self.process_cycle().await {
                 error!("│  ❌ Cycle error: {}", e);
@@ -331,10 +380,14 @@ impl LiveTrader {
             let cycle_latency_us = cycle_start.elapsed().as_micros() as u64;
             self.metrics.update_cycle_latency(cycle_latency_us);
 
-            debug!("└─ Cycle {} complete ({} μs)", self.cycle_count, cycle_latency_us);
+            debug!(
+                "└─ Cycle {} complete ({} μs)",
+                self.cycle_count, cycle_latency_us
+            );
 
             // Warn if cycle latency is high
-            if cycle_latency_us > 5_000_000 { // > 5ms
+            if cycle_latency_us > 5_000_000 {
+                // > 5ms
                 warn!("⚠️  High cycle latency: {} ms", cycle_latency_us / 1000);
             }
 
@@ -344,7 +397,10 @@ impl LiveTrader {
                 if let Err(e) = self.save_checkpoint() {
                     error!("Failed to save checkpoint: {}", e);
                 } else {
-                    debug!("💾 Checkpoint saved ({} μs)", checkpoint_start.elapsed().as_micros());
+                    debug!(
+                        "💾 Checkpoint saved ({} μs)",
+                        checkpoint_start.elapsed().as_micros()
+                    );
                 }
             }
 
@@ -368,26 +424,37 @@ impl LiveTrader {
     async fn process_cycle(&mut self) -> Result<()> {
         for pair in &self.config.trading.pairs.clone() {
             let symbol = Symbol::new(pair);
-            
+
             let update_start = Instant::now();
             if let Err(e) = self.update_candles(&symbol).await {
                 warn!("│  ⚠️  Candle update failed for {}: {}", symbol, e);
                 continue;
             }
-            debug!("│  ✓ Candles updated for {} ({} μs)", symbol, update_start.elapsed().as_micros());
+            debug!(
+                "│  ✓ Candles updated for {} ({} μs)",
+                symbol,
+                update_start.elapsed().as_micros()
+            );
 
             let process_start = Instant::now();
             if let Err(e) = self.process_symbol(&symbol).await {
                 error!("│  ❌ Symbol processing failed for {}: {}", symbol, e);
             } else {
-                debug!("│  ✓ Processed {} ({} μs)", symbol, process_start.elapsed().as_micros());
+                debug!(
+                    "│  ✓ Processed {} ({} μs)",
+                    symbol,
+                    process_start.elapsed().as_micros()
+                );
             }
         }
         Ok(())
     }
 
     async fn update_candles(&mut self, symbol: &Symbol) -> Result<()> {
-        let mtf_data = self.candle_cache.get_mut(symbol).context("MTF data missing")?;
+        let mtf_data = self
+            .candle_cache
+            .get_mut(symbol)
+            .context("MTF data missing")?;
 
         for tf in &self.required_timeframes.clone() {
             if let Ok(candles) = self.exchange.get_candles(symbol.as_str(), tf, 2).await {
@@ -401,8 +468,10 @@ impl LiveTrader {
 
     async fn process_symbol(&mut self, symbol: &Symbol) -> Result<()> {
         let mtf_data = self.candle_cache.get(symbol).context("MTF missing")?;
-        let candles = mtf_data.get_timeframe(&self.primary_timeframe).context("Primary TF missing")?;
-        
+        let candles = mtf_data
+            .get_timeframe(&self.primary_timeframe)
+            .context("Primary TF missing")?;
+
         if candles.is_empty() {
             return Ok(());
         }
@@ -414,36 +483,65 @@ impl LiveTrader {
         let fill_check_start = Instant::now();
         let orders: Vec<_> = orderbook.get_all_orders().into_iter().cloned().collect();
         let initial_order_count = orders.len();
-        
+
         for order in orders {
-            if let Some((price, is_maker)) = self.execution_engine.check_fill(&order, current_candle) {
+            if let Some((price, is_maker)) =
+                self.execution_engine.check_fill(&order, current_candle)
+            {
                 let fill_latency = fill_check_start.elapsed().as_micros();
-                let fill = self.execution_engine.execute_fill(&order, price, is_maker, current_candle.datetime);
-                
-                self.position_manager.add_fill(&order.symbol, order.side, fill.clone());
+                let fill = self.execution_engine.execute_fill(
+                    &order,
+                    price,
+                    is_maker,
+                    current_candle.datetime,
+                );
+
+                self.position_manager
+                    .add_fill(&order.symbol, order.side, fill.clone());
                 self.metrics.record_fill();
-                
+
                 if let Some(pos) = self.position_manager.get_position(&order.symbol) {
                     self.strategy.on_order_filled(&fill, pos);
                 }
-                
+
                 orderbook.mark_filled(order.id);
 
-                info!("│  💰 FILL #{} [{}μs latency]", self.metrics.total_fills, fill_latency);
+                info!(
+                    "│  💰 FILL #{} [{}μs latency]",
+                    self.metrics.total_fills, fill_latency
+                );
                 info!("│    └─ Symbol:    {}", order.symbol);
-                info!("│    └─ Side:      {}", if order.side == Side::Buy { "BUY " } else { "SELL" });
+                info!(
+                    "│    └─ Side:      {}",
+                    if order.side == Side::Buy {
+                        "BUY "
+                    } else {
+                        "SELL"
+                    }
+                );
                 info!("│    └─ Quantity:  {:.6}", fill.quantity);
                 info!("│    └─ Price:     {:.2}", fill.price);
-                info!("│    └─ Type:      {}", if is_maker { "MAKER" } else { "TAKER" });
+                info!(
+                    "│    └─ Type:      {}",
+                    if is_maker { "MAKER" } else { "TAKER" }
+                );
                 info!("│    └─ Commission: {:.4}", fill.commission);
-                info!("│    └─ Timestamp:  {}", fill.timestamp.format("%H:%M:%S%.3f"));
+                info!(
+                    "│    └─ Timestamp:  {}",
+                    fill.timestamp.format("%H:%M:%S%.3f")
+                );
             }
         }
 
-        let fills_detected = self.metrics.total_fills - (self.metrics.total_fills - orders.len() as u64);
+        let fills_detected =
+            self.metrics.total_fills - (self.metrics.total_fills - orders.len() as u64);
         if fills_detected > 0 {
-            debug!("│  ✓ Fill detection: {} orders checked, {} filled ({} μs)",
-                initial_order_count, fills_detected, fill_check_start.elapsed().as_micros());
+            debug!(
+                "│  ✓ Fill detection: {} orders checked, {} filled ({} μs)",
+                initial_order_count,
+                fills_detected,
+                fill_check_start.elapsed().as_micros()
+            );
         }
 
         // Step 2: Check closed positions
@@ -463,7 +561,7 @@ impl LiveTrader {
                 };
 
                 self.strategy.on_trade_closed(&trade);
-                
+
                 if trade.net_pnl > 0.0 {
                     self.risk_manager.record_win();
                 } else {
@@ -473,15 +571,27 @@ impl LiveTrader {
                 let return_pct = trade.return_pct();
                 info!("│  ✅ TRADE CLOSED");
                 info!("│    └─ Symbol:      {}", symbol);
-                info!("│    └─ Side:        {}", if trade.side == Side::Buy { "LONG " } else { "SHORT" });
+                info!(
+                    "│    └─ Side:        {}",
+                    if trade.side == Side::Buy {
+                        "LONG "
+                    } else {
+                        "SHORT"
+                    }
+                );
                 info!("│    └─ Entry:       {:.2}", trade.entry_price);
                 info!("│    └─ Exit:        {:.2}", trade.exit_price);
                 info!("│    └─ Quantity:    {:.6}", trade.quantity);
                 info!("│    └─ Gross P&L:   {:.2}", trade.pnl);
                 info!("│    └─ Commission:  {:.2}", trade.commission);
-                info!("│    └─ Net P&L:     {:.2} ({:+.2}%)", trade.net_pnl, return_pct);
-                info!("│    └─ Duration:    {}", 
-                    (trade.exit_time - trade.entry_time).num_seconds() / 3600);
+                info!(
+                    "│    └─ Net P&L:     {:.2} ({:+.2}%)",
+                    trade.net_pnl, return_pct
+                );
+                info!(
+                    "│    └─ Duration:    {}",
+                    (trade.exit_time - trade.entry_time).num_seconds() / 3600
+                );
             }
         }
 
@@ -502,7 +612,11 @@ impl LiveTrader {
         let strategy_latency = strategy_start.elapsed().as_micros();
 
         if !requests.is_empty() {
-            debug!("│  ⚡ Strategy generated {} order(s) ({} μs)", requests.len(), strategy_latency);
+            debug!(
+                "│  ⚡ Strategy generated {} order(s) ({} μs)",
+                requests.len(),
+                strategy_latency
+            );
         }
 
         // Step 4: Validate and place orders
@@ -515,22 +629,35 @@ impl LiveTrader {
 
             let pos_count = self.position_manager.open_position_count();
             if !self.risk_manager.can_open_position_count(pos_count) {
-                warn!("│  ⛔ Max positions reached ({}) - skipping order", pos_count);
+                warn!(
+                    "│  ⛔ Max positions reached ({}) - skipping order",
+                    pos_count
+                );
                 continue;
             }
 
             let order_start = Instant::now();
             let order = req.to_order();
-            
+
             if self.paper_mode {
                 orderbook.add_order(order.clone());
                 self.metrics.record_order();
                 placed_count += 1;
 
                 let order_latency = order_start.elapsed().as_micros();
-                info!("│  📋 ORDER PLACED #{} [{}μs latency]", self.metrics.total_orders_placed, order_latency);
+                info!(
+                    "│  📋 ORDER PLACED #{} [{}μs latency]",
+                    self.metrics.total_orders_placed, order_latency
+                );
                 info!("│    └─ Symbol:   {}", order.symbol);
-                info!("│    └─ Side:     {}", if order.side == Side::Buy { "BUY " } else { "SELL" });
+                info!(
+                    "│    └─ Side:     {}",
+                    if order.side == Side::Buy {
+                        "BUY "
+                    } else {
+                        "SELL"
+                    }
+                );
                 info!("│    └─ Type:     {:?}", order.order_type);
                 info!("│    └─ Quantity: {:.6}", order.quantity);
                 if let Some(price) = order.limit_price {
@@ -569,13 +696,28 @@ impl LiveTrader {
         info!("Portfolio Value:       {:.2}", portfolio_value);
         info!("Drawdown:              {:.2}%", drawdown * 100.0);
         info!("Consecutive Losses:    {}", consecutive_losses);
-        info!("Open Positions:        {}", self.position_manager.open_position_count());
-        info!("Trading Status:        {}", if self.risk_manager.should_halt_trading() { "HALTED ⛔" } else { "ACTIVE ✓" });
-        
+        info!(
+            "Open Positions:        {}",
+            self.position_manager.open_position_count()
+        );
+        info!(
+            "Trading Status:        {}",
+            if self.risk_manager.should_halt_trading() {
+                "HALTED ⛔"
+            } else {
+                "ACTIVE ✓"
+            }
+        );
+
         for (symbol, pos) in self.position_manager.get_all_positions() {
-            info!("  ├─ {} {} {:.6} @ {:.2} (U-PnL: {:.2})",
+            info!(
+                "  ├─ {} {} {:.6} @ {:.2} (U-PnL: {:.2})",
                 symbol,
-                if pos.side == Side::Buy { "LONG " } else { "SHORT" },
+                if pos.side == Side::Buy {
+                    "LONG "
+                } else {
+                    "SHORT"
+                },
                 pos.quantity,
                 pos.average_entry_price(),
                 pos.unrealized_pnl
@@ -586,7 +728,7 @@ impl LiveTrader {
 
     fn save_checkpoint(&mut self) -> Result<()> {
         let value = self.calculate_portfolio_value();
-        
+
         let checkpoint = Checkpoint {
             cycle_count: self.cycle_count as i64,
             portfolio_value: value,
@@ -621,7 +763,9 @@ impl LiveTrader {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();
-        serde_json::to_string(&self.config).unwrap_or_default().hash(&mut hasher);
+        serde_json::to_string(&self.config)
+            .unwrap_or_default()
+            .hash(&mut hasher);
         format!("{:x}", hasher.finish())
     }
 
