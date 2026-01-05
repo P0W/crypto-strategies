@@ -178,7 +178,7 @@ impl RegimeGridStrategy {
         // In sideways market, we want to buy on dips
         // For simplicity in backtest mode, generate Long signal when no position
         if position.is_none() {
-            tracing::debug!("Sideways regime: Generating Long signal (full grid)");
+            tracing::info!("Sideways regime: Generating Long signal (full grid)");
             Signal::Long
         } else {
             // Hold existing position
@@ -195,7 +195,7 @@ impl RegimeGridStrategy {
         // In bull market, be more selective - only buy on smaller dips
         // For simplicity in backtest mode, generate Long signal when no position
         if position.is_none() {
-            tracing::debug!("Bull regime: Generating Long signal (modified grid)");
+            tracing::info!("Bull regime: Generating Long signal (modified grid)");
             Signal::Long
         } else {
             // Hold existing position
@@ -211,7 +211,7 @@ impl Strategy for RegimeGridStrategy {
 
     fn generate_signal(
         &self,
-        _symbol: &Symbol,
+        symbol: &Symbol,
         candles: &[Candle],
         position: Option<&Position>,
     ) -> Signal {
@@ -223,6 +223,12 @@ impl Strategy for RegimeGridStrategy {
             .max(self.config.rsi_period);
         
         if candles.len() < min_period * 2 {
+            tracing::trace!(
+                symbol = %symbol,
+                candles_len = candles.len(),
+                min_required = min_period * 2,
+                "Insufficient data for indicators"
+            );
             return Signal::Flat;
         }
 
@@ -238,13 +244,16 @@ impl Strategy for RegimeGridStrategy {
         // 3. Classify market regime
         let regime = match self.classify_regime(candles, &ind) {
             Some(r) => r,
-            None => return Signal::Flat,
+            None => {
+                tracing::trace!(symbol = %symbol, "Failed to classify regime");
+                return Signal::Flat;
+            }
         };
 
         // 4. Apply regime-specific logic
         match regime {
             MarketRegime::Bearish | MarketRegime::HighVolatility => {
-                tracing::debug!(regime = ?regime, "No trading in this regime");
+                tracing::debug!(symbol = %symbol, regime = ?regime, "No trading in this regime");
                 Signal::Flat
             }
             MarketRegime::Sideways => self.sideways_grid_signal(candles, position),
