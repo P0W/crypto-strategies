@@ -15,6 +15,7 @@
 pub mod momentum_scalper;
 pub mod quick_flip;
 pub mod range_breakout;
+pub mod regime_grid;
 pub mod volatility_regime;
 
 use crate::{Candle, Config, Order, Position, Signal, Symbol, Trade};
@@ -149,6 +150,7 @@ fn get_registry() -> &'static RwLock<HashMap<&'static str, StrategyFactory>> {
         );
         map.insert("range_breakout", range_breakout::create as StrategyFactory);
         map.insert("quick_flip", quick_flip::create as StrategyFactory);
+        map.insert("regime_grid", regime_grid::create as StrategyFactory);
         RwLock::new(map)
     })
 }
