@@ -10,7 +10,7 @@ pub struct StrategyContext<'a> {
     pub symbol: &'a Symbol,
     pub candles: &'a [Candle],
     /// Multi-timeframe candles (if strategy requires multiple timeframes)
-    pub mtf_candles: Option<&'a MultiTimeframeCandles>,
+    pub mtf_candles: Option<&'a MultiTimeframeCandles<'a>>,
     pub current_position: Option<&'a Position>,
     pub open_orders: &'a [Order],
     pub cash_available: f64,
@@ -41,7 +41,7 @@ impl<'a> StrategyContext<'a> {
     /// Create a multi-timeframe context
     pub fn multi_timeframe(
         symbol: &'a Symbol,
-        mtf_candles: &'a MultiTimeframeCandles,
+        mtf_candles: &'a MultiTimeframeCandles<'a>,
         current_position: Option<&'a Position>,
         open_orders: &'a [Order],
         cash_available: f64,
@@ -59,7 +59,7 @@ impl<'a> StrategyContext<'a> {
     }
 
     /// Get candles for a specific timeframe (multi-timeframe mode)
-    pub fn get_timeframe(&self, tf: &str) -> Option<&[Candle]> {
+    pub fn get_timeframe(&self, tf: &str) -> Option<&'a [Candle]> {
         self.mtf_candles.and_then(|mtf| mtf.get(tf))
     }
 

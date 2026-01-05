@@ -145,10 +145,10 @@ impl MomentumScalperStrategy {
         }
 
         if let Some(alignment) = self.get_ema_alignment(ind) {
-            if is_long && alignment == Signal::Short {
+            if is_long && alignment == Side::Sell {
                 return true;
             }
-            if !is_long && alignment == Signal::Long {
+            if !is_long && alignment == Side::Buy {
                 return true;
             }
         }
@@ -163,7 +163,7 @@ impl Strategy for MomentumScalperStrategy {
 
     fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest> {
         let mut orders = Vec::new();
-        
+
         let min_bars = self
             .config
             .ema_slow
@@ -225,9 +225,7 @@ impl Strategy for MomentumScalperStrategy {
             let momentum = self.get_momentum_state(&ind);
             if !matches!(
                 momentum,
-                MomentumState::StrongBullish
-                    | MomentumState::WeakBullish
-                    | MomentumState::Neutral
+                MomentumState::StrongBullish | MomentumState::WeakBullish | MomentumState::Neutral
             ) {
                 return orders;
             }

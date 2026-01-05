@@ -159,34 +159,6 @@ pub enum Side {
     Sell,
 }
 
-/// Legacy Position state (deprecated - use oms::Position instead)
-/// Kept temporarily for backward compatibility during migration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LegacyPosition {
-    pub symbol: Symbol,
-    pub side: Side,
-    pub entry_price: f64,
-    pub quantity: f64,
-    pub stop_price: f64,
-    pub target_price: f64,
-    pub trailing_stop: Option<f64>,
-    pub entry_time: DateTime<Utc>,
-    pub risk_amount: f64,
-}
-
-impl LegacyPosition {
-    pub fn current_value(&self) -> f64 {
-        self.quantity * self.entry_price
-    }
-
-    pub fn unrealized_pnl(&self, current_price: f64) -> f64 {
-        match self.side {
-            Side::Buy => (current_price - self.entry_price) * self.quantity,
-            Side::Sell => (self.entry_price - current_price) * self.quantity,
-        }
-    }
-}
-
 /// Completed trade record
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Trade {
@@ -209,49 +181,6 @@ impl Trade {
             Side::Sell => ((self.entry_price - self.exit_price) / self.entry_price) * 100.0,
         }
     }
-}
-
-/// Trading signal
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Signal {
-    Long,
-    Short,
-    Flat,
-}
-
-/// Legacy order status (deprecated - use oms::OrderState instead)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LegacyOrderStatus {
-    Submitted,
-    Accepted,
-    Partial,
-    Completed,
-    Canceled,
-    Margin,
-    Rejected,
-    Expired,
-}
-
-/// Legacy order execution details (deprecated)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LegacyOrderExecution {
-    pub price: f64,
-    pub size: f64,
-    pub value: f64,
-    pub commission: f64,
-}
-
-/// Legacy order information (deprecated - use oms::Order instead)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LegacyOrder {
-    pub symbol: Symbol,
-    pub side: Side,
-    pub status: LegacyOrderStatus,
-    pub size: f64,
-    pub price: Option<f64>, // None for market orders
-    pub executed: Option<LegacyOrderExecution>,
-    pub created_time: DateTime<Utc>,
-    pub updated_time: DateTime<Utc>,
 }
 
 /// Portfolio statistics

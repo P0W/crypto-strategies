@@ -52,24 +52,20 @@ impl PositionManager {
 
                     if first_fill.quantity <= remaining_qty {
                         // Close entire first fill
-                        let pnl = self.calculate_fill_pnl(
-                            position.side,
-                            first_fill.price,
-                            fill.price,
-                            first_fill.quantity,
-                        );
+                        let pnl = match position.side {
+                            Side::Buy => (fill.price - first_fill.price) * first_fill.quantity,
+                            Side::Sell => (first_fill.price - fill.price) * first_fill.quantity,
+                        };
                         position.realized_pnl += pnl - fill.commission;
                         remaining_qty -= first_fill.quantity;
                         position.quantity -= first_fill.quantity;
                         position.fills.remove(0);
                     } else {
                         // Partially close first fill
-                        let pnl = self.calculate_fill_pnl(
-                            position.side,
-                            first_fill.price,
-                            fill.price,
-                            remaining_qty,
-                        );
+                        let pnl = match position.side {
+                            Side::Buy => (fill.price - first_fill.price) * remaining_qty,
+                            Side::Sell => (first_fill.price - fill.price) * remaining_qty,
+                        };
                         position.realized_pnl += pnl - fill.commission;
                         first_fill.quantity -= remaining_qty;
                         position.quantity -= remaining_qty;
@@ -143,20 +139,6 @@ impl PositionManager {
     /// Clear all positions
     pub fn clear(&mut self) {
         self.positions.clear();
-    }
-
-    /// Calculate P&L for a fill
-    fn calculate_fill_pnl(
-        &self,
-        position_side: Side,
-        entry_price: f64,
-        exit_price: f64,
-        quantity: f64,
-    ) -> f64 {
-        match position_side {
-            Side::Buy => (exit_price - entry_price) * quantity,
-            Side::Sell => (entry_price - exit_price) * quantity,
-        }
     }
 }
 
