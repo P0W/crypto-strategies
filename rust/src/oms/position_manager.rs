@@ -145,10 +145,14 @@ impl PositionManager {
     pub fn open_position_count(&self) -> usize {
         self.positions.len()
     }
-    
+
     /// Get number of positions on specific symbol
     pub fn position_count_for_symbol(&self, symbol: &Symbol) -> usize {
-        if self.positions.contains_key(symbol) { 1 } else { 0 }
+        if self.positions.contains_key(symbol) {
+            1
+        } else {
+            0
+        }
     }
 }
 
