@@ -291,7 +291,11 @@ impl Strategy for MomentumScalperStrategy {
         self.cooldown_counter = self.config.cooldown_bars;
         self.bars_in_position = 0;
 
-        let return_pct = ((trade.exit_price - trade.entry_price) / trade.entry_price) * 100.0;
+        // Return% calculation must account for position side
+        let return_pct = match trade.side {
+            Side::Buy => ((trade.exit_price - trade.entry_price) / trade.entry_price) * 100.0,
+            Side::Sell => ((trade.entry_price - trade.exit_price) / trade.entry_price) * 100.0,
+        };
         tracing::info!(
             symbol = %trade.symbol,
             return_pct = format!("{:.2}%", return_pct),

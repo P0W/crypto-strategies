@@ -165,7 +165,7 @@ impl Strategy for VolatilityRegimeStrategy {
             // Require at least 1.5% profit (to cover 0.3% fees + buffer)
             let min_profit_pct = 0.015;
             let min_profit_amount = pos.quantity * pos.average_entry_price * min_profit_pct;
-            
+
             if pos.unrealized_pnl >= min_profit_amount {
                 if let Some(slow_ema) = ind.current_ema_slow {
                     if current_price < slow_ema {
