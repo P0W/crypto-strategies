@@ -137,6 +137,7 @@ pub struct Order {
 
 impl Order {
     /// Create a new order
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         symbol: Symbol,
         side: Side,

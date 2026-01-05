@@ -112,6 +112,8 @@ impl QuickFlipStrategy {
         let curr = &candles_primary[candles_primary.len() - 1];
         let prev = &candles_primary[candles_primary.len() - 2];
 
+        // STRATEGY: Quick Flip = trade BOTH reversals AND breakouts in both directions
+
         // BREAKOUT LONG: Price breaks above range high with momentum
         let breakout_long =
             curr.close > range_high && Self::is_bullish(curr) && Self::is_strong_candle(curr);
@@ -122,6 +124,16 @@ impl QuickFlipStrategy {
             return orders;
         }
 
+        // BREAKOUT SHORT: Price breaks below range low with momentum
+        let breakout_short =
+            curr.close < range_low && Self::is_bearish(curr) && Self::is_strong_candle(curr);
+        if breakout_short {
+            let mut state = self.state.lock().unwrap();
+            state.last_trade_bar = current_bar;
+            orders.push(OrderRequest::market_sell(ctx.symbol.clone(), 1.0));
+            return orders;
+        }
+
         // REVERSAL LONG: Price near/below range low, bullish candle
         let touch_threshold = range_size * 0.30;
         let near_low = curr.close <= range_low + touch_threshold || curr.low <= range_low;
@@ -129,6 +141,15 @@ impl QuickFlipStrategy {
             let mut state = self.state.lock().unwrap();
             state.last_trade_bar = current_bar;
             orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
+            return orders;
+        }
+
+        // REVERSAL SHORT: Price near/above range high, bearish candle
+        let near_high = curr.close >= range_high - touch_threshold || curr.high >= range_high;
+        if near_high && Self::is_bearish_pattern(prev, curr) {
+            let mut state = self.state.lock().unwrap();
+            state.last_trade_bar = current_bar;
+            orders.push(OrderRequest::market_sell(ctx.symbol.clone(), 1.0));
         }
 
         orders
@@ -176,7 +197,6 @@ impl QuickFlipStrategy {
     }
 
     /// Check if candle is bearish (red)
-    #[allow(dead_code)]
     #[inline]
     fn is_bearish(candle: &Candle) -> bool {
         candle.close < candle.open
@@ -201,7 +221,6 @@ impl QuickFlipStrategy {
     }
 
     /// Check for bearish setup - simplified for more trades
-    #[allow(dead_code)]
     #[inline]
     fn is_bearish_pattern(_prev: &Candle, curr: &Candle) -> bool {
         // Any bearish candle counts
@@ -273,6 +292,8 @@ impl Strategy for QuickFlipStrategy {
         let curr = &ctx.candles[ctx.candles.len() - 1];
         let prev = &ctx.candles[ctx.candles.len() - 2];
 
+        // STRATEGY: Quick Flip = trade BOTH reversals AND breakouts in both directions
+
         // BREAKOUT LONG: Price breaks above range high with momentum
         let breakout_long =
             curr.close > range_high && Self::is_bullish(curr) && Self::is_strong_candle(curr);
@@ -283,6 +304,16 @@ impl Strategy for QuickFlipStrategy {
             return orders;
         }
 
+        // BREAKOUT SHORT: Price breaks below range low with momentum
+        let breakout_short =
+            curr.close < range_low && Self::is_bearish(curr) && Self::is_strong_candle(curr);
+        if breakout_short {
+            let mut state = self.state.lock().unwrap();
+            state.last_trade_bar = current_bar;
+            orders.push(OrderRequest::market_sell(ctx.symbol.clone(), 1.0));
+            return orders;
+        }
+
         // REVERSAL LONG: Price near/below range low, bullish candle
         let touch_threshold = range_size * 0.30;
         let near_low = curr.close <= range_low + touch_threshold || curr.low <= range_low;
@@ -290,6 +321,15 @@ impl Strategy for QuickFlipStrategy {
             let mut state = self.state.lock().unwrap();
             state.last_trade_bar = current_bar;
             orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
+            return orders;
+        }
+
+        // REVERSAL SHORT: Price near/above range high, bearish candle
+        let near_high = curr.close >= range_high - touch_threshold || curr.high >= range_high;
+        if near_high && Self::is_bearish_pattern(prev, curr) {
+            let mut state = self.state.lock().unwrap();
+            state.last_trade_bar = current_bar;
+            orders.push(OrderRequest::market_sell(ctx.symbol.clone(), 1.0));
         }
 
         orders
