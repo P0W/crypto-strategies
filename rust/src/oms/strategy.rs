@@ -191,6 +191,20 @@ impl OrderRequest {
             self.client_id,
         )
     }
+
+    /// Convert to Order (non-consuming version for live trading)
+    pub fn to_order(&self) -> Order {
+        Order::new(
+            self.symbol.clone(),
+            self.side,
+            self.order_type,
+            self.quantity,
+            self.limit_price,
+            self.stop_price,
+            self.time_in_force,
+            self.client_id.clone(),
+        )
+    }
 }
 
 #[cfg(test)]

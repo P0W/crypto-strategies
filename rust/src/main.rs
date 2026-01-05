@@ -230,7 +230,8 @@ fn setup_logging(verbose: bool, command_name: &str, file_only: bool) -> Result<(
     Ok(())
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Determine command name and whether to use file-only logging
@@ -280,7 +281,14 @@ fn main() -> Result<()> {
             live,
             interval,
             state_db,
-        } => commands::live::run(config, paper, live, interval, state_db),
+        } => {
+            commands::live::run(
+                crypto_strategies::Config::from_file(&config)?,
+                state_db,
+                paper || !live,
+            )
+            .await
+        }
 
         Commands::Download {
             symbols,

@@ -140,6 +140,16 @@ impl PositionManager {
     pub fn clear(&mut self) {
         self.positions.clear();
     }
+
+    /// Get count of open positions
+    pub fn open_position_count(&self) -> usize {
+        self.positions.len()
+    }
+    
+    /// Get number of positions on specific symbol
+    pub fn position_count_for_symbol(&self, symbol: &Symbol) -> usize {
+        if self.positions.contains_key(symbol) { 1 } else { 0 }
+    }
 }
 
 impl Default for PositionManager {
