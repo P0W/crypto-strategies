@@ -161,7 +161,12 @@ impl Strategy for VolatilityRegimeStrategy {
                 return orders;
             }
 
-            if pos.unrealized_pnl >= 0.0 {
+            // Early exit with minimum profit threshold to overcome fees
+            // Require at least 1.5% profit (to cover 0.3% fees + buffer)
+            let min_profit_pct = 0.015;
+            let min_profit_amount = pos.quantity * pos.average_entry_price * min_profit_pct;
+            
+            if pos.unrealized_pnl >= min_profit_amount {
                 if let Some(slow_ema) = ind.current_ema_slow {
                     if current_price < slow_ema {
                         // Exit profitable position when price crosses below slow EMA
@@ -178,22 +183,41 @@ impl Strategy for VolatilityRegimeStrategy {
         // Entry logic - only if no position
         let regime = match self.classify_regime(ctx.candles, &ind) {
             Some(r) => r,
-            None => return orders,
+            None => {
+                tracing::trace!("No regime classified");
+                return orders;
+            }
         };
 
         if regime != VolatilityRegime::Compression && regime != VolatilityRegime::Normal {
+            tracing::trace!("Regime not Compression/Normal: {:?}", regime);
             return orders;
         }
 
         if !self.is_trend_confirmed(&ind) {
+            tracing::trace!(
+                "Trend not confirmed: ema_fast={:?} ema_slow={:?} adx={:?}",
+                ind.current_ema_fast,
+                ind.current_ema_slow,
+                ind.current_adx
+            );
             return orders;
         }
 
         if self.is_breakout(ctx.candles, &ind) {
+            tracing::debug!(
+                "{} {} ENTRY SIGNAL: price={:.2} regime={:?}",
+                ctx.candles.last().unwrap().datetime.format("%Y-%m-%d"),
+                ctx.symbol,
+                current_price,
+                regime
+            );
             // Generate market buy order
             // Quantity will be determined by risk manager in backtest engine
             // For now, use a placeholder - backtest will override this
             orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
+        } else {
+            tracing::trace!("No breakout detected");
         }
 
         orders
