@@ -1,0 +1,75 @@
+{
+  "backtest": {
+    "commission": 0.001,
+    "data_dir": "../data",
+    "end_date": "2025-12-31",
+    "results_dir": "../results",
+    "start_date": "2022-01-01"
+  },
+  "exchange": {
+    "assumed_slippage": 0.001,
+    "maker_fee": 0.001,
+    "rate_limit": 10,
+    "taker_fee": 0.001
+  },
+  "grid": {
+    "adx_sideways_threshold": [25.0, 30.0, 35.0],
+    "ema_band_pct": [0.08, 0.10, 0.12, 0.15],
+    "rsi_bull_min": [40.0, 45.0, 50.0],
+    "rsi_bull_max": [65.0, 70.0, 75.0, 80.0],
+    "rsi_bear_threshold": [25.0, 30.0, 35.0],
+    "stop_atr_multiple": [1.5, 2.0, 2.5, 3.0],
+    "trailing_activation_pct": [0.02, 0.025, 0.03, 0.035]
+  },
+  "strategy": {
+    "name": "regime_grid",
+    "timeframe": "1d",
+    "max_grids": 10,
+    "grid_spacing_pct": 0.01,
+    "sell_target_pct": 0.04,
+    "buy_distance_after_sell_pct": 0.06,
+    "cancel_threshold_pct": 0.12,
+    "adx_period": 14,
+    "adx_sideways_threshold": 30.0,
+    "ema_short_period": 50,
+    "ema_long_period": 200,
+    "ema_band_pct": 0.10,
+    "rsi_period": 14,
+    "rsi_bull_min": 45.0,
+    "rsi_bull_max": 70.0,
+    "rsi_bear_threshold": 30.0,
+    "high_volatility_candle_pct": 0.05,
+    "bull_max_grids": 5,
+    "bull_grid_spacing_pct": 0.01,
+    "bull_sell_target_pct": 0.025,
+    "bull_buy_distance_pct": 0.035,
+    "max_capital_usage_pct": 0.40,
+    "max_drawdown_pct": 0.20,
+    "volatility_kill_threshold": 0.035,
+    "volatility_pause_hours": 12,
+    "atr_period_1h": 14,
+    "stop_atr_multiple": 1.5,
+    "trailing_activation_pct": 0.02,
+    "trailing_atr_multiple": 1.0
+  },
+  "tax": {
+    "loss_offset_allowed": false,
+    "tax_rate": 0.3,
+    "tds_rate": 0.01
+  },
+  "trading": {
+    "consecutive_loss_limit": 3,
+    "consecutive_loss_multiplier": 0.75,
+    "drawdown_critical": 0.15,
+    "drawdown_critical_multiplier": 0.25,
+    "drawdown_warning": 0.1,
+    "drawdown_warning_multiplier": 0.5,
+    "initial_capital": 100000,
+    "max_drawdown": 0.2,
+    "max_portfolio_heat": 0.3,
+    "max_position_pct": 0.2,
+    "max_positions": 5,
+    "symbols": ["BTCINR", "ETHINR", "SOLINR"],
+    "risk_per_trade": 0.15
+  }
+}
