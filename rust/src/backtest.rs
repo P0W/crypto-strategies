@@ -175,10 +175,52 @@ impl Backtester {
                                     }
                                 }
 
+                                // Check if position exists BEFORE fill (to detect closes)
+                                let had_position_before = position_manager.get_position(symbol).is_some();
+                                let prev_pos = if had_position_before {
+                                    // Get raw position (even if qty=0) for trade creation
+                                    position_manager.get_position_raw(symbol).cloned()
+                                } else {
+                                    None
+                                };
+
                                 // Update position
                                 position_manager.add_fill(fill.clone(), symbol.clone(), order.side);
 
-                                // Notify strategy
+                                // Check if position closed (had position before, none after)
+                                let has_position_after = position_manager.get_position(symbol).is_some();
+                                
+                                if had_position_before && !has_position_after {
+                                    // Position just closed - create trade
+                                    if let Some(closed_pos) = prev_pos {
+                                        let trade = self.create_trade_from_position(
+                                            &closed_pos,
+                                            fill.price,
+                                            candle.datetime
+                                        );
+                                        
+                                        // Record win/loss for risk manager
+                                        if trade.net_pnl > 0.0 {
+                                            self.risk_manager.record_win();
+                                        } else {
+                                            self.risk_manager.record_loss();
+                                        }
+                                        
+                                        tracing::debug!(
+                                            "{} TRADE CLOSED {} PnL={:.2}",
+                                            candle.datetime.format("%Y-%m-%d"),
+                                            symbol,
+                                            trade.net_pnl
+                                        );
+                                        
+                                        // Notify strategy
+                                        self.strategy.on_trade_closed(&trade);
+                                        
+                                        trades.push(trade);
+                                    }
+                                }
+
+                                // Notify strategy of fill
                                 if let Some(pos) = position_manager.get_position(symbol) {
                                     self.strategy.on_order_filled(&fill, pos);
                                 }
@@ -363,12 +405,25 @@ impl Backtester {
 
                 // Process each order request
                 for order_req in order_requests {
-                    // Validate with risk manager
-                    let position_count = if position.is_some() { 1 } else { 0 };
+                    let order = order_req.into_order();
+                    let is_entry_order = position.is_none();
+                    
+                    // For entry orders: calculate quantity via risk manager
+                    // For exit/grid orders: use strategy's specified quantity
+                    let final_order = if is_entry_order {
+                        // Validate with risk manager
+                        let position_count = position_manager.open_position_count();
+                        
+                        if self.risk_manager.should_halt_trading() {
+                            tracing::debug!("Risk manager halted trading - skipping order");
+                            continue;
+                        }
+                        
+                        if !self.risk_manager.can_open_position_count(position_count) {
+                            tracing::debug!("Max positions reached ({}) - skipping order", position_count);
+                            continue;
+                        }
 
-                    if !self.risk_manager.should_halt_trading()
-                        && self.risk_manager.can_open_position_count(position_count)
-                    {
                         // Calculate position size based on risk
                         let regime_score = self.strategy.get_regime_score(current_slice);
 
@@ -384,25 +439,35 @@ impl Backtester {
                             &all_positions,
                             regime_score,
                         );
-
-                        // Create order with calculated quantity
-                        let mut order = order_req.into_order();
-                        order.quantity = quantity;
-                        order.remaining_quantity = quantity;
-
-                        // Add to orderbook
-                        if let Some(orderbook) = orderbooks.get_mut(symbol) {
-                            orderbook.add_order(order.clone());
-
-                            tracing::debug!(
-                                "{} ORDER {:?} {} @ {:.2} qty={:.4}",
-                                candle.datetime.format("%Y-%m-%d"),
-                                order.side,
-                                symbol,
-                                order.limit_price.unwrap_or(price),
-                                order.quantity
-                            );
+                        
+                        if quantity <= 0.0 {
+                            tracing::debug!("Risk manager returned zero quantity - skipping order");
+                            continue;
                         }
+
+                        // Create order with risk-calculated quantity
+                        let mut entry_order = order;
+                        entry_order.quantity = quantity;
+                        entry_order.remaining_quantity = quantity;
+                        entry_order
+                    } else {
+                        // Exit or grid order - use strategy's quantity as-is
+                        order
+                    };
+
+                    // Add to orderbook
+                    if let Some(orderbook) = orderbooks.get_mut(symbol) {
+                        orderbook.add_order(final_order.clone());
+
+                        tracing::debug!(
+                            "{} ORDER {:?} {} @ {:.2} qty={:.4} {}",
+                            candle.datetime.format("%Y-%m-%d"),
+                            final_order.side,
+                            symbol,
+                            final_order.limit_price.unwrap_or(price),
+                            final_order.quantity,
+                            if is_entry_order { "(ENTRY)" } else { "(EXIT/GRID)" }
+                        );
                     }
                 }
             }

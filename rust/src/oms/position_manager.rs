@@ -97,8 +97,13 @@ impl PositionManager {
         }
     }
 
-    /// Get position for symbol
+    /// Get position for symbol (returns None if position quantity is 0 or negative)
     pub fn get_position(&self, symbol: &Symbol) -> Option<&Position> {
+        self.positions.get(symbol).filter(|p| p.quantity > 0.0)
+    }
+    
+    /// Get raw position for symbol (even if qty=0, for trade creation)
+    pub fn get_position_raw(&self, symbol: &Symbol) -> Option<&Position> {
         self.positions.get(symbol)
     }
 
