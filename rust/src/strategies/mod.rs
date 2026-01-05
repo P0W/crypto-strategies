@@ -1,16 +1,14 @@
 //! Trading Strategies Module
 //!
-//! Production-ready strategy framework with:
-//! - Clean trait interface that all strategies must implement
-//! - Dynamic strategy registry (no hardcoded names)
-//! - Automatic strategy discovery via registration
+//! Production-ready strategy framework with OMS (Order Management System) support.
+//! Strategies generate orders via `generate_orders()` instead of signals.
 //!
-//! ## Available Strategies (All Profitable)
-//! - volatility_regime: Sharpe 0.55, 55% return, 49 trades (1d)
-//! - volatility_regime: Sharpe 0.11, 25% return, 281 trades (4h)
-//! - momentum_scalper: Sharpe 0.44, 67% return, 165 trades (1d)
-//! - quick_flip: Sharpe 0.38, 37.6% return, 10 trades (1d)
-//! - range_breakout: Sharpe 0.29, 31% return, 146 trades (1d)
+//! ## Available Strategies
+//! - volatility_regime: Volatility regime-based trading
+//! - momentum_scalper: Fast momentum scalping
+//! - quick_flip: Quick reversal trading
+//! - range_breakout: Range breakout strategy
+//! - regime_grid: Grid trading with regime detection
 
 pub mod momentum_scalper;
 pub mod quick_flip;
@@ -18,54 +16,36 @@ pub mod range_breakout;
 pub mod regime_grid;
 pub mod volatility_regime;
 
-use crate::{Candle, Config, Order, Position, Signal, Symbol, Trade};
+use crate::oms::{Fill, Order, OrderRequest, Position, StrategyContext};
+use crate::{Candle, Config};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
 // =============================================================================
-// Strategy Trait - The contract all strategies must implement
+// Strategy Trait - OMS-based interface
 // =============================================================================
 
 /// Trading strategy trait - defines the mandatory interface for all strategies.
 ///
-/// Every strategy must implement these core methods. Default implementations
-/// are provided for optional callbacks.
+/// This is the new OMS-based interface where strategies generate orders
+/// instead of signals.
 pub trait Strategy: Send + Sync {
     /// Strategy identifier (must match config's strategy_name)
     fn name(&self) -> &'static str;
 
     /// Declare required timeframes (default: empty = use primary only)
     /// Return vector of timeframes this strategy needs (e.g., vec!["1d", "15m"])
-    /// Empty vector means single-timeframe strategy (backward compatible)
+    /// Empty vector means single-timeframe strategy
     fn required_timeframes(&self) -> Vec<&'static str> {
         vec![]
     }
 
-    /// Generate trading signal for the given candle data
+    /// Generate orders based on current market context
     ///
-    /// **DEPRECATED in multi-timeframe mode** - Override `generate_signal_mtf` instead
-    /// This is called for single-timeframe strategies (when required_timeframes() is empty)
-    fn generate_signal(
-        &self,
-        symbol: &Symbol,
-        candles: &[Candle],
-        position: Option<&Position>,
-    ) -> Signal;
-
-    /// Generate trading signal using multi-timeframe data
-    ///
-    /// Override this for multi-timeframe strategies. Default implementation
-    /// calls `generate_signal()` with primary timeframe for backward compatibility.
-    fn generate_signal_mtf(
-        &self,
-        symbol: &Symbol,
-        mtf_candles: &crate::MultiTimeframeCandles,
-        position: Option<&Position>,
-    ) -> Signal {
-        // Backward compatibility: call single-TF generate_signal with primary timeframe
-        self.generate_signal(symbol, mtf_candles.primary(), position)
-    }
+    /// This is the primary interface for OMS-based strategies.
+    /// Returns a vector of order requests to be validated and executed.
+    fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest>;
 
     /// Calculate stop loss price for entry
     fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64;
@@ -86,37 +66,14 @@ pub trait Strategy: Send + Sync {
         1.0
     }
 
-    /// Notification when an order state changes
-    fn notify_order(&mut self, order: &Order) {
-        match order.status {
-            crate::OrderStatus::Completed => {
-                if let Some(ref exec) = order.executed {
-                    tracing::debug!(
-                        symbol = %order.symbol,
-                        side = ?order.side,
-                        price = exec.price,
-                        size = exec.size,
-                        "Order executed"
-                    );
-                }
-            }
-            crate::OrderStatus::Canceled
-            | crate::OrderStatus::Margin
-            | crate::OrderStatus::Rejected => {
-                tracing::warn!(symbol = %order.symbol, status = ?order.status, "Order failed");
-            }
-            _ => {}
-        }
+    /// Notification when an order is filled
+    fn on_order_filled(&mut self, _fill: &Fill, _position: &Position) {
+        // Default: no-op
     }
 
-    /// Notification when a trade is closed
-    fn notify_trade(&mut self, trade: &Trade) {
-        tracing::debug!(
-            symbol = %trade.symbol,
-            pnl = trade.net_pnl,
-            return_pct = format!("{:.2}%", trade.return_pct()),
-            "Trade closed"
-        );
+    /// Notification when an order is cancelled
+    fn on_order_cancelled(&mut self, _order: &Order) {
+        // Default: no-op
     }
 
     /// Initialize strategy (called once before trading starts)

@@ -159,9 +159,10 @@ pub enum Side {
     Sell,
 }
 
-/// Position state
+/// Legacy Position state (deprecated - use oms::Position instead)
+/// Kept temporarily for backward compatibility during migration
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Position {
+pub struct LegacyPosition {
     pub symbol: Symbol,
     pub side: Side,
     pub entry_price: f64,
@@ -173,7 +174,7 @@ pub struct Position {
     pub risk_amount: f64,
 }
 
-impl Position {
+impl LegacyPosition {
     pub fn current_value(&self) -> f64 {
         self.quantity * self.entry_price
     }
@@ -218,9 +219,9 @@ pub enum Signal {
     Flat,
 }
 
-/// Order status
+/// Legacy order status (deprecated - use oms::OrderState instead)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum OrderStatus {
+pub enum LegacyOrderStatus {
     Submitted,
     Accepted,
     Partial,
@@ -231,24 +232,24 @@ pub enum OrderStatus {
     Expired,
 }
 
-/// Order execution details
+/// Legacy order execution details (deprecated)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrderExecution {
+pub struct LegacyOrderExecution {
     pub price: f64,
     pub size: f64,
     pub value: f64,
     pub commission: f64,
 }
 
-/// Order information
+/// Legacy order information (deprecated - use oms::Order instead)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Order {
+pub struct LegacyOrder {
     pub symbol: Symbol,
     pub side: Side,
-    pub status: OrderStatus,
+    pub status: LegacyOrderStatus,
     pub size: f64,
     pub price: Option<f64>, // None for market orders
-    pub executed: Option<OrderExecution>,
+    pub executed: Option<LegacyOrderExecution>,
     pub created_time: DateTime<Utc>,
     pub updated_time: DateTime<Utc>,
 }
