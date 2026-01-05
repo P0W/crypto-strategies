@@ -47,6 +47,7 @@ indicatif = { version = "0.17", features = ["rayon"] }
 
 # Utilities
 itertools = "0.13"
+ordered-float = "4.2"
 
 # Database for state management
 rusqlite = { version = "0.32", features = ["bundled"] }

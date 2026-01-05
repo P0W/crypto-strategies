@@ -63,6 +63,7 @@ pub mod grid;
 pub mod indicators;
 pub mod monthly_pnl;
 pub mod multi_timeframe;
+pub mod oms;
 pub mod optimizer;
 pub mod risk;
 pub mod state_manager;
@@ -74,6 +75,10 @@ pub use config::Config;
 pub use monthly_pnl::MonthlyPnLMatrix;
 pub use multi_timeframe::{
     MultiSymbolMultiTimeframeData, MultiTimeframeCandles, MultiTimeframeData,
+};
+pub use oms::{
+    ExecutionEngine, Fill, Order, OrderBook, OrderId, OrderRequest, OrderState, OrderType,
+    Position, PositionManager, StrategyContext, TimeInForce,
 };
 pub use strategies::Strategy;
 pub use types::*;
