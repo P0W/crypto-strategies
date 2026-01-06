@@ -344,6 +344,21 @@ impl Backtester {
                                 }
                             }
                         };
+                        
+                        tracing::info!(
+                            "{} {} TRIGGERED: {} {:?} pos, entry={:.4}, trigger={:.4}, exec_before_slip={:.4}, OHLC=[{:.4},{:.4},{:.4},{:.4}]",
+                            candle.datetime.format("%Y-%m-%d"),
+                            symbol,
+                            reason,
+                            pos.side,
+                            pos.average_entry_price,
+                            trigger_price,
+                            exec_price,
+                            candle.open,
+                            candle.high,
+                            candle.low,
+                            candle.close
+                        );
 
                         // Create synthetic order for execution
                         let mut close_order = Order::new(
