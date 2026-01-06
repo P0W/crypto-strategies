@@ -33,7 +33,7 @@ pub type DualLineOutput = (Vec<Option<f64>>, Vec<Option<f64>>);
 // =============================================================================
 
 /// Create a DataItem from OHLCV data for use with ta indicators
-fn make_data_item(open: f64, high: f64, low: f64, close: f64, volume: f64) -> DataItem {
+pub fn make_data_item(open: f64, high: f64, low: f64, close: f64, volume: f64) -> DataItem {
     DataItem::builder()
         .open(open)
         .high(high)
@@ -836,6 +836,138 @@ impl IndicatorCache {
 impl Default for IndicatorCache {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// =============================================================================
+// Incremental Indicators
+// =============================================================================
+
+/// Incremental ADX Calculator
+/// Uses Wilder's Smoothing for all components
+#[derive(Debug, Clone)]
+pub struct IncrementalAdx {
+    period: usize,
+    prev_high: f64,
+    prev_low: f64,
+    prev_close: f64,
+    
+    // Smoothed values (Wilder's)
+    smooth_tr: f64,
+    smooth_pos_dm: f64,
+    smooth_neg_dm: f64,
+    smooth_dx: f64, // This is ADX
+    
+    count: usize,
+}
+
+impl IncrementalAdx {
+    pub fn new(period: usize) -> Self {
+        Self {
+            period,
+            prev_high: 0.0,
+            prev_low: 0.0,
+            prev_close: 0.0,
+            smooth_tr: 0.0,
+            smooth_pos_dm: 0.0,
+            smooth_neg_dm: 0.0,
+            smooth_dx: 0.0,
+            count: 0,
+        }
+    }
+
+    pub fn next(&mut self, high: f64, low: f64, close: f64) -> f64 {
+        if self.count == 0 {
+            self.prev_high = high;
+            self.prev_low = low;
+            self.prev_close = close;
+            self.count += 1;
+            return 0.0;
+        }
+
+        // 1. Calculate TR
+        let hl = high - low;
+        let hc = (high - self.prev_close).abs();
+        let lc = (low - self.prev_close).abs();
+        let tr = hl.max(hc).max(lc);
+
+        // 2. Calculate Directional Movement
+        let up = high - self.prev_high;
+        let down = self.prev_low - low;
+        
+        let pos_dm = if up > down && up > 0.0 { up } else { 0.0 };
+        let neg_dm = if down > up && down > 0.0 { down } else { 0.0 };
+
+        // 3. Update Smoothed Values (Wilder's)
+        
+        if self.count <= self.period {
+            // Initial SMA phase for Wilder's
+            self.smooth_tr += tr;
+            self.smooth_pos_dm += pos_dm;
+            self.smooth_neg_dm += neg_dm;
+            
+            if self.count == self.period {
+                // Finalize initial average
+                // Note: The standard definition effectively sums then divides, 
+                // but for incremental we need to transition to smoothing.
+                // However, Wilder's usually starts with SMA.
+                // Let's keep sums until period is reached, then divide?
+                // No, typically you accumulate, then at period, you have the sum.
+                // But let's just use the sum as the seed for the next step?
+                // No, the formula is: New = Prev + (Curr - Prev)/N
+                // Or New = (Prev*(N-1) + Curr)/N
+                
+                // Let's assume at count==period, we convert sum to average
+                // but wait, next step needs the previous average.
+                // So at step period, we store average.
+            }
+        } else {
+            // Wilder's Smoothing: Val[i] = (Val[i-1] * (n-1) + Curr) / n
+            self.smooth_tr = (self.smooth_tr * (self.period - 1) as f64 + tr) / self.period as f64;
+            self.smooth_pos_dm = (self.smooth_pos_dm * (self.period - 1) as f64 + pos_dm) / self.period as f64;
+            self.smooth_neg_dm = (self.smooth_neg_dm * (self.period - 1) as f64 + neg_dm) / self.period as f64;
+        }
+
+        // Handle the transition at self.count == self.period strictly
+        if self.count == self.period {
+             self.smooth_tr /= self.period as f64;
+             self.smooth_pos_dm /= self.period as f64;
+             self.smooth_neg_dm /= self.period as f64;
+        }
+
+        // 4. Calculate DI and DX
+        let mut dx = 0.0;
+        if self.smooth_tr > 0.0 {
+            let pos_di = (self.smooth_pos_dm / self.smooth_tr) * 100.0;
+            let neg_di = (self.smooth_neg_dm / self.smooth_tr) * 100.0;
+            let sum_di = pos_di + neg_di;
+            if sum_di > 0.0 {
+                dx = (pos_di - neg_di).abs() / sum_di * 100.0;
+            }
+        }
+
+        // 5. Smooth DX to get ADX
+        // ADX needs 2*period - 1 to start valid
+        if self.count <= 2 * self.period {
+             self.smooth_dx += dx;
+             if self.count == 2 * self.period {
+                 self.smooth_dx /= self.period as f64;
+             }
+        } else {
+             self.smooth_dx = (self.smooth_dx * (self.period - 1) as f64 + dx) / self.period as f64;
+        }
+
+        // Update state
+        self.prev_high = high;
+        self.prev_low = low;
+        self.prev_close = close;
+        self.count += 1;
+
+        if self.count > 2 * self.period {
+            self.smooth_dx
+        } else {
+            0.0 // Not ready
+        }
     }
 }
 

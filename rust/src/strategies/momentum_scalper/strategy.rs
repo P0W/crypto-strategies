@@ -1,150 +1,114 @@
 //! Momentum Scalper Strategy Implementation
 //!
-//! Performance optimized: Indicators are calculated once per generate_signal call.
-//!
-//! ## Entry Logic
-//! 1. EMA fast crosses above EMA slow (bullish crossover)
-//! 2. MACD histogram positive (momentum confirmation)
-//! 3. ADX above threshold (trend strength)
-//!
-//! ## Exit Logic
-//! 1. Take profit at target ATR multiple
-//! 2. Stop loss at entry - stop ATR multiple
-//! 3. Trailing stop after activation threshold
-//! 4. Exit on EMA cross back (fast below slow)
-//! 5. Max hold bars exceeded
+//! Performance optimized: Indicators are calculated incrementally in `on_bar`
+//! using the `ta` crate and custom incremental ADX, avoiding O(N²) complexity.
 
-use crate::indicators::{adx, atr, ema, macd};
+use crate::indicators::IncrementalAdx;
 use crate::oms::{Fill, OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
 use crate::{Candle, Position, Side, Trade};
+use chrono::{DateTime, Utc};
+use ta::indicators::{ExponentialMovingAverage, MovingAverageConvergenceDivergence};
+use ta::Next;
 
 use super::config::MomentumScalperConfig;
 use super::MomentumState;
 
-/// Pre-calculated indicators to avoid redundant computation
-struct Indicators {
-    current_ema_fast: Option<f64>,
-    current_ema_slow: Option<f64>,
-    current_adx: Option<f64>,
-    hist_curr: f64,
-    hist_prev: f64,
-    macd_curr: f64,
-    signal_curr: f64,
-}
-
-impl Indicators {
-    fn new(candles: &[Candle], config: &MomentumScalperConfig) -> Self {
-        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
-        let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
-        let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
-
-        // EMA calculations
-        let ema_fast = ema(&close, config.ema_fast);
-        let ema_slow_vals = ema(&close, config.ema_slow);
-
-        // ADX calculation
-        let adx_values = adx(&high, &low, &close, config.adx_period);
-
-        // MACD calculation
-        let (macd_line, signal_line, histogram) = macd(
-            &close,
-            config.macd_fast,
-            config.macd_slow,
-            config.macd_signal,
-        );
-
-        let hist_curr = histogram.last().and_then(|&x| x).unwrap_or(0.0);
-        let hist_prev = if histogram.len() >= 2 {
-            histogram[histogram.len() - 2].unwrap_or(0.0)
-        } else {
-            0.0
-        };
-
-        Self {
-            current_ema_fast: ema_fast.last().and_then(|&x| x),
-            current_ema_slow: ema_slow_vals.last().and_then(|&x| x),
-            current_adx: adx_values.last().and_then(|&x| x),
-            hist_curr,
-            hist_prev,
-            macd_curr: macd_line.last().and_then(|&x| x).unwrap_or(0.0),
-            signal_curr: signal_line.last().and_then(|&x| x).unwrap_or(0.0),
-        }
-    }
-
-    /// Calculate ATR only (for stop/target/trailing methods)
-    fn atr_only(candles: &[Candle], atr_period: usize) -> Option<f64> {
-        let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
-        let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
-        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
-        atr(&high, &low, &close, atr_period).last().and_then(|&x| x)
-    }
-}
-
 /// Momentum Scalper Strategy
 pub struct MomentumScalperStrategy {
     config: MomentumScalperConfig,
+    
+    // Stateful Indicators
+    ema_fast: ExponentialMovingAverage,
+    ema_slow: ExponentialMovingAverage,
+    macd: MovingAverageConvergenceDivergence,
+    adx: IncrementalAdx,
+    
+    // State Tracking
+    last_processed_time: Option<DateTime<Utc>>,
     bars_in_position: usize,
     cooldown_counter: usize,
+    
+    // Cached Values
+    current_ema_fast: f64,
+    current_ema_slow: f64,
+    current_adx: f64,
+    current_macd: f64,
+    current_signal: f64,
+    current_hist: f64,
+    prev_hist: f64,
 }
 
 impl MomentumScalperStrategy {
     pub fn new(config: MomentumScalperConfig) -> Self {
+        let ema_fast = ExponentialMovingAverage::new(config.ema_fast).unwrap();
+        let ema_slow = ExponentialMovingAverage::new(config.ema_slow).unwrap();
+        let macd = MovingAverageConvergenceDivergence::new(config.macd_fast, config.macd_slow, config.macd_signal).unwrap();
+        let adx = IncrementalAdx::new(config.adx_period);
+
         MomentumScalperStrategy {
             config,
+            ema_fast,
+            ema_slow,
+            macd,
+            adx,
+            last_processed_time: None,
             bars_in_position: 0,
             cooldown_counter: 0,
+            current_ema_fast: 0.0,
+            current_ema_slow: 0.0,
+            current_adx: 0.0,
+            current_macd: 0.0,
+            current_signal: 0.0,
+            current_hist: 0.0,
+            prev_hist: 0.0,
         }
     }
 
-    /// Get EMA alignment signal from pre-calculated indicators
-    fn get_ema_alignment(&self, ind: &Indicators) -> Option<Side> {
-        let fast = ind.current_ema_fast?;
-        let slow = ind.current_ema_slow?;
-
-        if fast > slow {
+    /// Get EMA alignment signal from cached values
+    fn get_ema_alignment(&self) -> Option<Side> {
+        if self.current_ema_fast == 0.0 || self.current_ema_slow == 0.0 {
+            return None;
+        }
+        
+        if self.current_ema_fast > self.current_ema_slow {
             Some(Side::Buy)
-        } else if fast < slow {
+        } else if self.current_ema_fast < self.current_ema_slow {
             Some(Side::Sell)
         } else {
             None
         }
     }
 
-    /// Get MACD momentum state from pre-calculated indicators
-    fn get_momentum_state(&self, ind: &Indicators) -> MomentumState {
+    /// Get MACD momentum state from cached values
+    fn get_momentum_state(&self) -> MomentumState {
         if !self.config.use_macd {
             return MomentumState::Neutral;
         }
 
-        if ind.hist_curr > 0.0 && ind.hist_curr > ind.hist_prev && ind.macd_curr > ind.signal_curr {
+        if self.current_hist > 0.0 && self.current_hist > self.prev_hist && self.current_macd > self.current_signal {
             MomentumState::StrongBullish
-        } else if ind.hist_curr > 0.0 {
+        } else if self.current_hist > 0.0 {
             MomentumState::WeakBullish
-        } else if ind.hist_curr < 0.0
-            && ind.hist_curr < ind.hist_prev
-            && ind.macd_curr < ind.signal_curr
+        } else if self.current_hist < 0.0
+            && self.current_hist < self.prev_hist
+            && self.current_macd < self.current_signal
         {
             MomentumState::StrongBearish
-        } else if ind.hist_curr < 0.0 {
+        } else if self.current_hist < 0.0 {
             MomentumState::WeakBearish
         } else {
             MomentumState::Neutral
         }
     }
 
-    /// Check ADX strength from pre-calculated indicators
-    fn is_adx_strong(&self, ind: &Indicators) -> bool {
-        ind.current_adx.unwrap_or(0.0) >= self.config.adx_threshold
-    }
-
     /// Check if should exit on EMA cross
-    fn should_exit_on_cross(&self, ind: &Indicators, is_long: bool) -> bool {
+    fn should_exit_on_cross(&self, is_long: bool) -> bool {
         if !self.config.exit_on_cross {
             return false;
         }
 
-        if let Some(alignment) = self.get_ema_alignment(ind) {
+        if let Some(alignment) = self.get_ema_alignment() {
             if is_long && alignment == Side::Sell {
                 return true;
             }
@@ -161,17 +125,53 @@ impl Strategy for MomentumScalperStrategy {
         "momentum_scalper"
     }
 
+    fn on_bar(&mut self, ctx: &StrategyContext) {
+        // Incremental update
+        if ctx.candles.is_empty() {
+            return;
+        }
+
+        let start_idx = if let Some(last_time) = self.last_processed_time {
+            if ctx.candles.last().unwrap().datetime > last_time {
+                ctx.candles.iter()
+                    .position(|c| c.datetime > last_time)
+                    .unwrap_or(ctx.candles.len())
+            } else {
+                return; // Already processed
+            }
+        } else {
+            0
+        };
+
+        for candle in &ctx.candles[start_idx..] {
+            // Save previous history
+            self.prev_hist = self.current_hist;
+
+            // Update indicators
+            self.current_ema_fast = self.ema_fast.next(candle.close);
+            self.current_ema_slow = self.ema_slow.next(candle.close);
+            
+            let macd_out = self.macd.next(candle.close);
+            self.current_macd = macd_out.macd;
+            self.current_signal = macd_out.signal;
+            self.current_hist = macd_out.histogram;
+
+            self.current_adx = self.adx.next(candle.high, candle.low, candle.close);
+
+            self.last_processed_time = Some(candle.datetime);
+        }
+
+        // Cooldown logic
+        if ctx.current_position.is_none() && self.cooldown_counter > 0 {
+            self.cooldown_counter -= 1;
+        }
+    }
+
     fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest> {
         let mut orders = Vec::new();
 
-        let min_bars = self
-            .config
-            .ema_slow
-            .max(self.config.ema_trend)
-            .max(self.config.macd_slow + self.config.macd_signal)
-            .max(self.config.adx_period * 2);
-
-        if ctx.candles.len() < min_bars + 5 {
+        // Check warmup
+        if self.current_ema_slow == 0.0 || self.current_ema_fast == 0.0 {
             return orders;
         }
 
@@ -179,12 +179,9 @@ impl Strategy for MomentumScalperStrategy {
             return orders;
         }
 
-        // Calculate all indicators ONCE
-        let ind = Indicators::new(ctx.candles, &self.config);
-
         // If in position, check exit conditions
         if let Some(pos) = ctx.current_position {
-            if self.should_exit_on_cross(&ind, true) {
+            if self.should_exit_on_cross(true) {
                 orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity));
                 return orders;
             }
@@ -194,7 +191,7 @@ impl Strategy for MomentumScalperStrategy {
                 return orders;
             }
 
-            let momentum = self.get_momentum_state(&ind);
+            let momentum = self.get_momentum_state();
             if matches!(
                 momentum,
                 MomentumState::WeakBearish | MomentumState::StrongBearish
@@ -207,8 +204,8 @@ impl Strategy for MomentumScalperStrategy {
             return orders;
         }
 
-        // Entry logic using pre-calculated indicators
-        let should_buy = match self.get_ema_alignment(&ind) {
+        // Entry logic
+        let should_buy = match self.get_ema_alignment() {
             Some(side) => side == Side::Buy,
             None => false,
         };
@@ -217,12 +214,12 @@ impl Strategy for MomentumScalperStrategy {
             return orders;
         }
 
-        if self.config.adx_threshold > 0.0 && !self.is_adx_strong(&ind) {
+        if self.config.adx_threshold > 0.0 && self.current_adx < self.config.adx_threshold {
             return orders;
         }
 
         if self.config.use_macd {
-            let momentum = self.get_momentum_state(&ind);
+            let momentum = self.get_momentum_state();
             if !matches!(
                 momentum,
                 MomentumState::StrongBullish | MomentumState::WeakBullish | MomentumState::Neutral
@@ -237,14 +234,31 @@ impl Strategy for MomentumScalperStrategy {
     }
 
     fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64 {
-        let current_atr =
-            Indicators::atr_only(candles, self.config.atr_period).unwrap_or(entry_price * 0.01);
+        // BATCH calculation (rarely called)
+        use crate::indicators::atr;
+        let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
+        let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
+        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
+        
+        let current_atr = atr(&high, &low, &close, self.config.atr_period)
+            .last()
+            .and_then(|&x| x)
+            .unwrap_or(entry_price * 0.01);
+            
         entry_price - self.config.stop_atr_multiple * current_atr
     }
 
     fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64) -> f64 {
-        let current_atr =
-            Indicators::atr_only(candles, self.config.atr_period).unwrap_or(entry_price * 0.01);
+        use crate::indicators::atr;
+        let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
+        let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
+        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
+        
+        let current_atr = atr(&high, &low, &close, self.config.atr_period)
+            .last()
+            .and_then(|&x| x)
+            .unwrap_or(entry_price * 0.01);
+            
         entry_price + self.config.target_atr_multiple * current_atr
     }
 
@@ -254,8 +268,15 @@ impl Strategy for MomentumScalperStrategy {
         current_price: f64,
         candles: &[Candle],
     ) -> Option<f64> {
-        let current_atr =
-            Indicators::atr_only(candles, self.config.atr_period).unwrap_or(current_price * 0.01);
+        use crate::indicators::atr;
+        let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
+        let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
+        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
+
+        let current_atr = atr(&high, &low, &close, self.config.atr_period)
+            .last()
+            .and_then(|&x| x)
+            .unwrap_or(current_price * 0.01);
 
         let profit_atr = if current_atr > 0.0 {
             (current_price - position.average_entry_price) / current_atr
@@ -271,9 +292,8 @@ impl Strategy for MomentumScalperStrategy {
         }
     }
 
-    fn get_regime_score(&self, candles: &[Candle]) -> f64 {
-        let ind = Indicators::new(candles, &self.config);
-        match self.get_momentum_state(&ind) {
+    fn get_regime_score(&self, _candles: &[Candle]) -> f64 {
+        match self.get_momentum_state() {
             MomentumState::StrongBullish => 1.3,
             MomentumState::WeakBullish => 1.1,
             MomentumState::Neutral => 0.8,
@@ -291,7 +311,6 @@ impl Strategy for MomentumScalperStrategy {
         self.cooldown_counter = self.config.cooldown_bars;
         self.bars_in_position = 0;
 
-        // Return% calculation must account for position side
         let return_pct = match trade.side {
             Side::Buy => ((trade.exit_price - trade.entry_price) / trade.entry_price) * 100.0,
             Side::Sell => ((trade.entry_price - trade.exit_price) / trade.entry_price) * 100.0,
@@ -302,17 +321,6 @@ impl Strategy for MomentumScalperStrategy {
             net_pnl = format!("{:.2}", trade.net_pnl),
             "Momentum Scalper trade closed"
         );
-    }
-
-    fn on_bar(&mut self, ctx: &StrategyContext) {
-        // NOTE: bars_in_position is NOT incremented here to match main branch behavior.
-        // Main branch's backtest never called anything that incremented bars_in_position,
-        // so max_hold_bars exits were effectively disabled.
-        // The counter is also shared across all symbols which would cause bugs if used.
-        // TODO: Implement per-symbol state tracking if max_hold_bars is needed.
-        if ctx.current_position.is_none() && self.cooldown_counter > 0 {
-            self.cooldown_counter -= 1;
-        }
     }
 
     fn init(&mut self) {
