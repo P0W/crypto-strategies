@@ -430,10 +430,49 @@ impl Backtester {
                     };
 
                     if stopped || target_hit {
-                        // IMMMEDIATE FILL LOGIC
                         let reason = if stopped { "Stop" } else { "Target" };
                         let trigger_price = if stopped { stop_price } else { target_price };
 
+                        // Create synthetic order for stop/target execution
+                        let mut close_order = Order::new(
+                            symbol.clone(),
+                            match pos.side {
+                                Side::Buy => Side::Sell,
+                                Side::Sell => Side::Buy,
+                            },
+                            crate::oms::types::OrderType::Market,
+                            pos.quantity,
+                            None,
+                            None,
+                            crate::oms::types::TimeInForce::GTC,
+                            Some(reason.to_string()),
+                        );
+
+                        // T+1 mode: Queue for next day execution
+                        if self.config.backtest.use_t1_execution {
+                            // Store stop/target order for next candle
+                            let order_id = close_order.id;
+                            orderbooks
+                                .entry(symbol.clone())
+                                .or_insert_with(OrderBook::new)
+                                .add_order(close_order);
+                            
+                            t1_pending.push((symbol.clone(), order_id));
+                            
+                            tracing::info!(
+                                "{} {} TRIGGERED (T+1): {} {:?} pos, entry={:.4}, trigger={:.4}, queued for next day",
+                                candle.datetime.format("%Y-%m-%d"),
+                                symbol,
+                                reason,
+                                pos.side,
+                                pos.average_entry_price,
+                                trigger_price
+                            );
+                            
+                            continue; // Don't execute now, wait for next bar
+                        }
+
+                        // Intra-candle mode: Execute immediately
                         // Determine execution price (handle gaps)
                         let exec_price = match pos.side {
                             Side::Buy => {
@@ -465,21 +504,6 @@ impl Backtester {
                             candle.high,
                             candle.low,
                             candle.close
-                        );
-
-                        // Create synthetic order for execution
-                        let mut close_order = Order::new(
-                            symbol.clone(),
-                            match pos.side {
-                                Side::Buy => Side::Sell,
-                                Side::Sell => Side::Buy,
-                            },
-                            crate::oms::types::OrderType::Market,
-                            pos.quantity,
-                            None,
-                            None,
-                            crate::oms::types::TimeInForce::GTC,
-                            Some(reason.to_string()),
                         );
 
                         // Execute immediate fill with slippage
