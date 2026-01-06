@@ -297,9 +297,10 @@ impl RiskManager {
 
         // Check portfolio heat - use position value as risk (conservative)
         // In OMS, stop prices are managed via orders, not stored in positions
+        // Use each position's actual value (quantity × average_entry_price), not the new entry price
         let current_heat: f64 = current_positions
             .iter()
-            .map(|p| p.quantity * entry_price)
+            .map(|p| p.quantity * p.average_entry_price)
             .sum();
 
         let max_allowed_heat = self.current_capital * self.max_portfolio_heat;
