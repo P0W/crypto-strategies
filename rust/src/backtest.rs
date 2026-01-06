@@ -120,9 +120,15 @@ impl Backtester {
         let mut position_manager = PositionManager::new();
         let mut orderbooks: HashMap<Symbol, OrderBook> = HashMap::new();
         let mut cash = self.config.trading.initial_capital;
-        
+
         // T+1 execution: queue of (symbol, order_id) to execute at next bar's open
         let mut t1_pending: Vec<(Symbol, u64)> = Vec::new();
+
+        // CRITICAL: Store stop/target at entry time to prevent drift
+        // Key insight: Main branch stores these in PendingOrder at entry; OMS recalculates every bar
+        // This cache fixes the stop/target at entry time like the main branch does
+        // Format: (stop_price, target_price)
+        let mut entry_levels: HashMap<Symbol, (f64, f64)> = HashMap::new();
 
         // Initialize orderbooks for each symbol
         for (symbol, _) in &aligned {
@@ -135,7 +141,7 @@ impl Backtester {
         // Main simulation loop
         for (bar_idx, current_date) in dates.iter().enumerate() {
             let start_idx = bar_idx.saturating_sub(LOOKBACK - 1);
-            
+
             // ================================================================
             // PHASE 0 (T+1 only): Execute orders queued from previous day
             // ================================================================
@@ -144,21 +150,39 @@ impl Backtester {
                     if let Some((_, mtf_data)) = aligned.iter().find(|(s, _)| s == &symbol) {
                         let primary = mtf_data.primary();
                         let candle = &primary[bar_idx];
-                        
+
                         if let Some(orderbook) = orderbooks.get_mut(&symbol) {
                             if let Some(order) = orderbook.get_order_mut(order_id) {
                                 if order.is_active() {
                                     // Execute at open price with slippage
-                                    let fill_price = candle.open * (1.0 + self.config.exchange.assumed_slippage * 
-                                        if order.side == Side::Buy { 1.0 } else { -1.0 });
-                                    
+                                    let fill_price = candle.open
+                                        * (1.0
+                                            + self.config.exchange.assumed_slippage
+                                                * if order.side == Side::Buy { 1.0 } else { -1.0 });
+
+                                    // Check if we have enough cash for buy orders (matches main branch)
+                                    if order.side == Side::Buy {
+                                        let position_value = fill_price * order.quantity;
+                                        let commission =
+                                            position_value * self.config.exchange.taker_fee;
+                                        let cash_needed = position_value + commission;
+                                        if cash < cash_needed {
+                                            tracing::debug!(
+                                                "T+1: Insufficient cash: have {:.2}, need {:.2} - skipping order",
+                                                cash,
+                                                cash_needed
+                                            );
+                                            continue;
+                                        }
+                                    }
+
                                     let fill = self.execution_engine.execute_fill(
                                         order,
                                         fill_price,
                                         false, // taker (market execution)
                                         candle.datetime,
                                     );
-                                    
+
                                     tracing::info!(
                                         "{} T+1 execution: {:?} {} @ {:.2} (queued from previous day)",
                                         candle.datetime.format("%Y-%m-%d"),
@@ -166,7 +190,7 @@ impl Backtester {
                                         symbol,
                                         fill.price
                                     );
-                                    
+
                                     // Update cash
                                     match order.side {
                                         Side::Buy => {
@@ -174,53 +198,63 @@ impl Backtester {
                                             cash -= cost;
                                         }
                                         Side::Sell => {
-                                            let proceeds = fill.price * fill.quantity - fill.commission;
+                                            let proceeds =
+                                                fill.price * fill.quantity - fill.commission;
                                             cash += proceeds;
                                         }
                                     }
-                                    
+
                                     // Check position before fill
-                                    let had_position_before = position_manager.get_position(&symbol).is_some();
+                                    let had_position_before =
+                                        position_manager.get_position(&symbol).is_some();
                                     let prev_pos = if had_position_before {
                                         position_manager.get_position_raw(&symbol).cloned()
                                     } else {
                                         None
                                     };
-                                    
+
                                     // Update position
-                                    position_manager.add_fill(fill.clone(), symbol.clone(), order.side);
-                                    
+                                    position_manager.add_fill(
+                                        fill.clone(),
+                                        symbol.clone(),
+                                        order.side,
+                                    );
+
                                     // Check if position closed
-                                    let has_position_after = position_manager.get_position(&symbol).is_some();
-                                    
+                                    let has_position_after =
+                                        position_manager.get_position(&symbol).is_some();
+
                                     if had_position_before && !has_position_after {
                                         if let Some(prev) = prev_pos {
                                             // CRITICAL: Clear closed position from manager to prevent P&L accumulation
                                             position_manager.close_position(&symbol);
-                                            
+
                                             // Use proper trade creation method
                                             let trade = self.create_trade_from_position(
                                                 &prev,
                                                 fill.price,
                                                 candle.datetime,
                                             );
-                                            
+
                                             if trade.net_pnl > 0.0 {
                                                 self.risk_manager.record_win();
                                             } else {
                                                 self.risk_manager.record_loss();
                                             }
-                                            
+
+                                            // Clear cached entry levels for closed position
+                                            entry_levels.remove(&symbol);
+
                                             trades.push(trade.clone());
                                             self.strategy.on_trade_closed(&trade);
                                         }
                                     }
-                                    
+
                                     // Notify strategy
                                     if let Some(pos) = position_manager.get_position(&symbol) {
                                         self.strategy.on_order_filled(&fill, pos);
                                     }
-                                    
+
                                     // Mark order as filled in orderbook
                                     orderbook.mark_filled(order_id);
                                 }
@@ -252,10 +286,12 @@ impl Backtester {
                             {
                                 // T+1 mode: Only queue stop/target orders for next day
                                 // Entry market orders should execute same day
-                                let is_stop_or_target = order.client_id.as_ref()
+                                let is_stop_or_target = order
+                                    .client_id
+                                    .as_ref()
                                     .map(|n| n.contains("Stop") || n.contains("Target"))
                                     .unwrap_or(false);
-                                
+
                                 if self.config.backtest.use_t1_execution && is_stop_or_target {
                                     tracing::debug!(
                                         "{} T+1 trigger: {:?} {} @ {:.2} ({}) - queuing for next day",
@@ -268,7 +304,7 @@ impl Backtester {
                                     t1_pending.push((symbol.clone(), order_id));
                                     continue; // Don't execute now, wait for next bar
                                 }
-                                
+
                                 // Execute immediately (intra-candle mode OR entry orders in T+1 mode)
                                 let fill = self.execution_engine.execute_fill(
                                     order,
@@ -337,6 +373,9 @@ impl Backtester {
                                             trade.net_pnl
                                         );
 
+                                        // Clear cached entry levels for closed position
+                                        entry_levels.remove(symbol);
+
                                         // Notify strategy
                                         self.strategy.on_trade_closed(&trade);
 
@@ -398,23 +437,42 @@ impl Backtester {
                 if let Some(pos) = &position_data {
                     total_value += pos.quantity * price;
 
-                    // FIX: Use entry slice for fixed stop/target calculation to avoid stop drift
-                    let entry_slice =
-                        match primary.binary_search_by_key(&pos.first_entry_time, |c| c.datetime) {
-                            Ok(idx) => {
-                                let start = idx.saturating_sub(LOOKBACK - 1);
-                                &primary[start..=idx]
-                            }
-                            Err(_) => current_slice,
-                        };
-
-                    // Check stop loss and take profit
-                    let stop_price = self
-                        .strategy
-                        .calculate_stop_loss(entry_slice, pos.average_entry_price);
-                    let target_price = self
-                        .strategy
-                        .calculate_take_profit(current_slice, pos.average_entry_price);
+                    // CRITICAL FIX: Use cached stop/target levels from entry time
+                    // Main branch stores these at entry in PendingOrder; we cache them here
+                    let (stop_price, target_price) =
+                        *entry_levels.entry(symbol.clone()).or_insert_with(|| {
+                            // First time seeing this position - calculate and cache stop/target
+                            // Use entry slice for correct ATR calculation
+                            let entry_slice = match primary
+                                .binary_search_by_key(&pos.first_entry_time, |c| c.datetime)
+                            {
+                                Ok(idx) => {
+                                    let start = idx.saturating_sub(LOOKBACK - 1);
+                                    &primary[start..=idx]
+                                }
+                                Err(_) => {
+                                    tracing::warn!(
+                                        "Could not find entry candle for {}, using current slice",
+                                        symbol
+                                    );
+                                    current_slice
+                                }
+                            };
+                            let stop = self
+                                .strategy
+                                .calculate_stop_loss(entry_slice, pos.average_entry_price);
+                            let target = self
+                                .strategy
+                                .calculate_take_profit(entry_slice, pos.average_entry_price);
+                            tracing::debug!(
+                                "{} {} ENTRY LEVELS CACHED: stop={:.4} target={:.4}",
+                                pos.first_entry_time.format("%Y-%m-%d"),
+                                symbol,
+                                stop,
+                                target
+                            );
+                            (stop, target)
+                        });
 
                     tracing::trace!(
                         "{} {} position check: entry={:.2} current={:.2} stop={:.2} target={:.2} low={:.2} high={:.2}",
@@ -463,11 +521,11 @@ impl Backtester {
                             let order_id = close_order.id;
                             orderbooks
                                 .entry(symbol.clone())
-                                .or_insert_with(OrderBook::new)
+                                .or_default()
                                 .add_order(close_order);
-                            
+
                             t1_pending.push((symbol.clone(), order_id));
-                            
+
                             tracing::info!(
                                 "{} {} TRIGGERED (T+1): {} {:?} pos, entry={:.4}, trigger={:.4}, queued for next day",
                                 candle.datetime.format("%Y-%m-%d"),
@@ -477,7 +535,7 @@ impl Backtester {
                                 pos.average_entry_price,
                                 trigger_price
                             );
-                            
+
                             continue; // Don't execute now, wait for next bar
                         }
 
@@ -499,7 +557,7 @@ impl Backtester {
                                 }
                             }
                         };
-                        
+
                         tracing::info!(
                             "{} {} TRIGGERED: {} {:?} pos, entry={:.4}, trigger={:.4}, exec_before_slip={:.4}, OHLC=[{:.4},{:.4},{:.4},{:.4}]",
                             candle.datetime.format("%Y-%m-%d"),
@@ -542,6 +600,9 @@ impl Backtester {
                         if position_manager.get_position(symbol).is_none() {
                             // CRITICAL: Clear closed position from manager to prevent P&L accumulation
                             position_manager.close_position(symbol);
+
+                            // Clear cached entry levels for closed position
+                            entry_levels.remove(symbol);
 
                             let trade = self.create_trade_from_position(
                                 pos, // Use the cloned position data
@@ -645,6 +706,9 @@ impl Backtester {
                                 // CRITICAL: Clear closed position from manager to prevent P&L accumulation
                                 position_manager.close_position(symbol);
 
+                                // Clear cached entry levels for closed position
+                                entry_levels.remove(symbol);
+
                                 let trade = self.create_trade_from_position(
                                     pos,
                                     fill.price,
@@ -731,7 +795,7 @@ impl Backtester {
 
                 // Get orders from strategy
                 let order_requests = self.strategy.generate_orders(&ctx);
-                
+
                 if !order_requests.is_empty() {
                     tracing::debug!(
                         "{} {} generated {} orders",
@@ -792,6 +856,25 @@ impl Backtester {
                         let mut entry_order = order;
                         entry_order.quantity = quantity;
                         entry_order.remaining_quantity = quantity;
+
+                        // CRITICAL: Cache stop/target at SIGNAL time (now), not at ENTRY time (T+1)
+                        // Main branch stores these in PendingOrder at signal time
+                        // Using current_slice here matches main branch behavior
+                        // NOTE: Only pre-cache if T+1 execution is enabled, otherwise let the
+                        // lazy calculation handle it at position creation time
+                        if self.config.backtest.use_t1_execution {
+                            let stop = self.strategy.calculate_stop_loss(current_slice, price);
+                            let target = self.strategy.calculate_take_profit(current_slice, price);
+                            entry_levels.insert(symbol.clone(), (stop, target));
+                            tracing::debug!(
+                                "{} {} ENTRY LEVELS PRE-CACHED at signal: stop={:.4} target={:.4}",
+                                candle.datetime.format("%Y-%m-%d"),
+                                symbol,
+                                stop,
+                                target
+                            );
+                        }
+
                         entry_order
                     } else {
                         // Exit or grid order - use strategy's quantity as-is
@@ -806,6 +889,21 @@ impl Backtester {
                             Side::Sell => 1.0 - self.config.exchange.assumed_slippage,
                         };
                         let fill_price = price * slippage_factor;
+
+                        // Check if we have enough cash for buy orders (matches main branch)
+                        if final_order.side == Side::Buy {
+                            let position_value = fill_price * final_order.quantity;
+                            let commission = position_value * self.config.exchange.taker_fee;
+                            let cash_needed = position_value + commission;
+                            if cash < cash_needed {
+                                tracing::debug!(
+                                    "Insufficient cash: have {:.2}, need {:.2} - skipping order",
+                                    cash,
+                                    cash_needed
+                                );
+                                continue;
+                            }
+                        }
 
                         let fill = self.execution_engine.execute_fill(
                             &mut final_order,
@@ -849,6 +947,9 @@ impl Backtester {
                                 } else {
                                     self.risk_manager.record_loss();
                                 }
+
+                                // Clear cached entry levels for closed position
+                                entry_levels.remove(symbol);
 
                                 tracing::debug!(
                                     "{} TRADE CLOSED {} PnL={:.2} (Strategy Exit)",
@@ -908,6 +1009,9 @@ impl Backtester {
                 let primary = mtf_data.primary();
                 let last_candle = primary.last().unwrap();
                 let exit_price = last_candle.close;
+
+                // Clear cached entry levels for closed position
+                entry_levels.remove(symbol);
 
                 let trade = self.create_trade_from_position(&pos, exit_price, last_candle.datetime);
 

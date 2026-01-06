@@ -260,7 +260,15 @@ async fn main() -> Result<()> {
             end,
             no_risk_limits,
             use_t1_execution,
-        } => commands::backtest::run(config, strategy, capital, start, end, no_risk_limits, use_t1_execution),
+        } => commands::backtest::run(
+            config,
+            strategy,
+            capital,
+            start,
+            end,
+            no_risk_limits,
+            use_t1_execution,
+        ),
 
         Commands::Optimize {
             config,
