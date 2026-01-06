@@ -193,6 +193,10 @@ pub struct BacktestConfig {
     pub data_dir: String,
     pub results_dir: String,
     pub commission: f64,
+    /// Use T+1 execution model (signal on day N, execute at day N+1 open)
+    /// Default is false (intra-candle execution for realistic algo trading)
+    #[serde(default)]
+    pub use_t1_execution: bool,
 }
 
 impl Default for BacktestConfig {
@@ -201,6 +205,7 @@ impl Default for BacktestConfig {
             data_dir: "data".to_string(),
             results_dir: "results".to_string(),
             commission: 0.001,
+            use_t1_execution: false, // Default to realistic intra-candle
         }
     }
 }

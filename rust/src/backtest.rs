@@ -120,6 +120,9 @@ impl Backtester {
         let mut position_manager = PositionManager::new();
         let mut orderbooks: HashMap<Symbol, OrderBook> = HashMap::new();
         let mut cash = self.config.trading.initial_capital;
+        
+        // T+1 execution: queue of (symbol, order_id) to execute at next bar's open
+        let mut t1_pending: Vec<(Symbol, u64)> = Vec::new();
 
         // Initialize orderbooks for each symbol
         for (symbol, _) in &aligned {
@@ -132,6 +135,97 @@ impl Backtester {
         // Main simulation loop
         for (bar_idx, current_date) in dates.iter().enumerate() {
             let start_idx = bar_idx.saturating_sub(LOOKBACK - 1);
+            
+            // ================================================================
+            // PHASE 0 (T+1 only): Execute orders queued from previous day
+            // ================================================================
+            if self.config.backtest.use_t1_execution && !t1_pending.is_empty() {
+                for (symbol, order_id) in t1_pending.drain(..) {
+                    if let Some((_, mtf_data)) = aligned.iter().find(|(s, _)| s == &symbol) {
+                        let primary = mtf_data.primary();
+                        let candle = &primary[bar_idx];
+                        
+                        if let Some(orderbook) = orderbooks.get_mut(&symbol) {
+                            if let Some(order) = orderbook.get_order_mut(order_id) {
+                                if order.is_active() {
+                                    // Execute at open price with slippage
+                                    let fill_price = candle.open * (1.0 + self.config.exchange.assumed_slippage * 
+                                        if order.side == Side::Buy { 1.0 } else { -1.0 });
+                                    
+                                    let fill = self.execution_engine.execute_fill(
+                                        order,
+                                        fill_price,
+                                        false, // taker (market execution)
+                                        candle.datetime,
+                                    );
+                                    
+                                    tracing::info!(
+                                        "{} T+1 execution: {:?} {} @ {:.2} (queued from previous day)",
+                                        candle.datetime.format("%Y-%m-%d"),
+                                        order.side,
+                                        symbol,
+                                        fill.price
+                                    );
+                                    
+                                    // Update cash
+                                    match order.side {
+                                        Side::Buy => {
+                                            let cost = fill.price * fill.quantity + fill.commission;
+                                            cash -= cost;
+                                        }
+                                        Side::Sell => {
+                                            let proceeds = fill.price * fill.quantity - fill.commission;
+                                            cash += proceeds;
+                                        }
+                                    }
+                                    
+                                    // Check position before fill
+                                    let had_position_before = position_manager.get_position(&symbol).is_some();
+                                    let prev_pos = if had_position_before {
+                                        position_manager.get_position_raw(&symbol).cloned()
+                                    } else {
+                                        None
+                                    };
+                                    
+                                    // Update position
+                                    position_manager.add_fill(fill.clone(), symbol.clone(), order.side);
+                                    
+                                    // Check if position closed
+                                    let has_position_after = position_manager.get_position(&symbol).is_some();
+                                    
+                                    if had_position_before && !has_position_after {
+                                        if let Some(prev) = prev_pos {
+                                            let net_pnl = prev.realized_pnl - fill.commission;
+                                            let trade = Trade {
+                                                symbol: symbol.clone(),
+                                                entry_time: prev.first_entry_time,
+                                                exit_time: candle.datetime,
+                                                entry_price: prev.average_entry_price,
+                                                exit_price: fill.price,
+                                                quantity: prev.quantity,
+                                                side: prev.side,
+                                                pnl: prev.realized_pnl,
+                                                commission: fill.commission,
+                                                net_pnl,
+                                            };
+                                            trades.push(trade.clone());
+                                            self.strategy.on_trade_closed(&trade);
+                                        }
+                                    }
+                                    
+                                    // Notify strategy
+                                    if let Some(pos) = position_manager.get_position(&symbol) {
+                                        self.strategy.on_order_filled(&fill, pos);
+                                    }
+                                    
+                                    // Mark order as filled in orderbook
+                                    orderbook.mark_filled(order_id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // ================================================================
             // PHASE 1: Process fills - check all orders against current candle
@@ -153,7 +247,20 @@ impl Backtester {
                             if let Some(fill_price_info) =
                                 self.execution_engine.check_fill(order, candle)
                             {
-                                // Execute the fill with HISTORICAL timestamp from candle
+                                // T+1 mode: Queue for execution at next bar's open
+                                if self.config.backtest.use_t1_execution {
+                                    tracing::debug!(
+                                        "{} T+1 trigger: {:?} {} @ {:.2} - queuing for next day",
+                                        candle.datetime.format("%Y-%m-%d"),
+                                        order.side,
+                                        symbol,
+                                        fill_price_info.price
+                                    );
+                                    t1_pending.push((symbol.clone(), order_id));
+                                    continue; // Don't execute now, wait for next bar
+                                }
+                                
+                                // Intra-candle mode: Execute immediately
                                 let fill = self.execution_engine.execute_fill(
                                     order,
                                     fill_price_info.price,

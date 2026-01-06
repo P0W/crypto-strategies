@@ -15,6 +15,7 @@ pub fn run(
     start_override: Option<String>,
     end_override: Option<String>,
     no_risk_limits: bool,
+    use_t1_execution: bool,
 ) -> Result<()> {
     info!("Starting backtest");
 
@@ -40,6 +41,14 @@ pub fn run(
         config.trading.max_drawdown = 1.0;
         config.trading.max_positions = 100;
         config.trading.max_portfolio_heat = 1.0;
+    }
+
+    if use_t1_execution {
+        info!("Using T+1 execution model (signal on day N, execute at day N+1 open)");
+        config.backtest.use_t1_execution = true;
+    } else {
+        info!("Using intra-candle execution model (realistic algo trading)");
+        config.backtest.use_t1_execution = false;
     }
 
     // Parse date filters
