@@ -55,6 +55,11 @@ enum Commands {
         /// Disable risk manager limits (no drawdown halt, no position limits)
         #[arg(long)]
         no_risk_limits: bool,
+
+        /// Use T+1 execution model (signal on day N, execute at day N+1 open)
+        /// Default is false for realistic intra-candle execution
+        #[arg(long)]
+        use_t1_execution: bool,
     },
 
     /// Optimize strategy parameters (grid search from JSON config)
@@ -254,7 +259,8 @@ async fn main() -> Result<()> {
             start,
             end,
             no_risk_limits,
-        } => commands::backtest::run(config, strategy, capital, start, end, no_risk_limits),
+            use_t1_execution,
+        } => commands::backtest::run(config, strategy, capital, start, end, no_risk_limits, use_t1_execution),
 
         Commands::Optimize {
             config,
