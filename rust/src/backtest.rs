@@ -731,6 +731,15 @@ impl Backtester {
 
                 // Get orders from strategy
                 let order_requests = self.strategy.generate_orders(&ctx);
+                
+                if !order_requests.is_empty() {
+                    tracing::debug!(
+                        "{} {} generated {} orders",
+                        candle.datetime.format("%Y-%m-%d"),
+                        symbol,
+                        order_requests.len()
+                    );
+                }
 
                 // Process each order request
                 for order_req in order_requests {
