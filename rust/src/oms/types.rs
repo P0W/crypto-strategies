@@ -237,6 +237,10 @@ pub struct Position {
 
     /// Last update time
     pub last_update_time: DateTime<Utc>,
+
+    /// Risk amount at entry (stop_distance × quantity)
+    /// Used for portfolio heat calculation to match main branch behavior
+    pub risk_amount: f64,
 }
 
 impl Position {
@@ -253,7 +257,13 @@ impl Position {
             fills: vec![fill.clone()],
             first_entry_time: fill.timestamp,
             last_update_time: fill.timestamp,
+            risk_amount: 0.0, // Will be set by backtest engine after position creation
         }
+    }
+
+    /// Set the risk amount for this position (stop_distance × quantity)
+    pub fn set_risk_amount(&mut self, risk_amount: f64) {
+        self.risk_amount = risk_amount;
     }
 
     /// Update unrealized P&L with current price

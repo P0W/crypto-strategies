@@ -285,31 +285,46 @@ impl RiskManager {
             return 0.0;
         }
 
-        let position_size = adjusted_risk / stop_distance;
+        let mut position_size = adjusted_risk / stop_distance;
 
         // Check position size limits
         let max_position_value = self.current_capital * self.max_position_pct;
         let position_value = position_size * entry_price;
 
         if position_value > max_position_value {
-            return max_position_value / entry_price;
+            // Cap position size but DON'T return early - still need portfolio heat check
+            position_size = max_position_value / entry_price;
         }
 
-        // Check portfolio heat - use position value as risk (conservative)
-        // In OMS, stop prices are managed via orders, not stored in positions
-        // Use each position's actual value (quantity × average_entry_price), not the new entry price
-        let current_heat: f64 = current_positions
-            .iter()
-            .map(|p| p.quantity * p.average_entry_price)
-            .sum();
+        // Check portfolio heat - sum of risk amounts (stop_distance × quantity) for each position
+        // This matches main branch behavior where max_portfolio_heat limits total RISK, not total VALUE
+        let current_heat: f64 = current_positions.iter().map(|p| p.risk_amount).sum();
 
         let max_allowed_heat = self.current_capital * self.max_portfolio_heat;
 
+        tracing::debug!(
+            "Portfolio heat check: current_heat={:.2}, new_risk={:.2}, max_allowed={:.2}, positions={}",
+            current_heat,
+            adjusted_risk,
+            max_allowed_heat,
+            current_positions.len()
+        );
+
+        // Check if adding this position's RISK exceeds max allowed heat
+        // Main branch: current_heat + adjusted_risk > max_allowed_heat
         if current_heat + adjusted_risk > max_allowed_heat {
             let remaining_heat = max_allowed_heat - current_heat;
             if remaining_heat > 0.0 {
-                return (remaining_heat / stop_distance).min(position_size);
+                // Size the position to fit remaining allowed risk
+                let limited_size = remaining_heat / stop_distance;
+                tracing::debug!(
+                    "Portfolio heat limiting: remaining_heat={:.2}, limited_size={:.6}",
+                    remaining_heat,
+                    limited_size
+                );
+                return limited_size.min(position_size);
             } else {
+                tracing::debug!("Portfolio heat exceeded: no room for new position");
                 return 0.0;
             }
         }
@@ -359,25 +374,30 @@ impl RiskManager {
             return 0.0;
         }
 
-        let position_size = adjusted_risk / stop_distance;
+        let mut position_size = adjusted_risk / stop_distance;
 
         // Check position size limits
         let max_position_value = self.current_capital * self.max_position_pct;
         let position_value = position_size * entry_price;
 
         if position_value > max_position_value {
-            return max_position_value / entry_price;
+            // Cap position size but DON'T return early - still need portfolio heat check
+            position_size = max_position_value / entry_price;
         }
 
-        // Check portfolio heat (sum position values from iterator - conservative)
-        let current_heat: f64 = current_positions.map(|p| p.quantity * entry_price).sum();
+        // Check portfolio heat (sum risk amounts from iterator)
+        // This matches main branch behavior where max_portfolio_heat limits total RISK, not total VALUE
+        let current_heat: f64 = current_positions.map(|p| p.risk_amount).sum();
 
         let max_allowed_heat = self.current_capital * self.max_portfolio_heat;
 
+        // Check if adding this position's RISK exceeds max allowed heat
         if current_heat + adjusted_risk > max_allowed_heat {
             let remaining_heat = max_allowed_heat - current_heat;
             if remaining_heat > 0.0 {
-                return (remaining_heat / stop_distance).min(position_size);
+                // Size the position to fit remaining allowed risk
+                let limited_size = remaining_heat / stop_distance;
+                return limited_size.min(position_size);
             } else {
                 return 0.0;
             }
