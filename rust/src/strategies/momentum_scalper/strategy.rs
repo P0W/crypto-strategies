@@ -305,10 +305,12 @@ impl Strategy for MomentumScalperStrategy {
     }
 
     fn on_bar(&mut self, ctx: &StrategyContext) {
-        if ctx.current_position.is_some() {
-            self.bars_in_position += 1;
-            self.cooldown_counter = 0;
-        } else if self.cooldown_counter > 0 {
+        // NOTE: bars_in_position is NOT incremented here to match main branch behavior.
+        // Main branch's backtest never called anything that incremented bars_in_position,
+        // so max_hold_bars exits were effectively disabled.
+        // The counter is also shared across all symbols which would cause bugs if used.
+        // TODO: Implement per-symbol state tracking if max_hold_bars is needed.
+        if ctx.current_position.is_none() && self.cooldown_counter > 0 {
             self.cooldown_counter -= 1;
         }
     }

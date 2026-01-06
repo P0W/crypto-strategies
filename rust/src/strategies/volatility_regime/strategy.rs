@@ -163,6 +163,7 @@ impl Strategy for VolatilityRegimeStrategy {
 
             // Early exit with minimum profit threshold to overcome fees
             // Require at least 1.5% profit (to cover 0.3% fees + buffer)
+            // This is an optimization over main branch's breakeven exit
             let min_profit_pct = 0.015;
             let min_profit_amount = pos.quantity * pos.average_entry_price * min_profit_pct;
 

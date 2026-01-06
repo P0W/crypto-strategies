@@ -6,7 +6,7 @@
 use crate::indicators::atr;
 use crate::oms::{Fill, OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
-use crate::{Candle, Position};
+use crate::{Candle, Position, Trade};
 
 use super::config::RangeBreakoutConfig;
 
@@ -142,6 +142,12 @@ impl Strategy for RangeBreakoutStrategy {
     }
 
     fn on_order_filled(&mut self, _fill: &Fill, _position: &Position) {
+        // Don't set cooldown here - it's called on BOTH entry and exit fills
+        // Cooldown should only be set when trade closes (see on_trade_closed)
+    }
+
+    fn on_trade_closed(&mut self, _trade: &Trade) {
+        // Set cooldown after trade closes (matches main branch behavior)
         self.cooldown_counter = self.config.cooldown;
     }
 
