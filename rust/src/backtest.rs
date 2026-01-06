@@ -195,19 +195,22 @@ impl Backtester {
                                     
                                     if had_position_before && !has_position_after {
                                         if let Some(prev) = prev_pos {
-                                            let net_pnl = prev.realized_pnl - fill.commission;
-                                            let trade = Trade {
-                                                symbol: symbol.clone(),
-                                                entry_time: prev.first_entry_time,
-                                                exit_time: candle.datetime,
-                                                entry_price: prev.average_entry_price,
-                                                exit_price: fill.price,
-                                                quantity: prev.quantity,
-                                                side: prev.side,
-                                                pnl: prev.realized_pnl,
-                                                commission: fill.commission,
-                                                net_pnl,
-                                            };
+                                            // CRITICAL: Clear closed position from manager to prevent P&L accumulation
+                                            position_manager.close_position(&symbol);
+                                            
+                                            // Use proper trade creation method
+                                            let trade = self.create_trade_from_position(
+                                                &prev,
+                                                fill.price,
+                                                candle.datetime,
+                                            );
+                                            
+                                            if trade.net_pnl > 0.0 {
+                                                self.risk_manager.record_win();
+                                            } else {
+                                                self.risk_manager.record_loss();
+                                            }
+                                            
                                             trades.push(trade.clone());
                                             self.strategy.on_trade_closed(&trade);
                                         }
@@ -247,20 +250,26 @@ impl Backtester {
                             if let Some(fill_price_info) =
                                 self.execution_engine.check_fill(order, candle)
                             {
-                                // T+1 mode: Queue for execution at next bar's open
-                                if self.config.backtest.use_t1_execution {
+                                // T+1 mode: Only queue stop/target orders for next day
+                                // Entry market orders should execute same day
+                                let is_stop_or_target = order.client_id.as_ref()
+                                    .map(|n| n.contains("Stop") || n.contains("Target"))
+                                    .unwrap_or(false);
+                                
+                                if self.config.backtest.use_t1_execution && is_stop_or_target {
                                     tracing::debug!(
-                                        "{} T+1 trigger: {:?} {} @ {:.2} - queuing for next day",
+                                        "{} T+1 trigger: {:?} {} @ {:.2} ({}) - queuing for next day",
                                         candle.datetime.format("%Y-%m-%d"),
                                         order.side,
                                         symbol,
-                                        fill_price_info.price
+                                        fill_price_info.price,
+                                        order.client_id.as_ref().unwrap_or(&"".to_string())
                                     );
                                     t1_pending.push((symbol.clone(), order_id));
                                     continue; // Don't execute now, wait for next bar
                                 }
                                 
-                                // Intra-candle mode: Execute immediately
+                                // Execute immediately (intra-candle mode OR entry orders in T+1 mode)
                                 let fill = self.execution_engine.execute_fill(
                                     order,
                                     fill_price_info.price,
