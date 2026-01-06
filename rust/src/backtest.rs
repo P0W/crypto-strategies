@@ -224,6 +224,19 @@ impl Backtester {
                                     let has_position_after =
                                         position_manager.get_position(&symbol).is_some();
 
+                                    // NEW POSITION: Set risk_amount for portfolio heat calculation
+                                    if !had_position_before && has_position_after {
+                                        if let Some((stop_price, _)) = entry_levels.get(&symbol) {
+                                            let stop_distance = (fill.price - stop_price).abs();
+                                            let risk_amount = stop_distance * fill.quantity;
+                                            if let Some(pos) =
+                                                position_manager.get_position_mut(&symbol)
+                                            {
+                                                pos.set_risk_amount(risk_amount);
+                                            }
+                                        }
+                                    }
+
                                     if had_position_before && !has_position_after {
                                         if let Some(prev) = prev_pos {
                                             // CRITICAL: Clear closed position from manager to prevent P&L accumulation
@@ -341,6 +354,18 @@ impl Backtester {
                                 // Check if position closed (had position before, none after)
                                 let has_position_after =
                                     position_manager.get_position(symbol).is_some();
+
+                                // NEW POSITION: Set risk_amount for portfolio heat calculation
+                                if !had_position_before && has_position_after {
+                                    if let Some((stop_price, _)) = entry_levels.get(symbol) {
+                                        let stop_distance = (fill.price - stop_price).abs();
+                                        let risk_amount = stop_distance * fill.quantity;
+                                        if let Some(pos) = position_manager.get_position_mut(symbol)
+                                        {
+                                            pos.set_risk_amount(risk_amount);
+                                        }
+                                    }
+                                }
 
                                 tracing::trace!(
                                     "{} Fill check: had_before={} has_after={} prev_pos_qty={}",
@@ -881,8 +906,33 @@ impl Backtester {
                         order
                     };
 
-                    // GENERIC FIX: Execute Market orders immediately at Close (Market-On-Close)
-                    // This matches the behavior of signal-based backtesters and prevents gap slippage
+                    // For T+1 mode: Queue market ENTRY orders for next bar's OPEN execution
+                    // This matches main branch behavior where signals are generated at CLOSE,
+                    // but orders execute at next bar's OPEN
+                    if self.config.backtest.use_t1_execution
+                        && final_order.order_type == crate::oms::types::OrderType::Market
+                        && is_entry_order
+                    {
+                        // Convert market order to limit order at next bar's open (will be filled immediately)
+                        // Store in orderbook for T+1 execution
+                        if let Some(orderbook) = orderbooks.get_mut(symbol) {
+                            orderbook.add_order(final_order.clone());
+                            tracing::debug!(
+                                "{} T+1 QUEUED: Market {} {} for next bar OPEN",
+                                candle.datetime.format("%Y-%m-%d"),
+                                if final_order.side == Side::Buy {
+                                    "BUY"
+                                } else {
+                                    "SELL"
+                                },
+                                symbol
+                            );
+                        }
+                        continue;
+                    }
+
+                    // For non-T+1 mode OR exit orders: Execute Market orders immediately at Close (MOC)
+                    // This matches the behavior of signal-based backtesters
                     if final_order.order_type == crate::oms::types::OrderType::Market {
                         let slippage_factor = match final_order.side {
                             Side::Buy => 1.0 + self.config.exchange.assumed_slippage,
@@ -931,6 +981,17 @@ impl Backtester {
 
                         // Check if position closed
                         let has_position_after = position_manager.get_position(symbol).is_some();
+
+                        // NEW POSITION: Set risk_amount for portfolio heat calculation
+                        if !had_position_before && has_position_after {
+                            if let Some((stop_price, _)) = entry_levels.get(symbol) {
+                                let stop_distance = (fill.price - stop_price).abs();
+                                let risk_amount = stop_distance * fill.quantity;
+                                if let Some(pos) = position_manager.get_position_mut(symbol) {
+                                    pos.set_risk_amount(risk_amount);
+                                }
+                            }
+                        }
 
                         if had_position_before && !has_position_after {
                             // Position just closed - create trade
