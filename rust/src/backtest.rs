@@ -939,11 +939,11 @@ impl Backtester {
         exit_price: f64,
         exit_time: DateTime<Utc>,
     ) -> Trade {
-        let pnl = pos.realized_pnl
-            + match pos.side {
-                Side::Buy => (exit_price - pos.average_entry_price) * pos.quantity,
-                Side::Sell => (pos.average_entry_price - exit_price) * pos.quantity,
-            };
+        // Calculate P&L for the remaining position only (don't double-count realized_pnl from partial fills)
+        let pnl = match pos.side {
+            Side::Buy => (exit_price - pos.average_entry_price) * pos.quantity,
+            Side::Sell => (pos.average_entry_price - exit_price) * pos.quantity,
+        };
 
         let commission = pos.fills.iter().map(|f| f.commission).sum::<f64>()
             + exit_price * pos.quantity * self.config.exchange.taker_fee;
