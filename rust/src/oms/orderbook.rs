@@ -155,9 +155,11 @@ impl OrderBook {
         }
     }
 
-    /// Get all active order IDs
+    /// Get all active order IDs (sorted for deterministic iteration)
     pub fn get_all_order_ids(&self) -> Vec<OrderId> {
-        self.orders.keys().copied().collect()
+        let mut ids: Vec<OrderId> = self.orders.keys().copied().collect();
+        ids.sort(); // Sort for deterministic order processing
+        ids
     }
 
     /// Clear all orders

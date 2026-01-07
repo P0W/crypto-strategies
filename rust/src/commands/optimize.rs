@@ -9,7 +9,23 @@ use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::info;
+
+/// Format duration in human readable format
+fn format_duration(secs: f64) -> String {
+    if secs < 60.0 {
+        format!("{:.0}s", secs)
+    } else if secs < 3600.0 {
+        let mins = (secs / 60.0).floor();
+        let remaining = secs % 60.0;
+        format!("{}m {}s", mins as u32, remaining as u32)
+    } else {
+        let hours = (secs / 3600.0).floor();
+        let remaining_mins = ((secs % 3600.0) / 60.0).floor();
+        format!("{}h {}m", hours as u32, remaining_mins as u32)
+    }
+}
 
 /// Parse symbol groups (semicolon-separated groups, comma-separated within)
 fn parse_symbol_groups(s: &str) -> Vec<Vec<String>> {
@@ -294,35 +310,87 @@ pub fn run(
         return Ok(());
     }
 
-    // Print summary
+    // Print professional configuration summary
+    let cpu_threads = rayon::current_num_threads();
+    let est_time_per_run = 0.05; // rough estimate in seconds
+    let est_total_secs = if sequential {
+        total_runs as f64 * est_time_per_run
+    } else {
+        (total_runs as f64 * est_time_per_run) / cpu_threads as f64
+    };
+
+    let border = "═".repeat(78);
     println!();
-    println!("  Strategy      {}", config.strategy_name());
-    println!("  Symbols       {} group(s)", symbol_groups.len());
-    println!("  Timeframes    {}", timeframes_to_test.join(", "));
+    println!("  ╔{}╗", border);
+    println!("  ║                      📊 OPTIMIZATION CONFIGURATION                         ║");
+    println!("  ╠{}╣", border);
+    println!("  ║  Strategy     │ {:<58} ║", config.strategy_name());
+    println!(
+        "  ║  Symbols      │ {} group(s){:<47} ║",
+        symbol_groups.len(),
+        ""
+    );
+    println!(
+        "  ║  Timeframes   │ {:<58} ║",
+        timeframes_to_test.join(", ")
+    );
     if let Some(ref start) = start_date {
-        println!("  Start date    {}", start.format("%Y-%m-%d %H:%M:%S"));
+        println!(
+            "  ║  Start Date   │ {:<58} ║",
+            start.format("%Y-%m-%d %H:%M UTC")
+        );
     }
     if let Some(ref end) = end_date {
-        println!("  End date      {}", end.format("%Y-%m-%d %H:%M:%S"));
+        println!(
+            "  ║  End Date     │ {:<58} ║",
+            end.format("%Y-%m-%d %H:%M UTC")
+        );
     }
-    println!("  Grid          {} combinations", total_param_combinations);
-    println!("  Total runs    {}", total_runs);
+    println!("  ╠{}╣", border);
     println!(
-        "  Execution     {}",
-        if sequential { "sequential" } else { "parallel" }
+        "  ║  Grid Params  │ {:>8} combinations{:<37} ║",
+        total_param_combinations, ""
     );
+    println!(
+        "  ║  Total Runs   │ {:>8} backtests{:<39} ║",
+        total_runs, ""
+    );
+    println!(
+        "  ║  Execution    │ {:<58} ║",
+        if sequential {
+            "Sequential (single-threaded)".to_string()
+        } else {
+            format!("Parallel ({} CPU threads)", cpu_threads)
+        }
+    );
+    println!(
+        "  ║  Est. Time    │ ~{:<57} ║",
+        format_duration(est_total_secs)
+    );
+    println!("  ╚{}╝", border);
     println!();
 
-    // Create progress bar with solid blocks
+    // Create professional progress display
+    println!("  ╔{}╗", border);
+    println!("  ║                         🚀 OPTIMIZATION ENGINE                              ║");
+    println!("  ╠{}╣", border);
+    println!("  ║  Phase 2/3: Running backtests...                                            ║");
+    println!("  ╚{}╝", border);
+    println!();
+
+    // Start timer for actual elapsed time
+    let start_time = Instant::now();
+
     let pb = ProgressBar::new(total_runs as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("  {spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({per_sec}) ETA: {eta} {msg}")
+            .template("  {spinner:.cyan} │{percent:>3}%│ [{bar:35.green/dim}] {pos:>6}/{len:6} │ ⚡ {per_sec:>8} │ ⏱  {elapsed_precise} │ ETA {eta_precise} │ ✓ {msg}")
             .unwrap()
-            .progress_chars("█▓░"),
+            .progress_chars("━━╸")
+            .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
     );
-    pb.enable_steady_tick(std::time::Duration::from_millis(100));
-    pb.set_message("");
+    pb.enable_steady_tick(std::time::Duration::from_millis(80));
+    pb.set_message("0 valid");
 
     let valid_count = Arc::new(AtomicUsize::new(0));
     let valid_count_clone = valid_count.clone();
@@ -360,7 +428,50 @@ pub fn run(
             .collect()
     };
 
-    pb.finish_with_message(format!("{} valid", valid_count.load(Ordering::Relaxed)));
+    let elapsed = start_time.elapsed();
+    let elapsed_secs = elapsed.as_secs_f64();
+    let final_valid = valid_count.load(Ordering::Relaxed);
+    let valid_pct = if total_runs > 0 {
+        (final_valid as f64 / total_runs as f64) * 100.0
+    } else {
+        0.0
+    };
+    let throughput = if elapsed_secs > 0.0 {
+        total_runs as f64 / elapsed_secs
+    } else {
+        0.0
+    };
+    pb.finish_and_clear();
+
+    // Print completion summary
+    println!();
+    println!("  ╔{}╗", border);
+    println!("  ║                         ✅ OPTIMIZATION COMPLETE                             ║");
+    println!("  ╠{}╣", border);
+    println!("  ║  📊 Results Summary                                                          ║");
+    println!(
+        "  ║  ├─ Total runs:      {:>8}                                               ║",
+        total_runs
+    );
+    println!(
+        "  ║  ├─ Valid results:   {:>8} ({:>5.1}%)                                      ║",
+        final_valid, valid_pct
+    );
+    println!(
+        "  ║  └─ Invalid/Empty:   {:>8}                                               ║",
+        total_runs - final_valid
+    );
+    println!("  ╠{}╣", border);
+    println!("  ║  ⏱  Performance                                                              ║");
+    println!(
+        "  ║  ├─ Elapsed time:    {:<58} ║",
+        format_duration(elapsed_secs)
+    );
+    println!(
+        "  ║  └─ Throughput:      {:.1} runs/sec{:<40} ║",
+        throughput, ""
+    );
+    println!("  ╚{}╝", border);
     println!();
 
     if all_results.is_empty() {
@@ -384,16 +495,38 @@ pub fn run(
         .map(|g| g.keys().cloned().collect())
         .unwrap_or_default();
 
-    // Display top results
+    // Display top results with professional formatting
     let display_count = top.min(all_results.len());
-    println!();
-    println!("  Top {} results (sorted by {})", display_count, sort_by);
+
+    // Calculate statistics for the top results
+    let top_results: Vec<_> = all_results.iter().take(display_count).collect();
+    let avg_sharpe: f64 =
+        top_results.iter().map(|r| r.sharpe_ratio).sum::<f64>() / display_count as f64;
+    let avg_return: f64 =
+        top_results.iter().map(|r| r.total_return).sum::<f64>() / display_count as f64;
+    let best_sharpe = top_results
+        .iter()
+        .map(|r| r.sharpe_ratio)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let best_return = top_results
+        .iter()
+        .map(|r| r.total_return)
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    println!("  ╔{}╗", border);
+    println!(
+        "  ║                         🏆 TOP {} RESULTS (by {})                           ║",
+        display_count, sort_by
+    );
+    println!("  ╠{}╣", border);
+    println!("  ║  Quick Stats: Best Sharpe: {:.2} │ Best Return: {:.1}% │ Avg Sharpe: {:.2} │ Avg Return: {:.1}% ║", best_sharpe, best_return, avg_sharpe, avg_return);
+    println!("  ╚{}╝", border);
     println!();
     println!(
-        "  {:<3} {:>7} {:>8} {:>7} {:>6} {:>8} {:>5}  {:<12} {:>3}  Grid Parameters",
+        "  {:<3} │ {:>7} │ {:>8} │ {:>7} │ {:>6} │ {:>8} │ {:>5} │ {:<12} │ {:>3} │ Grid Parameters",
         "#", "Sharpe", "Return", "MaxDD", "WinR", "Expect", "Trd", "Symbols", "TF"
     );
-    println!("  {}", "-".repeat(100));
+    println!("  ───┼─────────┼──────────┼─────────┼────────┼──────────┼───────┼──────────────┼─────┼─────────────────");
 
     for (i, result) in all_results.iter().take(top).enumerate() {
         let group_idx = *result.params.get("_group_idx").unwrap_or(&0.0) as usize;
@@ -432,8 +565,17 @@ pub fn run(
             .collect::<Vec<_>>()
             .join(" ");
 
+        // Add rank indicator for top 3
+        let rank_indicator = match i {
+            0 => "🥇",
+            1 => "🥈",
+            2 => "🥉",
+            _ => "  ",
+        };
+
         println!(
-            "  {:<3} {:>7.2} {:>7.1}% {:>6.1}% {:>5.0}% {:>8.2} {:>5}  {:<12} {:>3}  {}",
+            "{} {:<2} │ {:>7.2} │ {:>7.1}% │ {:>6.1}% │ {:>5.0}% │ {:>8.2} │ {:>5} │ {:<12} │ {:>3} │ {}",
+            rank_indicator,
             i + 1,
             result.sharpe_ratio,
             result.total_return,

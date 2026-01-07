@@ -851,13 +851,13 @@ pub struct IncrementalAdx {
     prev_high: f64,
     prev_low: f64,
     prev_close: f64,
-    
+
     // Smoothed values (Wilder's)
     smooth_tr: f64,
     smooth_pos_dm: f64,
     smooth_neg_dm: f64,
     smooth_dx: f64, // This is ADX
-    
+
     count: usize,
 }
 
@@ -894,21 +894,21 @@ impl IncrementalAdx {
         // 2. Calculate Directional Movement
         let up = high - self.prev_high;
         let down = self.prev_low - low;
-        
+
         let pos_dm = if up > down && up > 0.0 { up } else { 0.0 };
         let neg_dm = if down > up && down > 0.0 { down } else { 0.0 };
 
         // 3. Update Smoothed Values (Wilder's)
-        
+
         if self.count <= self.period {
             // Initial SMA phase for Wilder's
             self.smooth_tr += tr;
             self.smooth_pos_dm += pos_dm;
             self.smooth_neg_dm += neg_dm;
-            
+
             if self.count == self.period {
                 // Finalize initial average
-                // Note: The standard definition effectively sums then divides, 
+                // Note: The standard definition effectively sums then divides,
                 // but for incremental we need to transition to smoothing.
                 // However, Wilder's usually starts with SMA.
                 // Let's keep sums until period is reached, then divide?
@@ -916,7 +916,7 @@ impl IncrementalAdx {
                 // But let's just use the sum as the seed for the next step?
                 // No, the formula is: New = Prev + (Curr - Prev)/N
                 // Or New = (Prev*(N-1) + Curr)/N
-                
+
                 // Let's assume at count==period, we convert sum to average
                 // but wait, next step needs the previous average.
                 // So at step period, we store average.
@@ -924,15 +924,17 @@ impl IncrementalAdx {
         } else {
             // Wilder's Smoothing: Val[i] = (Val[i-1] * (n-1) + Curr) / n
             self.smooth_tr = (self.smooth_tr * (self.period - 1) as f64 + tr) / self.period as f64;
-            self.smooth_pos_dm = (self.smooth_pos_dm * (self.period - 1) as f64 + pos_dm) / self.period as f64;
-            self.smooth_neg_dm = (self.smooth_neg_dm * (self.period - 1) as f64 + neg_dm) / self.period as f64;
+            self.smooth_pos_dm =
+                (self.smooth_pos_dm * (self.period - 1) as f64 + pos_dm) / self.period as f64;
+            self.smooth_neg_dm =
+                (self.smooth_neg_dm * (self.period - 1) as f64 + neg_dm) / self.period as f64;
         }
 
         // Handle the transition at self.count == self.period strictly
         if self.count == self.period {
-             self.smooth_tr /= self.period as f64;
-             self.smooth_pos_dm /= self.period as f64;
-             self.smooth_neg_dm /= self.period as f64;
+            self.smooth_tr /= self.period as f64;
+            self.smooth_pos_dm /= self.period as f64;
+            self.smooth_neg_dm /= self.period as f64;
         }
 
         // 4. Calculate DI and DX
@@ -949,12 +951,12 @@ impl IncrementalAdx {
         // 5. Smooth DX to get ADX
         // ADX needs 2*period - 1 to start valid
         if self.count <= 2 * self.period {
-             self.smooth_dx += dx;
-             if self.count == 2 * self.period {
-                 self.smooth_dx /= self.period as f64;
-             }
+            self.smooth_dx += dx;
+            if self.count == 2 * self.period {
+                self.smooth_dx /= self.period as f64;
+            }
         } else {
-             self.smooth_dx = (self.smooth_dx * (self.period - 1) as f64 + dx) / self.period as f64;
+            self.smooth_dx = (self.smooth_dx * (self.period - 1) as f64 + dx) / self.period as f64;
         }
 
         // Update state

@@ -20,39 +20,62 @@
 use crate::indicators::atr;
 use crate::oms::{OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
-use crate::{Candle, MultiTimeframeCandles, Position, Side};
+use crate::{Candle, MultiTimeframeCandles, Position, Side, Symbol};
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 use super::config::QuickFlipConfig;
 
-/// Internal state for tracking trade cooldowns
-/// Uses Mutex for thread-safe interior mutability (no unsafe code)
-struct State {
+/// Per-symbol state for tracking trade cooldowns and range
+/// Uses Mutex for thread-safe interior mutability
+#[derive(Default)]
+struct SymbolState {
     last_trade_bar: usize,
     range_high: f64,
     range_low: f64,
 }
 
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            last_trade_bar: 0,
-            range_high: 0.0,
-            range_low: 0.0,
-        }
-    }
-}
-
 pub struct QuickFlipStrategy {
     config: QuickFlipConfig,
-    state: Mutex<State>,
+    /// Per-symbol state map wrapped in Mutex for thread safety
+    symbol_states: Mutex<HashMap<Symbol, SymbolState>>,
 }
 
 impl QuickFlipStrategy {
     pub fn new(config: QuickFlipConfig) -> Self {
         Self {
             config,
-            state: Mutex::new(State::default()),
+            symbol_states: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Get per-symbol state, creating if needed
+    fn get_symbol_state(&self, symbol: &Symbol) -> (usize, f64, f64) {
+        let states = self.symbol_states.lock().unwrap();
+        states
+            .get(symbol)
+            .map(|s| (s.last_trade_bar, s.range_high, s.range_low))
+            .unwrap_or((0, 0.0, 0.0))
+    }
+
+    /// Update per-symbol state
+    fn update_symbol_state(
+        &self,
+        symbol: &Symbol,
+        last_trade_bar: Option<usize>,
+        range_high: Option<f64>,
+        range_low: Option<f64>,
+    ) {
+        let mut states = self.symbol_states.lock().unwrap();
+        let state = states.entry(symbol.clone()).or_default();
+        if let Some(bar) = last_trade_bar {
+            state.last_trade_bar = bar;
+        }
+        if let Some(high) = range_high {
+            state.range_high = high;
+        }
+        if let Some(low) = range_low {
+            state.range_low = low;
         }
     }
 
@@ -80,10 +103,10 @@ impl QuickFlipStrategy {
             return orders;
         }
 
-        // Cooldown after last trade
+        // Cooldown after last trade (per-symbol)
         {
-            let state = self.state.lock().unwrap();
-            if current_bar.saturating_sub(state.last_trade_bar) < self.config.cooldown_bars {
+            let (last_trade_bar, _, _) = self.get_symbol_state(ctx.symbol);
+            if current_bar.saturating_sub(last_trade_bar) < self.config.cooldown_bars {
                 return orders;
             }
         }
@@ -103,11 +126,8 @@ impl QuickFlipStrategy {
             return orders;
         }
 
-        {
-            let mut state = self.state.lock().unwrap();
-            state.range_high = range_high;
-            state.range_low = range_low;
-        }
+        // Update per-symbol range state
+        self.update_symbol_state(ctx.symbol, None, Some(range_high), Some(range_low));
 
         let curr = &candles_primary[candles_primary.len() - 1];
         let prev = &candles_primary[candles_primary.len() - 2];
@@ -118,8 +138,7 @@ impl QuickFlipStrategy {
         let breakout_long =
             curr.close > range_high && Self::is_bullish(curr) && Self::is_strong_candle(curr);
         if breakout_long {
-            let mut state = self.state.lock().unwrap();
-            state.last_trade_bar = current_bar;
+            self.update_symbol_state(ctx.symbol, Some(current_bar), None, None);
             orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
             return orders;
         }
@@ -128,8 +147,7 @@ impl QuickFlipStrategy {
         let breakout_short =
             curr.close < range_low && Self::is_bearish(curr) && Self::is_strong_candle(curr);
         if breakout_short {
-            let mut state = self.state.lock().unwrap();
-            state.last_trade_bar = current_bar;
+            self.update_symbol_state(ctx.symbol, Some(current_bar), None, None);
             orders.push(OrderRequest::market_sell(ctx.symbol.clone(), 1.0));
             return orders;
         }
@@ -138,8 +156,7 @@ impl QuickFlipStrategy {
         let touch_threshold = range_size * 0.30;
         let near_low = curr.close <= range_low + touch_threshold || curr.low <= range_low;
         if near_low && Self::is_bullish_pattern(prev, curr) {
-            let mut state = self.state.lock().unwrap();
-            state.last_trade_bar = current_bar;
+            self.update_symbol_state(ctx.symbol, Some(current_bar), None, None);
             orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
             return orders;
         }
@@ -147,8 +164,7 @@ impl QuickFlipStrategy {
         // REVERSAL SHORT: Price near/above range high, bearish candle
         let near_high = curr.close >= range_high - touch_threshold || curr.high >= range_high;
         if near_high && Self::is_bearish_pattern(prev, curr) {
-            let mut state = self.state.lock().unwrap();
-            state.last_trade_bar = current_bar;
+            self.update_symbol_state(ctx.symbol, Some(current_bar), None, None);
             orders.push(OrderRequest::market_sell(ctx.symbol.clone(), 1.0));
         }
 
@@ -233,6 +249,10 @@ impl Strategy for QuickFlipStrategy {
         "quick_flip"
     }
 
+    fn clone_boxed(&self) -> Box<dyn Strategy> {
+        Box::new(QuickFlipStrategy::new(self.config.clone()))
+    }
+
     fn required_timeframes(&self) -> Vec<&'static str> {
         // Return empty to use single-TF mode - works better for all timeframes
         vec![]
@@ -260,9 +280,10 @@ impl Strategy for QuickFlipStrategy {
             return orders;
         }
 
+        // Cooldown (per-symbol)
         {
-            let state = self.state.lock().unwrap();
-            if current_bar.saturating_sub(state.last_trade_bar) < self.config.cooldown_bars {
+            let (last_trade_bar, _, _) = self.get_symbol_state(ctx.symbol);
+            if current_bar.saturating_sub(last_trade_bar) < self.config.cooldown_bars {
                 return orders;
             }
         }
@@ -283,11 +304,8 @@ impl Strategy for QuickFlipStrategy {
             return orders;
         }
 
-        {
-            let mut state = self.state.lock().unwrap();
-            state.range_high = range_high;
-            state.range_low = range_low;
-        }
+        // Update per-symbol range state
+        self.update_symbol_state(ctx.symbol, None, Some(range_high), Some(range_low));
 
         let curr = &ctx.candles[ctx.candles.len() - 1];
         let prev = &ctx.candles[ctx.candles.len() - 2];
@@ -298,8 +316,7 @@ impl Strategy for QuickFlipStrategy {
         let breakout_long =
             curr.close > range_high && Self::is_bullish(curr) && Self::is_strong_candle(curr);
         if breakout_long {
-            let mut state = self.state.lock().unwrap();
-            state.last_trade_bar = current_bar;
+            self.update_symbol_state(ctx.symbol, Some(current_bar), None, None);
             orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
             return orders;
         }
@@ -308,8 +325,7 @@ impl Strategy for QuickFlipStrategy {
         let breakout_short =
             curr.close < range_low && Self::is_bearish(curr) && Self::is_strong_candle(curr);
         if breakout_short {
-            let mut state = self.state.lock().unwrap();
-            state.last_trade_bar = current_bar;
+            self.update_symbol_state(ctx.symbol, Some(current_bar), None, None);
             orders.push(OrderRequest::market_sell(ctx.symbol.clone(), 1.0));
             return orders;
         }
@@ -318,8 +334,7 @@ impl Strategy for QuickFlipStrategy {
         let touch_threshold = range_size * 0.30;
         let near_low = curr.close <= range_low + touch_threshold || curr.low <= range_low;
         if near_low && Self::is_bullish_pattern(prev, curr) {
-            let mut state = self.state.lock().unwrap();
-            state.last_trade_bar = current_bar;
+            self.update_symbol_state(ctx.symbol, Some(current_bar), None, None);
             orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
             return orders;
         }
@@ -327,28 +342,32 @@ impl Strategy for QuickFlipStrategy {
         // REVERSAL SHORT: Price near/above range high, bearish candle
         let near_high = curr.close >= range_high - touch_threshold || curr.high >= range_high;
         if near_high && Self::is_bearish_pattern(prev, curr) {
-            let mut state = self.state.lock().unwrap();
-            state.last_trade_bar = current_bar;
+            self.update_symbol_state(ctx.symbol, Some(current_bar), None, None);
             orders.push(OrderRequest::market_sell(ctx.symbol.clone(), 1.0));
         }
 
         orders
     }
 
-    fn calculate_stop_loss(&self, candles: &[Candle], _entry_price: f64) -> f64 {
-        let state = self.state.lock().unwrap();
-        let atr_val = Self::compute_atr(candles, self.config.atr_period).unwrap_or(1.0);
-        state.range_low - atr_val * 0.5
+    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
+        let atr_val =
+            Self::compute_atr(candles, self.config.atr_period).unwrap_or(entry_price * 0.02);
+        let stop_distance = atr_val * 1.5;
+
+        match side {
+            Side::Buy => entry_price - stop_distance,
+            Side::Sell => entry_price + stop_distance,
+        }
     }
 
-    fn calculate_take_profit(&self, _candles: &[Candle], entry_price: f64) -> f64 {
-        let state = self.state.lock().unwrap();
-        let range_mid = (state.range_high + state.range_low) / 2.0;
+    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
+        let atr_val =
+            Self::compute_atr(candles, self.config.atr_period).unwrap_or(entry_price * 0.02);
+        let target_distance = atr_val * 2.0;
 
-        if self.config.conservative_target {
-            entry_price + (range_mid - entry_price) * 0.5
-        } else {
-            state.range_high
+        match side {
+            Side::Buy => entry_price + target_distance,
+            Side::Sell => entry_price - target_distance,
         }
     }
 
@@ -356,24 +375,24 @@ impl Strategy for QuickFlipStrategy {
         &self,
         position: &Position,
         current_price: f64,
-        _candles: &[Candle],
+        candles: &[Candle],
     ) -> Option<f64> {
-        let state = self.state.lock().unwrap();
-        let range_high = state.range_high;
-        let range_low = state.range_low;
-        let mid = (range_high + range_low) / 2.0;
+        // Use ATR-based trailing since we don't have per-symbol context here
+        let atr_val =
+            Self::compute_atr(candles, self.config.atr_period).unwrap_or(current_price * 0.02);
+        let mid_target = position.average_entry_price + atr_val;
 
-        // Move to breakeven when price reaches mid-point or re-enters range
+        // Move to breakeven when price reaches mid-point
         match position.side {
             Side::Buy => {
-                if current_price >= mid {
+                if current_price >= mid_target {
                     Some(position.average_entry_price)
                 } else {
                     None
                 }
             }
             Side::Sell => {
-                if current_price <= mid {
+                if current_price <= position.average_entry_price - atr_val {
                     Some(position.average_entry_price)
                 } else {
                     None
@@ -387,6 +406,6 @@ impl Strategy for QuickFlipStrategy {
     }
 
     fn init(&mut self) {
-        *self.state.lock().unwrap() = State::default();
+        self.symbol_states.lock().unwrap().clear();
     }
 }

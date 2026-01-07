@@ -17,7 +17,7 @@ pub mod regime_grid;
 pub mod volatility_regime;
 
 use crate::oms::{Fill, Order, OrderRequest, Position, StrategyContext};
-use crate::{Candle, Config, Trade};
+use crate::{Candle, Config, Side, Trade};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
@@ -30,9 +30,37 @@ use std::sync::{OnceLock, RwLock};
 ///
 /// This is the new OMS-based interface where strategies generate orders
 /// instead of signals.
+///
+/// # Per-Symbol Isolation
+///
+/// Professional trading systems require **per-symbol strategy instances** to ensure
+/// indicator state is isolated across instruments. The `clone_boxed()` method enables
+/// the backtester/live engine to create independent strategy instances per symbol.
+///
+/// This architecture provides:
+/// - **State Isolation**: No risk of indicator pollution across symbols
+/// - **Clean Lifecycle**: Each symbol can be started/stopped independently
+/// - **Natural Parallelization**: Strategies can run on separate threads
+/// - **Live Trading Ready**: Same architecture for backtest and production
 pub trait Strategy: Send + Sync {
     /// Strategy identifier (must match config's strategy_name)
     fn name(&self) -> &'static str;
+
+    /// Create a fresh clone of this strategy instance.
+    ///
+    /// This is critical for per-symbol isolation in multi-symbol trading.
+    /// Each symbol should have its own strategy instance with independent
+    /// indicator state.
+    ///
+    /// # Professional Trading Pattern
+    /// ```ignore
+    /// // Backtester creates per-symbol instances:
+    /// for symbol in symbols {
+    ///     let strategy_instance = template_strategy.clone_boxed();
+    ///     symbol_strategies.insert(symbol, strategy_instance);
+    /// }
+    /// ```
+    fn clone_boxed(&self) -> Box<dyn Strategy>;
 
     /// Declare required timeframes (default: empty = use primary only)
     /// Return vector of timeframes this strategy needs (e.g., vec!["1d", "15m"])
@@ -48,10 +76,14 @@ pub trait Strategy: Send + Sync {
     fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest>;
 
     /// Calculate stop loss price for entry
-    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64;
+    /// For Buy positions: stop is below entry (sell to cut loss)
+    /// For Sell positions: stop is above entry (buy to cut loss)
+    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64;
 
     /// Calculate take profit price for entry
-    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64) -> f64;
+    /// For Buy positions: target is above entry (sell for profit)
+    /// For Sell positions: target is below entry (buy for profit)
+    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64;
 
     /// Update trailing stop if applicable
     fn update_trailing_stop(
