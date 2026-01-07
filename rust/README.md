@@ -63,29 +63,26 @@ trait Strategy {
 ## Verified Backtest Results
 
 All strategies backtested with **₹100,000 initial capital** on crypto pairs (BTC, ETH, SOL, BNB, XRP) with INR.
+Data period: 2022-01 to 2026-01 (~1493 daily candles per symbol).
 
-### With Risk Management Disabled (`--no-risk-limits`)
+### Production Backtest Results (Default Risk Management)
 
-| Strategy | Timeframe | Sharpe | Return | Win Rate | Trades | Max DD |
-|----------|-----------|--------|--------|----------|--------|--------|
-| **volatility_regime** | 1d | 0.53 | 55.36% | 44.9% | 49 | 13.61% |
-| **momentum_scalper** | 1d | 0.29 | 46.15% | 44.24% | 269 | 31.38% |
-| **range_breakout** | 1d | 0.35 | 34.57% | 37.18% | 156 | 5.39% |
-| **quick_flip** | 1d (MTF) | 0.43 | 44.18% | 22.95% | 61 | 67.39% |
+| Strategy | Timeframe | Sharpe | Return | Post-Tax | Win Rate | Trades | Max DD | Profit Factor |
+|----------|-----------|--------|--------|----------|----------|--------|--------|---------------|
+| **volatility_regime** | 1d | 0.35 | 42.38% | 29.66% | 52.00% | 50 | 11.92% | 2.04 |
+| **regime_grid** | 1d | 0.30 | 31.16% | 22.79% | 82.46% | 57 | 38.34% | 3.73 |
+| **range_breakout** | 1d | -0.17 | 15.01% | 10.51% | 36.15% | 130 | 7.62% | 1.70 |
+| **momentum_scalper** | 1d | -1.60 | -28.35% | -28.35% | 6.25% | 16 | 29.65% | 0.11 |
 
-### With Production Risk Management (Default)
+**Key Observations:**
+- **volatility_regime**: Best risk-adjusted returns with moderate drawdown, consistent monthly win rate (50%)
+- **regime_grid**: Highest win rate (82%) but with larger drawdown risk; excellent profit factor
+- **range_breakout**: Low drawdown (7.62%) but many small trades with lower win rate
+- **momentum_scalper**: Underperforming with current config; needs parameter optimization
 
-| Strategy | Timeframe | Sharpe | Return | Win Rate | Trades | Max DD | Notes |
-|----------|-----------|--------|--------|----------|--------|--------|-------|
-| **volatility_regime** | 1d | 0.30 | 41.22% | 60.0% | 45 | 20.86% | Early exit threshold reduces returns |
-| **momentum_scalper** | 1d | -1.29 | -25.36% | 10.53% | 19 | 26.46% | Risk manager blocks 93% of trades |
-| **range_breakout** | 1d | -1.64 | -9.16% | 13.54% | 96 | 10.32% | Long-only struggles in bear periods |
+**Tax Calculation**: 30% flat tax on profits (Indian crypto tax), no loss offset allowed.
 
-**Risk Management Impact**: The default risk parameters (max portfolio heat 0.4, max position 0.25, consecutive loss limits) 
-significantly reduce trade frequency and returns to protect capital during drawdowns. For backtesting-only comparisons, 
-use `--no-risk-limits`. For live trading, tune risk parameters in config files to balance safety vs performance.
-
-*Results verified on 2026-01-05 after OMS implementation.*
+*Results verified on 2026-01-07 using OMS-based backtest engine.*
 
 ## Features
 
@@ -186,18 +183,20 @@ cargo run -- backtest -v
 - Yearly totals and monthly win rate statistics
 - Easy visualization of seasonal patterns and consistency
 
-Example output:
+Example output (volatility_regime strategy):
 ```
 ========================================================================================================================
 MONTHLY P&L MATRIX (₹)
 ========================================================================================================================
   Year │        Jan │        Feb │        Mar │        Apr │        May │        Jun │        Jul │        Aug │        Sep │        Oct │        Nov │        Dec │        Total
 ------------------------------------------------------------------------------------------------------------------------
-  2023 │     910.62 │    -484.15 │    1562.64 │            │            │            │            │            │    -651.66 │    -536.11 │    2331.11 │            │      3132.45
-  2024 │            │            │            │            │            │            │            │            │    1245.24 │            │     189.38 │            │      1434.63
+  2022 │            │   -2779.91 │            │    -586.50 │            │            │            │            │            │            │    2541.41 │   -3493.75 │     -4318.76
+  2023 │            │     547.06 │   -4885.68 │    2809.58 │    -662.67 │            │    -222.71 │            │            │    5813.94 │    4939.78 │   13462.24 │     21801.54
+  2024 │     604.20 │    8302.44 │   15456.90 │   -4906.20 │    1726.33 │    -347.22 │   -4772.28 │    -387.07 │            │            │    3171.42 │   -2489.58 │     16358.94
+  2025 │            │            │            │            │   -1805.17 │   -2347.70 │    1429.88 │    -745.44 │    9009.92 │    2994.66 │            │            │      8536.15
 ========================================================================================================================
-Total P&L: ₹4567.08
-Monthly Win Rate: 66.7% (6 profitable / 3 losing / 9 total months)
+Total P&L: ₹42377.87
+Monthly Win Rate: 50.0% (14 profitable / 14 losing / 28 total months)
 ========================================================================================================================
 ```
 
@@ -502,12 +501,13 @@ src/
 
 ## Available Strategies
 
-| Strategy | Description | Best Timeframe | Sharpe | Key Feature |
-|----------|-------------|----------------|--------|-------------|
-| `volatility_regime` | ATR-based regime classification | 1d | 0.55 | Volatility clustering |
-| `momentum_scalper` | EMA crossover momentum | 1d | 0.46 | Trend following |
-| `range_breakout` | N-bar high/low breakout | 1d | 0.29 | Breakout trading |
-| `quick_flip` | Range reversal/breakout | 1d | 0.26 | Pattern recognition |
+| Strategy | Description | Best Timeframe | Sharpe | Max DD | Key Feature |
+|----------|-------------|----------------|--------|--------|-------------|
+| `volatility_regime` | ATR-based regime classification | 1d | 0.35 | 11.92% | Volatility clustering |
+| `regime_grid` | Grid trading with regime adaptation | 1d | 0.30 | 38.34% | High win rate (82%) |
+| `range_breakout` | N-bar high/low breakout | 1d | -0.17 | 7.62% | Lowest drawdown |
+| `momentum_scalper` | EMA crossover momentum | 1d | -1.60 | 29.65% | Needs optimization |
+| `quick_flip` | Range reversal/breakout | 1d | N/A | N/A | Pattern recognition |
 
 ### Quick Flip Strategy
 

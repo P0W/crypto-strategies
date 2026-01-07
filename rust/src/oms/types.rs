@@ -274,6 +274,14 @@ impl Position {
         };
     }
 
+    /// Calculate unrealized P&L at given price (matches main branch API)
+    pub fn unrealized_pnl(&self, current_price: f64) -> f64 {
+        match self.side {
+            Side::Buy => (current_price - self.average_entry_price) * self.quantity,
+            Side::Sell => (self.average_entry_price - current_price) * self.quantity,
+        }
+    }
+
     /// Get current value of position
     pub fn current_value(&self, current_price: f64) -> f64 {
         self.quantity * current_price

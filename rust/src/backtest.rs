@@ -130,6 +130,9 @@ impl Backtester {
         // Format: (stop_price, target_price)
         let mut entry_levels: HashMap<Symbol, (f64, f64)> = HashMap::new();
 
+        // Track trailing stops per symbol (matching main branch position.trailing_stop)
+        let mut trailing_stops: HashMap<Symbol, f64> = HashMap::new();
+
         // Initialize orderbooks for each symbol
         for (symbol, _) in &aligned {
             orderbooks.insert(symbol.clone(), OrderBook::new());
@@ -257,6 +260,7 @@ impl Backtester {
 
                                             // Clear cached entry levels for closed position
                                             entry_levels.remove(&symbol);
+                                            trailing_stops.remove(&symbol);
 
                                             trades.push(trade.clone());
                                             self.strategy.on_trade_closed(&trade);
@@ -347,13 +351,20 @@ impl Backtester {
                                 } else {
                                     None
                                 };
+                                let prev_side = prev_pos.as_ref().map(|p| p.side);
 
                                 // Update position
                                 position_manager.add_fill(fill.clone(), symbol.clone(), order.side);
 
-                                // Check if position closed (had position before, none after)
+                                // Check if position closed or side changed (reversal)
                                 let has_position_after =
                                     position_manager.get_position(symbol).is_some();
+                                let new_side =
+                                    position_manager.get_position(symbol).map(|p| p.side);
+                                let side_changed = match (prev_side, new_side) {
+                                    (Some(prev), Some(new)) => prev != new,
+                                    _ => false,
+                                };
 
                                 // NEW POSITION: Set risk_amount for portfolio heat calculation
                                 if !had_position_before && has_position_after {
@@ -375,8 +386,8 @@ impl Backtester {
                                     prev_pos.as_ref().map(|p| p.quantity).unwrap_or(0.0)
                                 );
 
-                                if had_position_before && !has_position_after {
-                                    // Position just closed - create trade
+                                if had_position_before && (!has_position_after || side_changed) {
+                                    // Position just closed or side reversed - create trade
                                     if let Some(closed_pos) = prev_pos {
                                         let trade = self.create_trade_from_position(
                                             &closed_pos,
@@ -392,14 +403,16 @@ impl Backtester {
                                         }
 
                                         tracing::debug!(
-                                            "{} TRADE CLOSED {} PnL={:.2}",
+                                            "{} TRADE CLOSED {} (side_changed={}) PnL={:.2}",
                                             candle.datetime.format("%Y-%m-%d"),
                                             symbol,
+                                            side_changed,
                                             trade.net_pnl
                                         );
 
-                                        // Clear cached entry levels for closed position
+                                        // Clear cached entry levels for closed/reversed position
                                         entry_levels.remove(symbol);
+                                        trailing_stops.remove(symbol);
 
                                         // Notify strategy
                                         self.strategy.on_trade_closed(&trade);
@@ -483,16 +496,20 @@ impl Backtester {
                                     current_slice
                                 }
                             };
+
                             let stop = self
                                 .strategy
-                                .calculate_stop_loss(entry_slice, pos.average_entry_price);
+                                .calculate_stop_loss(entry_slice, pos.average_entry_price, pos.side);
                             let target = self
                                 .strategy
-                                .calculate_take_profit(entry_slice, pos.average_entry_price);
+                                .calculate_take_profit(entry_slice, pos.average_entry_price, pos.side);
+
                             tracing::debug!(
-                                "{} {} ENTRY LEVELS CACHED: stop={:.4} target={:.4}",
+                                "{} {} {:?} ENTRY LEVELS CACHED: entry={:.4} stop={:.4} target={:.4}",
                                 pos.first_entry_time.format("%Y-%m-%d"),
                                 symbol,
+                                pos.side,
+                                pos.average_entry_price,
                                 stop,
                                 target
                             );
@@ -511,9 +528,31 @@ impl Backtester {
                         candle.high
                     );
 
+                    // Match main branch: use trailing stop if set, otherwise check for new trailing
+                    // Main branch stores trailing_stop in position and uses:
+                    //   active_stop = trailing_stop.unwrap_or(stop_price)
+                    // We emulate this with a HashMap
+                    let new_trailing =
+                        self.strategy
+                            .update_trailing_stop(pos, price, current_slice);
+
+                    // If strategy returns a new trailing stop, update our stored value
+                    if let Some(new_stop) = new_trailing {
+                        let current_stored = trailing_stops.get(symbol).copied();
+                        let best_stop = match current_stored {
+                            Some(stored) => new_stop.max(stored), // Never lower the trailing stop
+                            None => new_stop,
+                        };
+                        trailing_stops.insert(symbol.clone(), best_stop);
+                    }
+
+                    // Use stored trailing stop if set, otherwise initial stop
+                    let active_stop = trailing_stops.get(symbol).copied().unwrap_or(stop_price);
+
+                    // Match main branch: only check close price for stops
                     let stopped = match pos.side {
-                        Side::Buy => price <= stop_price || candle.low <= stop_price,
-                        Side::Sell => price >= stop_price || candle.high >= stop_price,
+                        Side::Buy => price <= active_stop,
+                        Side::Sell => price >= active_stop,
                     };
 
                     let target_hit = match pos.side {
@@ -522,8 +561,12 @@ impl Backtester {
                     };
 
                     if stopped || target_hit {
-                        let reason = if stopped { "Stop" } else { "Target" };
-                        let trigger_price = if stopped { stop_price } else { target_price };
+                        let reason = if target_hit { "Target" } else { "Stop" };
+                        let trigger_price = if target_hit {
+                            target_price
+                        } else {
+                            active_stop
+                        };
 
                         // Create synthetic order for stop/target execution
                         let mut close_order = Order::new(
@@ -599,10 +642,12 @@ impl Backtester {
                         );
 
                         // Execute immediate fill with slippage
-                        let slippage_factor = if pos.side == Side::Buy {
-                            1.0 - self.config.exchange.assumed_slippage
-                        } else {
-                            1.0 + self.config.exchange.assumed_slippage
+                        // Slippage should make the execution price WORSE for the trader
+                        // When SELLING (closing long): slippage reduces the sell price
+                        // When BUYING (closing short): slippage increases the buy price
+                        let slippage_factor = match close_order.side {
+                            Side::Sell => 1.0 - self.config.exchange.assumed_slippage,
+                            Side::Buy => 1.0 + self.config.exchange.assumed_slippage,
                         };
 
                         let fill = self.execution_engine.execute_fill(
@@ -618,16 +663,36 @@ impl Backtester {
                             Side::Sell => cash += fill.price * fill.quantity - fill.commission,
                         }
 
+                        // Remember the original position side before we update
+                        let original_side = pos.side;
+
                         // Update position manager
                         position_manager.add_fill(fill.clone(), symbol.clone(), close_order.side);
 
-                        // Record trade
-                        if position_manager.get_position(symbol).is_none() {
-                            // CRITICAL: Clear closed position from manager to prevent P&L accumulation
-                            position_manager.close_position(symbol);
+                        // Check if position closed OR if side changed (reversal)
+                        let position_closed = position_manager.get_position(symbol).is_none();
+                        let side_changed = position_manager
+                            .get_position(symbol)
+                            .map(|p| p.side != original_side)
+                            .unwrap_or(false);
 
-                            // Clear cached entry levels for closed position
+                        // Record trade if position closed or reversed
+                        if position_closed || side_changed {
+                            // Clear cached entry levels - position either closed or side changed
+                            tracing::debug!(
+                                "{} {} CLEARING entry_levels cache (closed={}, reversed={})",
+                                candle.datetime.format("%Y-%m-%d"),
+                                symbol,
+                                position_closed,
+                                side_changed
+                            );
                             entry_levels.remove(symbol);
+                            trailing_stops.remove(symbol);
+
+                            if position_closed {
+                                // CRITICAL: Clear closed position from manager to prevent P&L accumulation
+                                position_manager.close_position(symbol);
+                            }
 
                             let trade = self.create_trade_from_position(
                                 pos, // Use the cloned position data
@@ -660,108 +725,7 @@ impl Backtester {
                         continue;
                     }
 
-                    // Check trailing stop
-                    if let Some(new_stop) =
-                        self.strategy
-                            .update_trailing_stop(pos, price, current_slice)
-                    {
-                        let trailing_stopped = match pos.side {
-                            Side::Buy => price <= new_stop,
-                            Side::Sell => price >= new_stop,
-                        };
-
-                        if trailing_stopped {
-                            // Determine execution price (handle gaps)
-                            let exec_price = match pos.side {
-                                Side::Buy => {
-                                    if candle.open < new_stop {
-                                        candle.open
-                                    } else {
-                                        new_stop
-                                    }
-                                }
-                                Side::Sell => {
-                                    if candle.open > new_stop {
-                                        candle.open
-                                    } else {
-                                        new_stop
-                                    }
-                                }
-                            };
-
-                            let mut close_order = Order::new(
-                                symbol.clone(),
-                                match pos.side {
-                                    Side::Buy => Side::Sell,
-                                    Side::Sell => Side::Buy,
-                                },
-                                crate::oms::types::OrderType::Market,
-                                pos.quantity,
-                                None,
-                                None,
-                                crate::oms::types::TimeInForce::GTC,
-                                Some("TrailingStop".to_string()),
-                            );
-
-                            let slippage_factor = if pos.side == Side::Buy {
-                                1.0 - self.config.exchange.assumed_slippage
-                            } else {
-                                1.0 + self.config.exchange.assumed_slippage
-                            };
-
-                            let fill = self.execution_engine.execute_fill(
-                                &mut close_order,
-                                exec_price * slippage_factor,
-                                false,
-                                candle.datetime,
-                            );
-
-                            match close_order.side {
-                                Side::Buy => cash -= fill.price * fill.quantity + fill.commission,
-                                Side::Sell => cash += fill.price * fill.quantity - fill.commission,
-                            }
-
-                            position_manager.add_fill(
-                                fill.clone(),
-                                symbol.clone(),
-                                close_order.side,
-                            );
-
-                            if position_manager.get_position(symbol).is_none() {
-                                // CRITICAL: Clear closed position from manager to prevent P&L accumulation
-                                position_manager.close_position(symbol);
-
-                                // Clear cached entry levels for closed position
-                                entry_levels.remove(symbol);
-
-                                let trade = self.create_trade_from_position(
-                                    pos,
-                                    fill.price,
-                                    candle.datetime,
-                                );
-
-                                if trade.net_pnl > 0.0 {
-                                    self.risk_manager.record_win();
-                                } else {
-                                    self.risk_manager.record_loss();
-                                }
-
-                                self.strategy.on_trade_closed(&trade);
-                                trades.push(trade);
-                            }
-
-                            tracing::debug!(
-                                "{} {} trailing stop @ {:.2} PnL={:.2}",
-                                candle.datetime.format("%Y-%m-%d"),
-                                symbol,
-                                fill.price,
-                                trades.last().map(|t| t.net_pnl).unwrap_or(0.0)
-                            );
-
-                            self.strategy.on_order_filled(&fill, pos);
-                            continue;
-                        }
-                    }
+                    // Trailing stop is now handled above via active_stop
                 }
 
                 // Build strategy context
@@ -867,7 +831,8 @@ impl Backtester {
 
                         let quantity = self.risk_manager.calculate_position_size_with_regime(
                             price,
-                            self.strategy.calculate_stop_loss(current_slice, price),
+                            self.strategy
+                                .calculate_stop_loss(current_slice, price, order.side),
                             &all_positions,
                             regime_score,
                         );
@@ -888,8 +853,16 @@ impl Backtester {
                         // NOTE: Only pre-cache if T+1 execution is enabled, otherwise let the
                         // lazy calculation handle it at position creation time
                         if self.config.backtest.use_t1_execution {
-                            let stop = self.strategy.calculate_stop_loss(current_slice, price);
-                            let target = self.strategy.calculate_take_profit(current_slice, price);
+                            let stop = self.strategy.calculate_stop_loss(
+                                current_slice,
+                                price,
+                                entry_order.side,
+                            );
+                            let target = self.strategy.calculate_take_profit(
+                                current_slice,
+                                price,
+                                entry_order.side,
+                            );
                             entry_levels.insert(symbol.clone(), (stop, target));
                             tracing::debug!(
                                 "{} {} ENTRY LEVELS PRE-CACHED at signal: stop={:.4} target={:.4}",
@@ -909,23 +882,28 @@ impl Backtester {
                     // For T+1 mode: Queue market ENTRY orders for next bar's OPEN execution
                     // This matches main branch behavior where signals are generated at CLOSE,
                     // but orders execute at next bar's OPEN
+                    // NOTE: Both ENTRY and EXIT orders use T+1 to match main branch
                     if self.config.backtest.use_t1_execution
                         && final_order.order_type == crate::oms::types::OrderType::Market
-                        && is_entry_order
                     {
                         // Convert market order to limit order at next bar's open (will be filled immediately)
                         // Store in orderbook for T+1 execution
                         if let Some(orderbook) = orderbooks.get_mut(symbol) {
                             orderbook.add_order(final_order.clone());
                             tracing::debug!(
-                                "{} T+1 QUEUED: Market {} {} for next bar OPEN",
+                                "{} T+1 QUEUED: Market {} {} for next bar OPEN{}",
                                 candle.datetime.format("%Y-%m-%d"),
                                 if final_order.side == Side::Buy {
                                     "BUY"
                                 } else {
                                     "SELL"
                                 },
-                                symbol
+                                symbol,
+                                if is_entry_order {
+                                    " (ENTRY)"
+                                } else {
+                                    " (EXIT)"
+                                }
                             );
                         }
                         continue;
@@ -1011,6 +989,7 @@ impl Backtester {
 
                                 // Clear cached entry levels for closed position
                                 entry_levels.remove(symbol);
+                                trailing_stops.remove(symbol);
 
                                 tracing::debug!(
                                     "{} TRADE CLOSED {} PnL={:.2} (Strategy Exit)",
@@ -1073,6 +1052,7 @@ impl Backtester {
 
                 // Clear cached entry levels for closed position
                 entry_levels.remove(symbol);
+                trailing_stops.remove(symbol);
 
                 let trade = self.create_trade_from_position(&pos, exit_price, last_candle.datetime);
 

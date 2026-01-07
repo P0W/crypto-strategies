@@ -219,6 +219,12 @@ pub fn align_multi_timeframe_data(
         }
     }
 
+    // CRITICAL: Sort by symbol name for deterministic iteration order
+    // HashMap iteration is non-deterministic, which causes different backtest
+    // results on each run due to symbol processing order affecting capital
+    // allocation, risk manager decisions, and trade execution sequence.
+    aligned.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
+
     aligned
 }
 

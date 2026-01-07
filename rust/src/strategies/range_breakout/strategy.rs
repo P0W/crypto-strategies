@@ -2,25 +2,33 @@
 //!
 //! Entry: Close breaks above highest high of last N bars
 //! Exit: ATR-based stop/target
+//!
+//! Production-grade implementation with per-symbol cooldown tracking.
 
 use crate::indicators::atr;
 use crate::oms::{Fill, OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
-use crate::{Candle, Position, Trade};
+use crate::{Candle, Position, Side, Symbol, Trade};
+use std::collections::HashMap;
 
 use super::config::RangeBreakoutConfig;
 
 pub struct RangeBreakoutStrategy {
     config: RangeBreakoutConfig,
-    cooldown_counter: usize,
+    /// Per-symbol cooldown counters
+    cooldown_counters: HashMap<Symbol, usize>,
 }
 
 impl RangeBreakoutStrategy {
     pub fn new(config: RangeBreakoutConfig) -> Self {
         Self {
             config,
-            cooldown_counter: 0,
+            cooldown_counters: HashMap::new(),
         }
+    }
+
+    fn get_cooldown(&self, symbol: &Symbol) -> usize {
+        *self.cooldown_counters.get(symbol).unwrap_or(&0)
     }
 
     fn get_range_high(&self, candles: &[Candle]) -> Option<f64> {
@@ -65,6 +73,10 @@ impl Strategy for RangeBreakoutStrategy {
         "range_breakout"
     }
 
+    fn clone_boxed(&self) -> Box<dyn Strategy> {
+        Box::new(RangeBreakoutStrategy::new(self.config.clone()))
+    }
+
     fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest> {
         let mut orders = Vec::new();
 
@@ -78,8 +90,8 @@ impl Strategy for RangeBreakoutStrategy {
             return orders;
         }
 
-        // Cooldown
-        if self.cooldown_counter > 0 {
+        // Cooldown (per-symbol)
+        if self.get_cooldown(ctx.symbol) > 0 {
             return orders;
         }
 
@@ -104,7 +116,7 @@ impl Strategy for RangeBreakoutStrategy {
         orders
     }
 
-    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64 {
+    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
         let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
         let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
         let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
@@ -114,11 +126,15 @@ impl Strategy for RangeBreakoutStrategy {
             .last()
             .and_then(|&x| x)
             .unwrap_or(entry_price * 0.02);
+        let stop_distance = self.config.stop_atr * current_atr;
 
-        entry_price - self.config.stop_atr * current_atr
+        match side {
+            Side::Buy => entry_price - stop_distance,
+            Side::Sell => entry_price + stop_distance,
+        }
     }
 
-    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64) -> f64 {
+    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
         let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
         let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
         let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
@@ -128,8 +144,12 @@ impl Strategy for RangeBreakoutStrategy {
             .last()
             .and_then(|&x| x)
             .unwrap_or(entry_price * 0.02);
+        let target_distance = self.config.target_atr * current_atr;
 
-        entry_price + self.config.target_atr * current_atr
+        match side {
+            Side::Buy => entry_price + target_distance,
+            Side::Sell => entry_price - target_distance,
+        }
     }
 
     fn update_trailing_stop(
@@ -146,18 +166,22 @@ impl Strategy for RangeBreakoutStrategy {
         // Cooldown should only be set when trade closes (see on_trade_closed)
     }
 
-    fn on_trade_closed(&mut self, _trade: &Trade) {
-        // Set cooldown after trade closes (matches main branch behavior)
-        self.cooldown_counter = self.config.cooldown;
+    fn on_trade_closed(&mut self, trade: &Trade) {
+        // Set per-symbol cooldown after trade closes
+        self.cooldown_counters
+            .insert(trade.symbol.clone(), self.config.cooldown);
     }
 
-    fn on_bar(&mut self, _ctx: &StrategyContext) {
-        if self.cooldown_counter > 0 {
-            self.cooldown_counter -= 1;
+    fn on_bar(&mut self, ctx: &StrategyContext) {
+        // Decrement per-symbol cooldown
+        if let Some(counter) = self.cooldown_counters.get_mut(ctx.symbol) {
+            if *counter > 0 {
+                *counter -= 1;
+            }
         }
     }
 
     fn init(&mut self) {
-        self.cooldown_counter = 0;
+        self.cooldown_counters.clear();
     }
 }
