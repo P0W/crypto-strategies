@@ -2,9 +2,7 @@
   "backtest": {
     "commission": 0.001,
     "data_dir": "../data",
-    "end_date": "2025-12-31",
-    "results_dir": "../results",
-    "start_date": "2023-01-01"
+    "results_dir": "../results"
   },
   "exchange": {
     "assumed_slippage": 0.001,
@@ -15,11 +13,11 @@
   "grid": {
     "_optimization": [
       {
-        "calmar_ratio": 1.84,
-        "expectancy": 224.86,
-        "max_drawdown": 5.1,
-        "optimized_at": "2026-01-03 08:06:00",
-        "sharpe_ratio": 0.29,
+        "calmar_ratio": 1.09,
+        "expectancy": 799.46,
+        "max_drawdown": 15.9,
+        "optimized_at": "2026-01-08 13:22:37",
+        "sharpe_ratio": 0.71,
         "symbols": [
           "BTCINR",
           "ETHINR",
@@ -27,49 +25,51 @@
           "BNBINR",
           "XRPINR"
         ],
-        "total_return": 31.2,
-        "total_trades": 146,
-        "win_rate": 38.0
+        "total_return": 92.7,
+        "total_trades": 116,
+        "win_rate": 48.3
       }
     ],
-    "atr_period": [
-      10,
-      14,
-      20
-    ],
-    "cooldown": [
-      1,
-      2,
-      3
-    ],
     "lookback": [
-      10,
-      15,
       20,
-      25,
-      30
+      30,
+      40
     ],
     "stop_atr": [
-      0.5,
       1.0,
       1.5,
       2.0
     ],
     "target_atr": [
+      3.0,
+      4.0,
+      5.0
+    ],
+    "trailing_atr": [
       1.5,
       2.0,
-      2.5,
-      3.0
+      2.5
+    ],
+    "trend_ema": [
+      0,
+      30,
+      50,
+      100
     ]
   },
   "strategy": {
-    "atr_period": 20,
+    "adx_period": 14,
+    "atr_period": 14,
     "cooldown": 3,
     "lookback": 30,
+    "min_adx": 0,
     "name": "range_breakout",
-    "stop_atr": 0.5,
-    "target_atr": 3,
-    "timeframe": "1d"
+    "stop_atr": 1,
+    "target_atr": 5,
+    "timeframe": "1d",
+    "trailing_atr": 1.5,
+    "trend_ema": 0,
+    "use_trailing": true
   },
   "tax": {
     "loss_offset_allowed": false,
@@ -79,16 +79,16 @@
   "trading": {
     "consecutive_loss_limit": 3,
     "consecutive_loss_multiplier": 0.75,
-    "drawdown_critical": 0.08,
+    "drawdown_critical": 0.15,
     "drawdown_critical_multiplier": 0.25,
-    "drawdown_warning": 0.05,
+    "drawdown_warning": 0.1,
     "drawdown_warning_multiplier": 0.5,
     "initial_capital": 100000,
-    "max_drawdown": 0.1,
-    "max_portfolio_heat": 0.15,
-    "max_position_pct": 0.1,
-    "max_positions": 3,
-    "risk_per_trade": 0.05,
+    "max_drawdown": 0.2,
+    "max_portfolio_heat": 0.3,
+    "max_position_pct": 0.2,
+    "max_positions": 5,
+    "risk_per_trade": 0.15,
     "symbols": [
       "BTCINR",
       "ETHINR",
