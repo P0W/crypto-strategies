@@ -44,7 +44,7 @@ pub fn validate_symbol_names(symbols: &[Symbol]) -> Option<String> {
         .filter(|s| !s.as_str().to_uppercase().ends_with("INR"))
         .map(|s| s.as_str())
         .collect();
-    
+
     if invalid.is_empty() {
         None
     } else {
@@ -827,7 +827,7 @@ fn ensure_data_for_range_sync(
     let data_dir = data_dir.as_ref().to_path_buf();
     let symbols = symbols.to_vec();
     let timeframes = timeframes.to_vec();
-    
+
     // Check if we're already in a Tokio runtime
     if tokio::runtime::Handle::try_current().is_ok() {
         // We're inside a runtime - use spawn_blocking to avoid nested runtime panic
@@ -835,15 +835,25 @@ fn ensure_data_for_range_sync(
             s.spawn(|| {
                 let rt = tokio::runtime::Runtime::new()?;
                 rt.block_on(ensure_data_for_range(
-                    &data_dir, &symbols, &timeframes, start, end,
+                    &data_dir,
+                    &symbols,
+                    &timeframes,
+                    start,
+                    end,
                 ))
-            }).join().unwrap()
+            })
+            .join()
+            .unwrap()
         })
     } else {
         // No runtime - create one
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(ensure_data_for_range(
-            data_dir, &symbols, &timeframes, start, end,
+            data_dir,
+            &symbols,
+            &timeframes,
+            start,
+            end,
         ))
     }
 }
