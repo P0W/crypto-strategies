@@ -121,22 +121,30 @@ Data period: 2022-01 to 2026-01 (~1493 daily candles per symbol).
 
 ### Production Backtest Results (Optimized Parameters)
 
-| Strategy | Timeframe | Sharpe | Return | Post-Tax | Win Rate | Trades | Max DD | Profit Factor |
-|----------|-----------|--------|--------|----------|----------|--------|--------|---------------|
-| **quick_flip** | 1d | 1.08 | 166.08% | 116.31% | 56.55% | 145 | 13.54% | 2.73 |
-| **momentum_scalper** | 1d | 0.55 | 104.13% | 72.95% | 45.65% | 276 | 24.69% | 1.41 |
-| **range_breakout** | 1d | 0.71 | 92.74% | 64.92% | 48.28% | 116 | 15.93% | 2.44 |
-| **volatility_regime_4h** | 4h | -0.36 | 92.25% | 64.59% | 54.09% | 281 | 18.50% | 1.72 |
-| **volatility_regime** | 1d | 0.35 | 42.38% | 29.66% | 52.00% | 50 | 11.92% | 2.04 |
-| **regime_grid** | 1d | 0.30 | 31.16% | 22.79% | 82.46% | 57 | 38.34% | 3.73 |
+| Strategy | Timeframe | Sharpe | Calmar | Return | Post-Tax | Win Rate | Trades | Max DD | Profit Factor |
+|----------|-----------|--------|--------|--------|----------|----------|--------|--------|---------------|
+| **quick_flip** | 1d | 1.08 | 2.00 | 166.08% | 116.31% | 56.55% | 145 | 13.54% | 2.73 |
+| **momentum_scalper** | 1d | 0.55 | 0.77 | 104.13% | 72.95% | 45.65% | 276 | 24.69% | 1.41 |
+| **range_breakout** | 1d | 0.71 | 1.09 | 92.74% | 64.92% | 48.28% | 116 | 15.93% | 2.44 |
+| **volatility_regime_4h** | 4h | -0.36 | 0.94 | 92.25% | 64.59% | 54.09% | 281 | 18.50% | 1.72 |
+| **volatility_regime** | 1d | 0.35 | 0.76 | 42.38% | 29.66% | 52.00% | 50 | 11.92% | 2.04 |
+| **regime_grid** | 1d | 0.24 | 0.43 | 39.76% | 28.15% | 88.00% | 25 | 19.66% | 250.79 |
 
 **Key Observations:**
-- **quick_flip**: Best overall performer with Sharpe 1.08, 166% return, and 13.5% max DD. Long-only mode with tight stop (1 ATR), wide target (6 ATR)
+- **quick_flip**: Best overall performer with Sharpe 1.08, Calmar 2.00, 166% return, and 13.5% max DD. Long-only mode with tight stop (1 ATR), wide target (6 ATR)
 - **momentum_scalper**: Good returns (104%) with optimized EMA(13/21), tight stop (1.5 ATR), wide target (4 ATR), max hold 30 bars
-- **range_breakout**: Solid risk-adjusted returns with 48% win rate but 2.44 profit factor (winners > losers)
+- **range_breakout**: Solid risk-adjusted returns (Calmar 1.09) with 48% win rate but 2.44 profit factor (winners > losers)
 - **volatility_regime_4h**: High trade count (281) on 4h timeframe, decent return but negative Sharpe due to volatility
-- **volatility_regime**: Conservative with lowest max DD (11.92%), good for risk-averse portfolios
-- **regime_grid**: Highest win rate (82%) but large drawdown (38%); excellent profit factor
+- **volatility_regime**: Most conservative with lowest max DD (11.92%), good for risk-averse portfolios
+- **regime_grid**: Highest win rate (88%) with drawdown protection limiting max DD to ~20%; exceptional profit factor (250.79) due to very few losing trades
+
+### Risk Management Features
+
+**Portfolio-Level Drawdown Protection (regime_grid):**
+- Real-time drawdown monitoring against configured `max_drawdown_pct` limit
+- Automatic position closure when drawdown exceeds threshold
+- Cooldown mechanism prevents whipsawing - resumes only after 95% equity recovery
+- Position exposure limits (95% of `max_capital_usage_pct`)
 
 **Config Files:** All configs are in `../configs/` folder (e.g., `../configs/quick_flip_config.json`)
 
