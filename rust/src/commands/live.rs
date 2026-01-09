@@ -787,6 +787,7 @@ impl LiveTrader {
             open_orders: &open_orders_vec,
             cash_available,
             equity,
+            peak_equity: self.risk_manager.peak_capital(),
         };
 
         let requests = self.strategy.generate_orders(&ctx);

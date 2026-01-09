@@ -14,6 +14,8 @@ pub struct StrategyContext<'a> {
     pub open_orders: &'a [Order],
     pub cash_available: f64,
     pub equity: f64,
+    /// Peak equity for drawdown calculation
+    pub peak_equity: f64,
 }
 
 impl<'a> StrategyContext<'a> {
@@ -34,6 +36,7 @@ impl<'a> StrategyContext<'a> {
             open_orders,
             cash_available,
             equity,
+            peak_equity: equity,
         }
     }
 
@@ -54,7 +57,14 @@ impl<'a> StrategyContext<'a> {
             open_orders,
             cash_available,
             equity,
+            peak_equity: equity,
         }
+    }
+
+    /// Set peak equity for drawdown calculation
+    pub fn with_peak_equity(mut self, peak: f64) -> Self {
+        self.peak_equity = peak;
+        self
     }
 
     /// Get candles for a specific timeframe (multi-timeframe mode)

@@ -120,6 +120,7 @@ impl Backtester {
         let mut position_manager = PositionManager::new();
         let mut orderbooks: HashMap<Symbol, OrderBook> = HashMap::new();
         let mut cash = self.config.trading.initial_capital;
+        let mut peak_equity = self.config.trading.initial_capital;
 
         // T+1 execution: queue of (symbol, order_id) to execute at next bar's open
         let mut t1_pending: Vec<(Symbol, u64)> = Vec::new();
@@ -770,6 +771,7 @@ impl Backtester {
                         cash,
                         total_value,
                     )
+                    .with_peak_equity(peak_equity)
                 } else {
                     StrategyContext::single_timeframe(
                         symbol,
@@ -779,6 +781,7 @@ impl Backtester {
                         cash,
                         total_value,
                     )
+                    .with_peak_equity(peak_equity)
                 };
 
                 // Notify strategy of new bar (to update counters etc)
@@ -1050,6 +1053,11 @@ impl Backtester {
 
             self.risk_manager.update_capital(total_value);
             equity_curve.push((*current_date, total_value));
+
+            // Update peak equity for drawdown tracking
+            if total_value > peak_equity {
+                peak_equity = total_value;
+            }
         }
 
         // Close remaining positions and convert to trades

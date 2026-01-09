@@ -55,25 +55,31 @@ impl Indicators {
         atr(&high, &low, &close, atr_period).last().and_then(|&x| x)
     }
 }
+use std::sync::RwLock;
 
 /// Grid state tracking
 #[derive(Debug, Clone, Default)]
 struct GridState {
     /// When volatility kill switch was activated (None if not active)
     paused_until: Option<DateTime<Utc>>,
+    /// When drawdown limit was breached (None if not active)
+    /// Strategy will not trade until equity recovers to peak
+    drawdown_breach_time: Option<DateTime<Utc>>,
+    /// The peak equity when drawdown was breached (used for recovery check)
+    drawdown_breach_peak: Option<f64>,
 }
 
 /// Regime-Aware Grid Trading Strategy
 pub struct RegimeGridStrategy {
     config: RegimeGridConfig,
-    state: GridState,
+    state: RwLock<GridState>,
 }
 
 impl RegimeGridStrategy {
     pub fn new(config: RegimeGridConfig) -> Self {
         RegimeGridStrategy {
             config,
-            state: GridState::default(),
+            state: RwLock::new(GridState::default()),
         }
     }
 
@@ -95,7 +101,8 @@ impl RegimeGridStrategy {
 
     /// Check if volatility kill switch is active
     fn is_volatility_paused(&self) -> bool {
-        if let Some(paused_until) = self.state.paused_until {
+        let state = self.state.read().unwrap();
+        if let Some(paused_until) = state.paused_until {
             Utc::now() < paused_until
         } else {
             false
@@ -296,6 +303,47 @@ impl RegimeGridStrategy {
             }
         }
     }
+
+    /// Place sell-only orders when at max exposure (to take profits)
+    fn place_sell_only_orders(
+        &self,
+        ctx: &StrategyContext,
+        current_price: f64,
+        pos: &Position,
+        orders: &mut Vec<OrderRequest>,
+    ) {
+        if pos.quantity <= 0.0 {
+            return;
+        }
+
+        let grid_spacing = current_price * self.config.grid_spacing_pct;
+        let num_sell_levels = 5.min(self.config.max_grids);
+
+        let existing_sell_prices: Vec<f64> = ctx
+            .open_orders
+            .iter()
+            .filter(|o| o.side == Side::Sell && o.limit_price.is_some())
+            .map(|o| o.limit_price.unwrap())
+            .collect();
+
+        for i in 1..=num_sell_levels {
+            let sell_price = current_price + (grid_spacing * i as f64);
+
+            let has_nearby_order = existing_sell_prices
+                .iter()
+                .any(|&p| (p - sell_price).abs() < grid_spacing * 0.2);
+
+            if !has_nearby_order {
+                let sell_qty = pos.quantity / num_sell_levels as f64;
+                if sell_qty > 0.0 {
+                    orders.push(
+                        OrderRequest::limit_sell(ctx.symbol.clone(), sell_qty, sell_price)
+                            .with_client_id(format!("max_exp_sell_{}", i)),
+                    );
+                }
+            }
+        }
+    }
 }
 
 impl Strategy for RegimeGridStrategy {
@@ -322,18 +370,101 @@ impl Strategy for RegimeGridStrategy {
             return orders;
         }
 
-        // 2. Calculate all indicators once
+        // 2. CRITICAL: Check portfolio drawdown with cooldown logic
+        // Ensure peak_equity is never less than current equity (shouldn't happen, but guard against it)
+        let effective_peak = ctx.peak_equity.max(ctx.equity);
+        let current_drawdown = if effective_peak > 0.0 {
+            ((effective_peak - ctx.equity) / effective_peak).max(0.0)
+        } else {
+            0.0
+        };
+
+        // Check if we're in drawdown recovery mode
+        {
+            let state = self.state.read().unwrap();
+            if let Some(breach_peak) = state.drawdown_breach_peak {
+                // Only resume trading when equity recovers to 95% of the breach peak
+                // This prevents whipsawing in/out during volatile recovery periods
+                let recovery_threshold = breach_peak * 0.95;
+                if ctx.equity < recovery_threshold {
+                    // Still in cooldown - only close positions, don't open new ones
+                    if let Some(pos) = ctx.current_position {
+                        match pos.side {
+                            Side::Buy => {
+                                orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity))
+                            }
+                            Side::Sell => {
+                                orders.push(OrderRequest::market_buy(ctx.symbol.clone(), pos.quantity))
+                            }
+                        }
+                    }
+                    return orders;
+                } else {
+                    // Will recover below - need to drop lock first
+                    drop(state);
+                    // Recovered! Clear the breach state
+                    tracing::info!(
+                        "{} Drawdown recovery complete: equity {:.0} >= recovery threshold {:.0}",
+                        ctx.symbol,
+                        ctx.equity,
+                        recovery_threshold
+                    );
+                    let mut state = self.state.write().unwrap();
+                    state.drawdown_breach_time = None;
+                    state.drawdown_breach_peak = None;
+                }
+            }
+        }
+
+        // Check for new drawdown breach
+        if current_drawdown > self.config.max_drawdown_pct {
+            // Only log once when first breaching
+            let should_log = self.state.read().unwrap().drawdown_breach_peak.is_none();
+            if should_log {
+                tracing::warn!(
+                    "{} Drawdown limit hit: {:.1}% > {:.1}% - entering cooldown mode",
+                    ctx.symbol,
+                    current_drawdown * 100.0,
+                    self.config.max_drawdown_pct * 100.0
+                );
+                let mut state = self.state.write().unwrap();
+                state.drawdown_breach_time = Some(Utc::now());
+                state.drawdown_breach_peak = Some(ctx.peak_equity);
+            }
+
+            // Close any open position when drawdown exceeded
+            if let Some(pos) = ctx.current_position {
+                match pos.side {
+                    Side::Buy => {
+                        orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity))
+                    }
+                    Side::Sell => {
+                        orders.push(OrderRequest::market_buy(ctx.symbol.clone(), pos.quantity))
+                    }
+                }
+            }
+            return orders;
+        }
+
+        // 3. Check position exposure limit - don't add more if already at max
+        let current_price = ctx.candles.last().unwrap().close;
+        let position_value = ctx
+            .current_position
+            .map(|p| p.quantity * current_price)
+            .unwrap_or(0.0);
+        let max_position_value = ctx.equity * self.config.max_capital_usage_pct;
+        let at_max_exposure = position_value >= max_position_value * 0.95; // 95% of max
+
+        // 4. Calculate all indicators once
         let ind = Indicators::new(ctx.candles, &self.config);
 
-        // 3. Classify market regime
+        // 5. Classify market regime
         let regime = match self.classify_regime(ctx.candles, &ind) {
             Some(r) => r,
             None => return orders,
         };
 
-        // 4. Apply regime-specific logic with actual grid orders
-        let current_price = ctx.candles.last().unwrap().close;
-
+        // 6. Apply regime-specific logic with actual grid orders
         match regime {
             MarketRegime::Bearish | MarketRegime::HighVolatility => {
                 // Close positions in unfavorable regimes
@@ -351,13 +482,23 @@ impl Strategy for RegimeGridStrategy {
                 orders
             }
             MarketRegime::Sideways => {
-                // Place grid of limit orders around current price
-                self.place_grid_orders(ctx, current_price, &mut orders);
+                // Only place new buy orders if not at max exposure
+                if !at_max_exposure {
+                    self.place_grid_orders(ctx, current_price, &mut orders);
+                } else if let Some(pos) = ctx.current_position {
+                    // At max exposure - only place sell orders to take profit
+                    self.place_sell_only_orders(ctx, current_price, pos, &mut orders);
+                }
                 orders
             }
             MarketRegime::Bullish => {
-                // Modified grid - bias towards buy side
-                self.place_bull_grid_orders(ctx, current_price, &mut orders);
+                // Only place new buy orders if not at max exposure
+                if !at_max_exposure {
+                    self.place_bull_grid_orders(ctx, current_price, &mut orders);
+                } else if let Some(pos) = ctx.current_position {
+                    // At max exposure - only place sell orders to take profit
+                    self.place_sell_only_orders(ctx, current_price, pos, &mut orders);
+                }
                 orders
             }
         }
@@ -431,6 +572,6 @@ impl Strategy for RegimeGridStrategy {
     }
 
     fn init(&mut self) {
-        self.state = GridState::default();
+        *self.state.write().unwrap() = GridState::default();
     }
 }
