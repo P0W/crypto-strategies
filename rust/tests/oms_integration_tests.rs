@@ -132,8 +132,8 @@ fn test_execution_engine_intracandle_fills() {
         volume: 100000.0,
     };
 
-    // Should fill
-    let fill_info = engine.check_fill(&order, &candle);
+    // Should fill (pass None for bar_idx since this is a unit test)
+    let fill_info = engine.check_fill(&order, &candle, None);
     assert!(fill_info.is_some());
 
     if let Some(info) = fill_info {

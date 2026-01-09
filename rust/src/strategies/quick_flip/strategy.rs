@@ -162,18 +162,17 @@ impl Strategy for QuickFlipStrategy {
         // BREAKOUT SHORT: Close breaks below range low
         let short_breakout = current.close < range_low && prev.close >= range_low;
 
-        if long_breakout {
-            if self.config.body_ratio <= 0.0 || self.is_strong_bullish(current) {
-                orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
-                return orders;
-            }
+        if long_breakout && (self.config.body_ratio <= 0.0 || self.is_strong_bullish(current)) {
+            orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
+            return orders;
         }
 
-        if short_breakout && self.config.allow_shorts {
-            if self.config.body_ratio <= 0.0 || self.is_strong_bearish(current) {
-                orders.push(OrderRequest::market_sell(ctx.symbol.clone(), 1.0));
-                return orders;
-            }
+        if short_breakout
+            && self.config.allow_shorts
+            && (self.config.body_ratio <= 0.0 || self.is_strong_bearish(current))
+        {
+            orders.push(OrderRequest::market_sell(ctx.symbol.clone(), 1.0));
+            return orders;
         }
 
         // REVERSAL trades (optional)

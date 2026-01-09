@@ -121,7 +121,7 @@ enum Commands {
     /// Run live trading
     Live {
         /// Path to configuration file
-        #[arg(short, long, default_value = "configs/btc_eth_sol_bnb_xrp_1d.json")]
+        #[arg(short, long, default_value = "../configs/regime_grid_config.json")]
         config: String,
 
         /// Paper trading mode (safe, no real money)
@@ -131,10 +131,6 @@ enum Commands {
         /// Live trading mode (CAUTION - REAL MONEY!)
         #[arg(long)]
         live: bool,
-
-        /// Cycle interval in seconds
-        #[arg(long, default_value = "300")]
-        interval: u64,
 
         /// State database path
         #[arg(long, default_value = "state.db")]
@@ -237,6 +233,13 @@ fn setup_logging(verbose: bool, command_name: &str, file_only: bool) -> Result<(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load environment variables from .env file (checks current dir and parents)
+    // This allows API keys to be stored in .env at project root
+    if let Err(e) = dotenv::dotenv() {
+        // Not an error if .env doesn't exist - keys may be set via environment
+        eprintln!("Note: .env file not found or unreadable: {}", e);
+    }
+
     let cli = Cli::parse();
 
     // Determine command name and whether to use file-only logging
@@ -293,7 +296,6 @@ async fn main() -> Result<()> {
             config,
             paper,
             live,
-            interval: _,
             state_db,
         } => {
             commands::live::run(

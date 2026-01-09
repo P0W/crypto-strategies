@@ -91,15 +91,15 @@ impl RangeBreakoutStrategy {
         if candles.len() < 20 {
             return true;
         }
-        
+
         // Get average volume of last 20 bars (excluding current)
         let start = candles.len().saturating_sub(21);
         let end = candles.len() - 1;
-        let avg_vol: f64 = candles[start..end].iter().map(|c| c.volume).sum::<f64>() 
-            / (end - start) as f64;
-        
+        let avg_vol: f64 =
+            candles[start..end].iter().map(|c| c.volume).sum::<f64>() / (end - start) as f64;
+
         let current_vol = candles.last().unwrap().volume;
-        
+
         // Volume should be at least 80% of average for valid breakout
         current_vol > avg_vol * 0.8
     }
@@ -113,7 +113,7 @@ impl RangeBreakoutStrategy {
 
         let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
         let ema_vals = ema(&close, self.config.trend_ema);
-        
+
         let current_close = candles.last().unwrap().close;
         let current_ema = ema_vals.last().and_then(|&x| x).unwrap_or(current_close);
 
@@ -128,7 +128,7 @@ impl RangeBreakoutStrategy {
         if self.config.min_adx == 0.0 {
             return true; // Disabled
         }
-        
+
         if candles.len() < self.config.adx_period * 2 {
             return true; // Insufficient data
         }

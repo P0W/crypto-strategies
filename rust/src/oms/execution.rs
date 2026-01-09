@@ -29,7 +29,31 @@ impl ExecutionEngine {
     }
 
     /// Check if order fills during this candle
-    pub fn check_fill(&self, order: &Order, candle: &Candle) -> Option<FillPrice> {
+    ///
+    /// # Arguments
+    /// * `order` - The order to check
+    /// * `candle` - The current candle
+    /// * `current_bar_idx` - Current bar index (for look-ahead bias prevention)
+    ///
+    /// # Look-Ahead Bias Prevention
+    /// Limit orders cannot fill on the same bar they were created. This prevents
+    /// the unrealistic scenario where a strategy places a limit order at bar N
+    /// and it fills using bar N's OHLC data (which wouldn't be known until bar close).
+    pub fn check_fill(
+        &self,
+        order: &Order,
+        candle: &Candle,
+        current_bar_idx: Option<usize>,
+    ) -> Option<FillPrice> {
+        // Look-ahead bias prevention: limit orders cannot fill on the same bar
+        // they were created. In live trading, you place order at bar close,
+        // it can only fill on subsequent bars.
+        if let (Some(created_idx), Some(current_idx)) = (order.created_bar_idx, current_bar_idx) {
+            if matches!(order.order_type, OrderType::Limit) && created_idx >= current_idx {
+                return None; // Cannot fill same bar or earlier
+            }
+        }
+
         match (order.side, order.order_type) {
             // Buy limit: fills if candle low ≤ limit price
             (Side::Buy, OrderType::Limit) => {
@@ -193,7 +217,7 @@ mod tests {
 
         // Candle touches limit price
         let candle = create_candle(51000.0, 52000.0, 49500.0, 50500.0);
-        let fill = engine.check_fill(&order, &candle);
+        let fill = engine.check_fill(&order, &candle, None);
 
         assert!(fill.is_some());
         let fill = fill.unwrap();
@@ -217,7 +241,7 @@ mod tests {
 
         // Candle doesn't reach limit price
         let candle = create_candle(51000.0, 52000.0, 50100.0, 51500.0);
-        let fill = engine.check_fill(&order, &candle);
+        let fill = engine.check_fill(&order, &candle, None);
 
         assert!(fill.is_none());
     }
@@ -238,7 +262,7 @@ mod tests {
 
         // Candle reaches limit price
         let candle = create_candle(51000.0, 52500.0, 50500.0, 51500.0);
-        let fill = engine.check_fill(&order, &candle);
+        let fill = engine.check_fill(&order, &candle, None);
 
         assert!(fill.is_some());
         let fill = fill.unwrap();
@@ -262,7 +286,7 @@ mod tests {
 
         // Candle triggers stop
         let candle = create_candle(50000.0, 51500.0, 49500.0, 50500.0);
-        let fill = engine.check_fill(&order, &candle);
+        let fill = engine.check_fill(&order, &candle, None);
 
         assert!(fill.is_some());
         let fill = fill.unwrap();
@@ -285,7 +309,7 @@ mod tests {
         );
 
         let candle = create_candle(50000.0, 52000.0, 49500.0, 51000.0);
-        let fill = engine.check_fill(&order, &candle);
+        let fill = engine.check_fill(&order, &candle, None);
 
         assert!(fill.is_some());
         let fill = fill.unwrap();

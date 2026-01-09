@@ -47,6 +47,35 @@ pub const API_BASE_URL: &str = "https://api.coindcx.com";
 /// Base URL for public market data endpoints
 pub const PUBLIC_BASE_URL: &str = "https://public.coindcx.com";
 
+/// Convert simple symbol (e.g., "BTCINR") to CoinDCX pair format (e.g., "I-BTC_INR")
+///
+/// CoinDCX uses different formats:
+/// - INR markets: I-BTC_INR (from BTCINR)
+/// - USDT markets: B-BTC_USDT (from BTCUSDT)
+pub fn symbol_to_pair(symbol: &str) -> String {
+    let symbol = symbol.to_uppercase();
+
+    // Handle INR pairs (e.g., BTCINR -> I-BTC_INR)
+    if symbol.ends_with("INR") {
+        let base = &symbol[..symbol.len() - 3];
+        return format!("I-{}_INR", base);
+    }
+
+    // Handle USDT pairs (e.g., BTCUSDT -> B-BTC_USDT)
+    if symbol.ends_with("USDT") {
+        let base = &symbol[..symbol.len() - 4];
+        return format!("B-{}_USDT", base);
+    }
+
+    // If already in pair format or unknown, return as-is
+    if symbol.contains('-') && symbol.contains('_') {
+        return symbol;
+    }
+
+    // Default: return as-is
+    symbol
+}
+
 /// Client configuration
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
@@ -356,16 +385,17 @@ impl CoinDCXClient {
     /// Get candle/OHLCV data for a market
     ///
     /// # Arguments
-    /// * `pair` - Trading pair (e.g., "B-BTC_USDT")
+    /// * `symbol` - Trading symbol (e.g., "BTCINR" or "I-BTC_INR") - auto-converted to pair format
     /// * `interval` - Candle interval (1m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 8h, 1d, 3d, 1w, 1M)
     /// * `limit` - Number of candles (default 500, max 1000)
     pub async fn get_candles(
         &self,
-        pair: &str,
+        symbol: &str,
         interval: &str,
         limit: Option<u32>,
     ) -> Result<Vec<Candle>> {
-        let pair = pair.to_string();
+        // Auto-convert symbol to CoinDCX pair format
+        let pair = symbol_to_pair(symbol);
         let interval = interval.to_string();
         self.execute_with_retry(|| {
             let mut url = format!(

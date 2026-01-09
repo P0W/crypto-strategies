@@ -133,6 +133,10 @@ pub struct Order {
 
     /// Client order ID (optional, for strategy tracking)
     pub client_id: Option<String>,
+
+    /// Bar index when order was created (for look-ahead bias prevention)
+    /// Limit orders cannot fill on the same bar they were created
+    pub created_bar_idx: Option<usize>,
 }
 
 impl Order {
@@ -166,7 +170,14 @@ impl Order {
             updated_at: now,
             strategy_tag: None,
             client_id,
+            created_bar_idx: None,
         }
+    }
+
+    /// Set bar index when order was created (for backtest look-ahead bias prevention)
+    pub fn with_created_bar_idx(mut self, bar_idx: usize) -> Self {
+        self.created_bar_idx = Some(bar_idx);
+        self
     }
 
     /// Check if order is active (can be filled)

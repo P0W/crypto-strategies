@@ -44,11 +44,21 @@ pub struct RangeBreakoutConfig {
     pub trailing_atr: f64,
 }
 
-fn default_trend_ema() -> usize { 50 }
-fn default_adx_period() -> usize { 14 }
-fn default_min_adx() -> f64 { 20.0 }
-fn default_use_trailing() -> bool { true }
-fn default_trailing_atr() -> f64 { 2.0 }
+fn default_trend_ema() -> usize {
+    50
+}
+fn default_adx_period() -> usize {
+    14
+}
+fn default_min_adx() -> f64 {
+    20.0
+}
+fn default_use_trailing() -> bool {
+    true
+}
+fn default_trailing_atr() -> f64 {
+    2.0
+}
 
 impl Default for RangeBreakoutConfig {
     fn default() -> Self {

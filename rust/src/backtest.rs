@@ -298,8 +298,10 @@ impl Backtester {
                             }
 
                             // Check if order fills during this candle
+                            // Pass bar_idx for look-ahead bias prevention on limit orders
                             if let Some(fill_price_info) =
-                                self.execution_engine.check_fill(order, candle)
+                                self.execution_engine
+                                    .check_fill(order, candle, Some(bar_idx))
                             {
                                 // T+1 mode: Only queue stop/target orders for next day
                                 // Entry market orders should execute same day
@@ -888,8 +890,11 @@ impl Backtester {
                     {
                         // Convert market order to limit order at next bar's open (will be filled immediately)
                         // Store in orderbook for T+1 execution
+                        // Market orders for T+1 don't need created_bar_idx since they execute at next bar's open
                         if let Some(orderbook) = orderbooks.get_mut(symbol) {
-                            orderbook.add_order(final_order.clone());
+                            let order_with_bar_idx =
+                                final_order.clone().with_created_bar_idx(bar_idx);
+                            orderbook.add_order(order_with_bar_idx);
                             tracing::debug!(
                                 "{} T+1 QUEUED: Market {} {} for next bar OPEN{}",
                                 candle.datetime.format("%Y-%m-%d"),
@@ -1019,7 +1024,11 @@ impl Backtester {
                     } else {
                         // Limit/Stop orders go to book for next execution
                         if let Some(orderbook) = orderbooks.get_mut(symbol) {
-                            orderbook.add_order(final_order.clone());
+                            // Set created_bar_idx for look-ahead bias prevention
+                            // Limit orders cannot fill on the same bar they were created
+                            let order_with_bar_idx =
+                                final_order.clone().with_created_bar_idx(bar_idx);
+                            orderbook.add_order(order_with_bar_idx);
 
                             tracing::debug!(
                                 "{} ORDER {:?} {} @ {:.2} qty={:.4} {}",

@@ -559,7 +559,11 @@ impl LiveTrader {
         let initial_order_count = orders.len();
 
         for order in &mut orders {
-            if let Some(fill_price) = self.execution_engine.check_fill(order, current_candle) {
+            // Live trading passes None for bar_idx - no look-ahead bias concern in real-time
+            if let Some(fill_price) = self
+                .execution_engine
+                .check_fill(order, current_candle, None)
+            {
                 let fill_latency = fill_check_start.elapsed().as_micros();
                 let is_maker = fill_price.is_maker;
                 let price = fill_price.price;
@@ -624,16 +628,18 @@ impl LiveTrader {
             let price = current_candle.close;
 
             // Get or calculate stop/target levels (cached at entry time)
-            let (stop_price, target_price) = self
-                .entry_levels
-                .entry(symbol.clone())
-                .or_insert_with(|| {
-                    let stop = self
-                        .strategy
-                        .calculate_stop_loss(candles, pos.average_entry_price, pos.side);
-                    let target = self
-                        .strategy
-                        .calculate_take_profit(candles, pos.average_entry_price, pos.side);
+            let (stop_price, target_price) =
+                self.entry_levels.entry(symbol.clone()).or_insert_with(|| {
+                    let stop = self.strategy.calculate_stop_loss(
+                        candles,
+                        pos.average_entry_price,
+                        pos.side,
+                    );
+                    let target = self.strategy.calculate_take_profit(
+                        candles,
+                        pos.average_entry_price,
+                        pos.side,
+                    );
                     info!(
                         "│  📍 Entry levels cached for {}: stop={:.2}, target={:.2}",
                         symbol, stop, target
@@ -644,10 +650,7 @@ impl LiveTrader {
             let target_price = *target_price;
 
             // Update trailing stop if strategy provides one
-            if let Some(new_trailing) =
-                self.strategy
-                    .update_trailing_stop(&pos, price, candles)
-            {
+            if let Some(new_trailing) = self.strategy.update_trailing_stop(&pos, price, candles) {
                 let current_stored = self.trailing_stops.get(symbol).copied();
                 let best_stop = match current_stored {
                     Some(stored) => new_trailing.max(stored), // Never lower the trailing stop
@@ -657,7 +660,11 @@ impl LiveTrader {
             }
 
             // Use trailing stop if set, otherwise initial stop
-            let active_stop = self.trailing_stops.get(symbol).copied().unwrap_or(stop_price);
+            let active_stop = self
+                .trailing_stops
+                .get(symbol)
+                .copied()
+                .unwrap_or(stop_price);
 
             // Check stop/target hit
             let stopped = match pos.side {
@@ -672,7 +679,11 @@ impl LiveTrader {
 
             if stopped || target_hit {
                 let reason = if target_hit { "TARGET" } else { "STOP" };
-                let trigger_price = if target_hit { target_price } else { active_stop };
+                let trigger_price = if target_hit {
+                    target_price
+                } else {
+                    active_stop
+                };
 
                 info!(
                     "│  🎯 {} HIT for {} {:?} @ {:.2} (entry: {:.2})",
@@ -698,7 +709,11 @@ impl LiveTrader {
 
                 info!(
                     "│  📋 EXIT ORDER placed: {} {} @ market",
-                    if exit_side == Side::Buy { "BUY" } else { "SELL" },
+                    if exit_side == Side::Buy {
+                        "BUY"
+                    } else {
+                        "SELL"
+                    },
                     symbol
                 );
 

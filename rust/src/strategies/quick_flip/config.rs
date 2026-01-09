@@ -41,11 +41,21 @@ pub struct QuickFlipConfig {
     pub allow_shorts: bool,
 }
 
-fn default_stop_atr() -> f64 { 1.5 }
-fn default_target_atr() -> f64 { 3.0 }
-fn default_min_range_pct() -> f64 { 0.5 }
-fn default_cooldown() -> usize { 3 }
-fn default_body_ratio() -> f64 { 0.6 }
+fn default_stop_atr() -> f64 {
+    1.5
+}
+fn default_target_atr() -> f64 {
+    3.0
+}
+fn default_min_range_pct() -> f64 {
+    0.5
+}
+fn default_cooldown() -> usize {
+    3
+}
+fn default_body_ratio() -> f64 {
+    0.6
+}
 
 impl Default for QuickFlipConfig {
     fn default() -> Self {
