@@ -165,8 +165,6 @@ cargo run -- live --live
 ## Documentation
 
 - [CLAUDE.md](CLAUDE.md) - AI coding assistant guidance
-- [REPORT.md](REPORT.md) - Detailed strategy analysis
-- [OMS Design](docs/OMS_DESIGN.md) - Order Management System architecture
 
 ## License
 
