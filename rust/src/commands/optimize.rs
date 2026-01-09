@@ -385,7 +385,7 @@ pub fn run(
     pb.set_style(
         ProgressStyle::default_bar()
             .template("  {spinner:.cyan} │{percent:>3}%│ [{bar:35.green/dim}] {pos:>6}/{len:6} │ ⚡ {per_sec:>8} │ ⏱  {elapsed_precise} │ ETA {eta_precise} │ ✓ {msg}")
-            .unwrap()
+            .expect("valid progress bar template")
             .progress_chars("━━╸")
             .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
     );

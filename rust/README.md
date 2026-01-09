@@ -37,28 +37,82 @@ fn generate_signal(&self, symbol: &Symbol, candles: &[Candle],
 fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest>
 ```
 
-**Complete Lifecycle Hooks:**
+**Complete Strategy Trait (Fully Decoupled):**
 ```rust
-trait Strategy {
+pub trait Strategy: Send + Sync {
+    /// Strategy identifier (must match config's strategy_name)
+    fn name(&self) -> &'static str;
+    
+    /// Clone for per-symbol isolation in multi-symbol trading
+    fn clone_boxed(&self) -> Box<dyn Strategy>;
+    
+    /// Declare required timeframes (empty = single-TF strategy)
+    fn required_timeframes(&self) -> Vec<&'static str> { vec![] }
+    
+    /// Generate orders based on current market context (PRIMARY)
     fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest>;
-    fn on_order_filled(&mut self, fill: &Fill, position: &Position);
-    fn on_order_cancelled(&mut self, order: &Order);
-    fn on_trade_closed(&mut self, trade: &Trade);  // Entry → Exit complete
+    
+    /// Calculate stop loss price for entry
+    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64;
+    
+    /// Calculate take profit price for entry
+    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64;
+    
+    /// Update trailing stop if applicable
+    fn update_trailing_stop(&self, position: &Position, current_price: f64, candles: &[Candle]) -> Option<f64>;
+    
+    /// Get regime score for position sizing (default: 1.0)
+    fn get_regime_score(&self, candles: &[Candle]) -> f64 { 1.0 }
+    
+    // Lifecycle hooks (optional)
+    fn on_order_filled(&mut self, fill: &Fill, position: &Position) {}
+    fn on_order_cancelled(&mut self, order: &Order) {}
+    fn on_trade_closed(&mut self, trade: &Trade) {}
+    fn on_bar(&mut self, ctx: &StrategyContext) {}
+    fn init(&mut self) {}
 }
 ```
 
-### Backtest Engine Rewrite
+**Key Design Principle:** The backtester and optimizer are **100% strategy-agnostic**. They interact with strategies only through this trait interface. Adding a new strategy requires zero changes to `backtest.rs` or `optimizer.rs`.
+
+### Backtest Engine (Strategy-Agnostic)
+
+The backtester (`src/backtest.rs`) is **fully decoupled** from strategy implementations. It only interacts through the `Strategy` trait.
 
 **Event Loop per Candle:**
-1. Check all orders for fills via `ExecutionEngine::check_fill(order, candle)`
-2. Update positions with FIFO P&L on fills
-3. Notify strategy via `on_order_filled()`
-4. Generate new orders via `strategy.generate_orders()`
-5. Validate via RiskManager
-6. Add to OrderBook
-7. Notify strategy via `on_trade_closed()` when position exits
+1. **Phase 0 (T+1)**: Execute orders queued from previous day (if T+1 mode)
+2. **Phase 1**: Process fills - check all orders via `ExecutionEngine::check_fill(order, candle)`
+3. **Phase 2**: Check stops/targets, update positions with FIFO P&L
+4. **Phase 3**: Build `StrategyContext` and call `strategy.generate_orders(&ctx)`
+5. **Phase 4**: Validate orders via RiskManager (position limits, drawdown, portfolio heat)
+6. **Phase 5**: Add valid orders to OrderBook or execute market orders immediately
+7. **Callbacks**: `on_order_filled()`, `on_trade_closed()`, `on_bar()`
 
-**Critical:** Historical timestamp preservation - fills use `candle.datetime`, NOT `Utc::now()`
+**Critical Design Points:**
+- Historical timestamp preservation - fills use `candle.datetime`, NOT `Utc::now()`
+- Stop/target prices cached at entry time to prevent drift
+- Trailing stops tracked per-symbol with monotonic enforcement
+- Risk manager integrates with position sizing and halt conditions
+
+### Optimizer (Strategy-Agnostic)
+
+The optimizer (`src/optimizer.rs`) uses a **factory pattern** for strategy creation:
+
+```rust
+// Generic optimization - works with ANY strategy
+pub fn optimize<F>(
+    &self,
+    data: &MultiSymbolMultiTimeframeData,
+    configs: Vec<Config>,
+    strategy_factory: F,  // Factory function, not specific strategy
+) -> Vec<OptimizationResult>
+where
+    F: Fn(&Config) -> Box<dyn Strategy> + Send + Sync
+```
+
+- Uses Rayon for parallel grid search across all CPU cores
+- No strategy-specific code - relies entirely on `Strategy` trait
+- Grid parameters defined in config JSON, applied via `grid.rs`
 
 ## Verified Backtest Results
 
@@ -280,11 +334,60 @@ cargo run -- live --config ../configs/sample_config.json --paper
 # Custom cycle interval (seconds)
 cargo run -- live --paper --interval 300
 
-# Live trading with real money (CAUTION!)
+# Live trading with real money (CAUTION! - CoinDCX order submission not yet implemented)
 cargo run -- live --live
 ```
 
+### Live Trading Features
+
+| Feature | Status | Description |
+|---------|--------|-------------|
+| Paper Trading | ✅ Ready | Full simulation with OMS |
+| Strategy Decoupling | ✅ Ready | Uses `Box<dyn Strategy>` trait |
+| Stop Loss / Take Profit | ✅ Ready | Cached at entry, checked each cycle |
+| Trailing Stop | ✅ Ready | Strategy-controlled via `update_trailing_stop()` |
+| Risk Manager | ✅ Ready | Position limits, drawdown, portfolio heat |
+| State Recovery | ✅ Ready | SQLite checkpoint/restore |
+| MTF Support | ✅ Ready | Multi-timeframe candle cache |
+| CoinDCX Order Submit | ⚠️ Paper Only | Real order API not connected |
+| Zerodha Integration | ⚠️ Planned | Client ready, live loop pending |
+
 ## Architecture
+
+### Decoupled Design Principle
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         STRATEGY DECOUPLING                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌──────────────┐     ┌───────────────────┐     ┌──────────────────────┐   │
+│  │   Config     │────▶│ strategies::      │────▶│  Box<dyn Strategy>   │   │
+│  │   (JSON)     │     │ create_strategy() │     │  (trait object)      │   │
+│  └──────────────┘     └───────────────────┘     └──────────┬───────────┘   │
+│                              Factory                        │               │
+│                                                             ▼               │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                    BACKTEST / OPTIMIZER                              │  │
+│  │                                                                      │  │
+│  │   • Zero knowledge of specific strategies                           │  │
+│  │   • Calls only Strategy trait methods                               │  │
+│  │   • Works with ANY strategy implementing the trait                  │  │
+│  │                                                                      │  │
+│  │   strategy.generate_orders(ctx)   ─────────▶  Vec<OrderRequest>     │  │
+│  │   strategy.calculate_stop_loss()  ─────────▶  f64                   │  │
+│  │   strategy.calculate_take_profit()─────────▶  f64                   │  │
+│  │   strategy.on_trade_closed()      ─────────▶  (callback)            │  │
+│  │                                                                      │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│  Adding new strategy: ONLY implement Strategy trait + register factory     │
+│  NO changes to backtest.rs or optimizer.rs required                        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### System Architecture Diagram
 
 ```mermaid
 flowchart TB
@@ -299,10 +402,11 @@ flowchart TB
         CMD_DL[download.rs]
     end
 
-    subgraph Core["Core Engine"]
-        BACKTEST[backtest.rs<br/>Event-driven simulation]
+    subgraph Core["Core Engine (Strategy-Agnostic)"]
+        BACKTEST[backtest.rs<br/>Event-driven OMS simulation]
         OPTIMIZER[optimizer.rs<br/>Rayon parallel grid search]
         RISK[risk.rs<br/>Position sizing<br/>Drawdown control]
+        OMS[oms/<br/>OrderBook, ExecutionEngine<br/>PositionManager]
     end
 
     subgraph Strategies["Strategy Layer (strategies/)"]
@@ -311,6 +415,7 @@ flowchart TB
         MOM[momentum_scalper<br/>EMA crossover]
         RNG[range_breakout<br/>N-bar breakout]
         QF[quick_flip<br/>Range reversal]
+        RG[regime_grid<br/>Grid trading]
     end
 
     subgraph Data["Data Layer"]
@@ -327,7 +432,7 @@ flowchart TB
 
     subgraph Infra["Infrastructure"]
         CONFIG[config.rs<br/>JSON parsing]
-        TYPES[types.rs<br/>Candle, Position<br/>Trade, Signal]
+        TYPES[types.rs<br/>Candle, Position<br/>Trade]
         STATE[state_manager.rs<br/>SQLite persistence]
         CB[common/circuit_breaker.rs]
         RL[common/rate_limiter.rs]
@@ -347,14 +452,16 @@ flowchart TB
 
     %% Core relationships
     BACKTEST --> RISK
-    BACKTEST --> TRAIT
-    BACKTEST --> IND
+    BACKTEST --> OMS
+    BACKTEST -.->|trait only| TRAIT
+    OMS --> IND
 
-    %% Strategy relationships
+    %% Strategy relationships (decoupled via trait)
     TRAIT --> VOL
     TRAIT --> MOM
     TRAIT --> RNG
     TRAIT --> QF
+    TRAIT --> RG
 
     %% Data flow
     CMD_BT --> DATA
@@ -564,8 +671,9 @@ impl Default for MyStrategyConfig {
 ### Step 3: Implement Strategy (`strategy.rs`)
 
 ```rust
+use crate::oms::{OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
-use crate::{Candle, Position, Signal, Symbol};
+use crate::{Candle, Position, Side};
 
 pub struct MyStrategy {
     config: MyStrategyConfig,
@@ -573,23 +681,37 @@ pub struct MyStrategy {
 
 impl Strategy for MyStrategy {
     fn name(&self) -> &'static str { "my_strategy" }
-
-    fn generate_signal(
-        &self,
-        symbol: &Symbol,
-        candles: &[Candle],
-        position: Option<&Position>,
-    ) -> Signal {
-        // Your logic here
-        Signal::Flat
+    
+    fn clone_boxed(&self) -> Box<dyn Strategy> {
+        Box::new(Self { config: self.config.clone() })
     }
 
-    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64 {
-        entry_price * 0.95
+    fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest> {
+        let candles = ctx.candles;
+        let symbol = ctx.symbol.clone();
+        
+        // No position - check for entry
+        if ctx.current_position.is_none() {
+            // Your entry logic here
+            if should_buy(candles) {
+                return vec![OrderRequest::market_buy(symbol, 0.0)]; // qty set by risk manager
+            }
+        }
+        vec![] // No orders
     }
 
-    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64) -> f64 {
-        entry_price * 1.10
+    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
+        match side {
+            Side::Buy => entry_price * 0.95,  // 5% below for long
+            Side::Sell => entry_price * 1.05, // 5% above for short
+        }
+    }
+
+    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
+        match side {
+            Side::Buy => entry_price * 1.10,  // 10% above for long
+            Side::Sell => entry_price * 0.90, // 10% below for short
+        }
     }
 
     fn update_trailing_stop(
@@ -598,7 +720,7 @@ impl Strategy for MyStrategy {
         current_price: f64,
         candles: &[Candle],
     ) -> Option<f64> {
-        None
+        None // No trailing stop
     }
 }
 ```
@@ -614,27 +736,42 @@ map.insert("my_strategy", my_strategy::create as StrategyFactory);
 
 ## Multi-Timeframe Support
 
-Strategies can declare required timeframes:
+Strategies declare required timeframes and access them via `StrategyContext`:
 
 ```rust
 impl Strategy for QuickFlipStrategy {
-    fn required_timeframes(&self) -> Vec<String> {
-        vec!["1d".to_string(), "15m".to_string(), "5m".to_string()]
+    fn required_timeframes(&self) -> Vec<&'static str> {
+        vec!["1d", "4h", "1h"]  // Primary + additional timeframes
     }
 
-    fn generate_signal_mtf(
-        &self,
-        symbol: &Symbol,
-        mtf_candles: &MultiTimeframeCandles,
-        position: Option<&Position>,
-    ) -> Signal {
-        let daily = mtf_candles.get("1d").unwrap();
-        let m15 = mtf_candles.get("15m").unwrap();
-        let m5 = mtf_candles.get("5m").unwrap();
-        // Use all timeframes for decision
+    fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest> {
+        // Primary timeframe (from config) is always in ctx.candles
+        let primary = ctx.candles;
+        
+        // Access additional timeframes via MTF context
+        if let Some(mtf) = ctx.mtf_candles {
+            let daily = mtf.get("1d").unwrap_or(primary);
+            let h4 = mtf.get("4h").unwrap_or(primary);
+            let h1 = mtf.get("1h").unwrap_or(primary);
+            
+            // Use higher TF for trend, lower TF for entry timing
+            let daily_trend = analyze_trend(daily);
+            let entry_signal = analyze_entry(h1);
+            
+            if daily_trend.is_bullish() && entry_signal.is_buy() {
+                return vec![OrderRequest::market_buy(ctx.symbol.clone(), 0.0)];
+            }
+        }
+        vec![]
     }
 }
 ```
+
+**MTF Data Flow:**
+1. Strategy declares `required_timeframes()` 
+2. Backtester/Optimizer loads all required timeframes
+3. Data is aligned and passed via `StrategyContext::mtf_candles`
+4. Strategy accesses any timeframe via `ctx.mtf_candles.get("tf")`
 
 ## Configuration Structure
 

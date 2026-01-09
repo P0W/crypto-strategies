@@ -126,6 +126,11 @@ struct LiveTrader {
     cycle_count: u32,
     paper_cash: f64,
 
+    // Stop/Target tracking (matches backtest.rs pattern)
+    // Format: (stop_price, target_price) - cached at entry time
+    entry_levels: HashMap<Symbol, (f64, f64)>,
+    trailing_stops: HashMap<Symbol, f64>,
+
     // Performance monitoring
     metrics: PerformanceMetrics,
     last_metrics_log: Instant,
@@ -227,6 +232,8 @@ impl LiveTrader {
             paper_mode,
             cycle_count: 0,
             paper_cash: 0.0,
+            entry_levels: HashMap::new(),
+            trailing_stops: HashMap::new(),
             metrics: PerformanceMetrics::default(),
             last_metrics_log: Instant::now(),
         })
@@ -333,17 +340,20 @@ impl LiveTrader {
                 continue;
             }
 
-            let first_ts = candles.first().unwrap().datetime;
-            let last_ts = candles.last().unwrap().datetime;
+            // Safe access - we checked is_empty above
+            let first_ts = candles.first().map(|c| c.datetime);
+            let last_ts = candles.last().map(|c| c.datetime);
 
-            info!(
-                "  ✓ {} candles: {} bars ({} to {}) [{} μs]",
-                tf,
-                candles.len(),
-                first_ts.format("%Y-%m-%d %H:%M"),
-                last_ts.format("%Y-%m-%d %H:%M"),
-                tf_start.elapsed().as_micros()
-            );
+            if let (Some(first), Some(last)) = (first_ts, last_ts) {
+                info!(
+                    "  ✓ {} candles: {} bars ({} to {}) [{} μs]",
+                    tf,
+                    candles.len(),
+                    first.format("%Y-%m-%d %H:%M"),
+                    last.format("%Y-%m-%d %H:%M"),
+                    tf_start.elapsed().as_micros()
+                );
+            }
 
             mtf_data.add_timeframe(tf.clone(), candles);
         }
@@ -525,14 +535,23 @@ impl LiveTrader {
             return Ok(());
         }
 
-        let current_candle = candles.last().unwrap();
+        let current_candle = match candles.last() {
+            Some(c) => c,
+            None => return Ok(()), // Safety: already checked is_empty, but be defensive
+        };
 
         // Calculate portfolio value before getting mutable orderbook reference
         // to avoid borrow checker conflicts
         let equity = self.calculate_portfolio_value();
         let cash_available = self.paper_cash;
 
-        let orderbook = self.orderbooks.get_mut(symbol).unwrap();
+        let orderbook = match self.orderbooks.get_mut(symbol) {
+            Some(ob) => ob,
+            None => {
+                warn!("│  ⚠️  No orderbook for {} - skipping", symbol);
+                return Ok(());
+            }
+        };
 
         // Step 1: Check fills (microsecond precision)
         let fill_check_start = Instant::now();
@@ -599,7 +618,97 @@ impl LiveTrader {
             );
         }
 
-        // Step 2: Check closed positions
+        // Step 2: Check stop loss / take profit / trailing stops
+        // This mirrors the backtest.rs logic for production parity
+        if let Some(pos) = self.position_manager.get_position(symbol).cloned() {
+            let price = current_candle.close;
+
+            // Get or calculate stop/target levels (cached at entry time)
+            let (stop_price, target_price) = self
+                .entry_levels
+                .entry(symbol.clone())
+                .or_insert_with(|| {
+                    let stop = self
+                        .strategy
+                        .calculate_stop_loss(candles, pos.average_entry_price, pos.side);
+                    let target = self
+                        .strategy
+                        .calculate_take_profit(candles, pos.average_entry_price, pos.side);
+                    info!(
+                        "│  📍 Entry levels cached for {}: stop={:.2}, target={:.2}",
+                        symbol, stop, target
+                    );
+                    (stop, target)
+                });
+            let stop_price = *stop_price;
+            let target_price = *target_price;
+
+            // Update trailing stop if strategy provides one
+            if let Some(new_trailing) =
+                self.strategy
+                    .update_trailing_stop(&pos, price, candles)
+            {
+                let current_stored = self.trailing_stops.get(symbol).copied();
+                let best_stop = match current_stored {
+                    Some(stored) => new_trailing.max(stored), // Never lower the trailing stop
+                    None => new_trailing,
+                };
+                self.trailing_stops.insert(symbol.clone(), best_stop);
+            }
+
+            // Use trailing stop if set, otherwise initial stop
+            let active_stop = self.trailing_stops.get(symbol).copied().unwrap_or(stop_price);
+
+            // Check stop/target hit
+            let stopped = match pos.side {
+                Side::Buy => price <= active_stop,
+                Side::Sell => price >= active_stop,
+            };
+
+            let target_hit = match pos.side {
+                Side::Buy => current_candle.high >= target_price,
+                Side::Sell => current_candle.low <= target_price,
+            };
+
+            if stopped || target_hit {
+                let reason = if target_hit { "TARGET" } else { "STOP" };
+                let trigger_price = if target_hit { target_price } else { active_stop };
+
+                info!(
+                    "│  🎯 {} HIT for {} {:?} @ {:.2} (entry: {:.2})",
+                    reason, symbol, pos.side, trigger_price, pos.average_entry_price
+                );
+
+                // Create exit order - opposite side to close position
+                let exit_order = match pos.side {
+                    Side::Buy => crypto_strategies::oms::OrderRequest::market_sell(
+                        symbol.clone(),
+                        pos.quantity,
+                    ),
+                    Side::Sell => crypto_strategies::oms::OrderRequest::market_buy(
+                        symbol.clone(),
+                        pos.quantity,
+                    ),
+                };
+
+                // Add to orderbook for execution
+                let order = exit_order.to_order();
+                let exit_side = order.side;
+                orderbook.add_order(order.clone());
+
+                info!(
+                    "│  📋 EXIT ORDER placed: {} {} @ market",
+                    if exit_side == Side::Buy { "BUY" } else { "SELL" },
+                    symbol
+                );
+
+                // Clear cached levels for this position
+                self.entry_levels.remove(symbol);
+                self.trailing_stops.remove(symbol);
+            }
+        }
+
+        // Step 3: Check closed positions
         if let Some(pos) = self.position_manager.get_position(symbol) {
             if pos.quantity == 0.0 && pos.fills.len() > 1 {
                 let trade = Trade {
