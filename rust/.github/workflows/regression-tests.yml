@@ -1,0 +1,235 @@
+name: Strategy Regression Tests
+
+on:
+  push:  # Run on any push
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  regression-tests:
+    name: 🧪 Strategy Regression Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true  # If using Git LFS for data files
+      
+      - name: 🦀 Setup Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      
+      - name: 📦 Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      
+      - name: 🔨 Build release binary
+        run: cargo build --release
+      
+      - name: 🧪 Run regime_grid regression test
+        id: regime_grid
+        run: |
+          echo "## 🎯 regime_grid Strategy" >> $GITHUB_STEP_SUMMARY
+          
+          # Run optimizer using root config
+          OUTPUT=$(./target/release/crypto-strategies optimize \
+            --config ../configs/regime_grid_config.json \
+            --top 1 2>&1) || true
+          
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "$OUTPUT" | tail -20 >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          
+          # Check if config is already optimal (regression test passes)
+          if echo "$OUTPUT" | grep -q "already optimal"; then
+            CURRENT=$(echo "$OUTPUT" | grep -oP 'Current config \(\K[0-9.]+' || echo "?")
+            BEST=$(echo "$OUTPUT" | grep -oP 'best found: \K[0-9.]+' || echo "?")
+            echo "✅ regime_grid PASSED - Config is optimal (current: $CURRENT, best: $BEST)" >> $GITHUB_STEP_SUMMARY
+            echo "regime_grid_status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "❌ regime_grid FAILED - Config is NOT optimal, optimizer found better params" >> $GITHUB_STEP_SUMMARY
+            echo "regime_grid_status=failed" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 🧪 Run quick_flip regression test
+        id: quick_flip
+        run: |
+          echo "## 🎯 quick_flip Strategy" >> $GITHUB_STEP_SUMMARY
+          
+          # Run optimizer using root config
+          OUTPUT=$(./target/release/crypto-strategies optimize \
+            --config ../configs/quick_flip_config.json \
+            --top 1 2>&1) || true
+          
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "$OUTPUT" | tail -20 >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          
+          # Check if config is already optimal (regression test passes)
+          if echo "$OUTPUT" | grep -q "already optimal"; then
+            CURRENT=$(echo "$OUTPUT" | grep -oP 'Current config \(\K[0-9.]+' || echo "?")
+            BEST=$(echo "$OUTPUT" | grep -oP 'best found: \K[0-9.]+' || echo "?")
+            echo "✅ quick_flip PASSED - Config is optimal (current: $CURRENT, best: $BEST)" >> $GITHUB_STEP_SUMMARY
+            echo "quick_flip_status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "❌ quick_flip FAILED - Config is NOT optimal, optimizer found better params" >> $GITHUB_STEP_SUMMARY
+            echo "quick_flip_status=failed" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 🧪 Run momentum_scalper regression test
+        id: momentum_scalper
+        run: |
+          echo "## 🎯 momentum_scalper Strategy" >> $GITHUB_STEP_SUMMARY
+          
+          # Run optimizer using root config
+          OUTPUT=$(./target/release/crypto-strategies optimize \
+            --config ../configs/momentum_scalper_config.json \
+            --top 1 2>&1) || true
+          
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "$OUTPUT" | tail -20 >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          
+          # Check if config is already optimal (regression test passes)
+          if echo "$OUTPUT" | grep -q "already optimal"; then
+            CURRENT=$(echo "$OUTPUT" | grep -oP 'Current config \(\K[0-9.]+' || echo "?")
+            BEST=$(echo "$OUTPUT" | grep -oP 'best found: \K[0-9.]+' || echo "?")
+            echo "✅ momentum_scalper PASSED - Config is optimal (current: $CURRENT, best: $BEST)" >> $GITHUB_STEP_SUMMARY
+            echo "momentum_scalper_status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "❌ momentum_scalper FAILED - Config is NOT optimal, optimizer found better params" >> $GITHUB_STEP_SUMMARY
+            echo "momentum_scalper_status=failed" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 🧪 Run range_breakout regression test
+        id: range_breakout
+        run: |
+          echo "## 🎯 range_breakout Strategy" >> $GITHUB_STEP_SUMMARY
+          
+          # Run optimizer using root config
+          OUTPUT=$(./target/release/crypto-strategies optimize \
+            --config ../configs/range_breakout_config.json \
+            --top 1 2>&1) || true
+          
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "$OUTPUT" | tail -20 >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          
+          # Check if config is already optimal (regression test passes)
+          if echo "$OUTPUT" | grep -q "already optimal"; then
+            CURRENT=$(echo "$OUTPUT" | grep -oP 'Current config \(\K[0-9.]+' || echo "?")
+            BEST=$(echo "$OUTPUT" | grep -oP 'best found: \K[0-9.]+' || echo "?")
+            echo "✅ range_breakout PASSED - Config is optimal (current: $CURRENT, best: $BEST)" >> $GITHUB_STEP_SUMMARY
+            echo "range_breakout_status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "❌ range_breakout FAILED - Config is NOT optimal, optimizer found better params" >> $GITHUB_STEP_SUMMARY
+            echo "range_breakout_status=failed" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 🧪 Run volatility_regime regression test
+        id: volatility_regime
+        run: |
+          echo "## 🎯 volatility_regime Strategy" >> $GITHUB_STEP_SUMMARY
+          
+          # Run optimizer using root config
+          OUTPUT=$(./target/release/crypto-strategies optimize \
+            --config ../configs/volatility_regime_config.json \
+            --top 1 2>&1) || true
+          
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "$OUTPUT" | tail -20 >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          
+          # Check if config is already optimal (regression test passes)
+          if echo "$OUTPUT" | grep -q "already optimal"; then
+            CURRENT=$(echo "$OUTPUT" | grep -oP 'Current config \(\K[0-9.]+' || echo "?")
+            BEST=$(echo "$OUTPUT" | grep -oP 'best found: \K[0-9.]+' || echo "?")
+            echo "✅ volatility_regime PASSED - Config is optimal (current: $CURRENT, best: $BEST)" >> $GITHUB_STEP_SUMMARY
+            echo "volatility_regime_status=passed" >> $GITHUB_OUTPUT
+          else
+            echo "❌ volatility_regime FAILED - Config is NOT optimal, optimizer found better params" >> $GITHUB_STEP_SUMMARY
+            echo "volatility_regime_status=failed" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: 📋 Summary Report
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Regression Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Each strategy passes if the optimizer confirms: **'Current config is already optimal'**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Strategy | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| regime_grid | ${{ steps.regime_grid.outputs.regime_grid_status == 'passed' && '✅ OPTIMAL' || '❌ REGRESSION' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| quick_flip | ${{ steps.quick_flip.outputs.quick_flip_status == 'passed' && '✅ OPTIMAL' || '❌ REGRESSION' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| momentum_scalper | ${{ steps.momentum_scalper.outputs.momentum_scalper_status == 'passed' && '✅ OPTIMAL' || '❌ REGRESSION' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| range_breakout | ${{ steps.range_breakout.outputs.range_breakout_status == 'passed' && '✅ OPTIMAL' || '❌ REGRESSION' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| volatility_regime | ${{ steps.volatility_regime.outputs.volatility_regime_status == 'passed' && '✅ OPTIMAL' || '❌ REGRESSION' }} |" >> $GITHUB_STEP_SUMMARY
+      
+      - name: ❌ Fail if any regression test failed
+        if: |
+          steps.regime_grid.outputs.regime_grid_status != 'passed' ||
+          steps.quick_flip.outputs.quick_flip_status != 'passed' ||
+          steps.momentum_scalper.outputs.momentum_scalper_status != 'passed' ||
+          steps.range_breakout.outputs.range_breakout_status != 'passed' ||
+          steps.volatility_regime.outputs.volatility_regime_status != 'passed'
+        run: |
+          echo "::error::One or more regression tests failed!"
+          exit 1
+
+  lint-and-test:
+    name: 🔍 Lint & Unit Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: 🦀 Setup Rust toolchain
+        uses: dtolnay/rust-action@stable
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      
+      - name: 📦 Cache Cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      
+      - name: 📝 Check formatting
+        run: cargo fmt --all -- --check
+      
+      - name: 🔎 Run Clippy lints
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      
+      - name: 🧪 Run unit tests
+        run: cargo test --lib --verbose
+      
+      - name: 🧪 Run integration tests
+        run: cargo test --test '*' --verbose || true  # Allow integration tests to fail if no data

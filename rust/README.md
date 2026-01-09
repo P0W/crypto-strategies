@@ -1,5 +1,9 @@
 # Crypto Strategies - Rust Implementation
 
+[![Strategy Regression Tests](https://github.com/prashant-srivastava/crypto-strategies/actions/workflows/regression-tests.yml/badge.svg)](https://github.com/prashant-srivastava/crypto-strategies/actions/workflows/regression-tests.yml)
+[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
 High-performance Rust implementation with **production-grade Order Management System (OMS)** for backtesting and live trading.
 
 ## 🎯 OMS Architecture (New in 2026)
@@ -128,7 +132,7 @@ Data period: 2022-01 to 2026-01 (~1493 daily candles per symbol).
 | **range_breakout** | 1d | 0.71 | 1.09 | 92.74% | 64.92% | 48.28% | 116 | 15.93% | 2.44 |
 | **volatility_regime_4h** | 4h | -0.36 | 0.94 | 92.25% | 64.59% | 54.09% | 281 | 18.50% | 1.72 |
 | **volatility_regime** | 1d | 0.35 | 0.76 | 42.38% | 29.66% | 52.00% | 50 | 11.92% | 2.04 |
-| **regime_grid** | 1d | 0.24 | 0.43 | 39.76% | 28.15% | 88.00% | 25 | 19.66% | 250.79 |
+| **regime_grid** | 1d | 0.42 | 0.44 | 80.19% | 58.92% | 83.02% | 53 | 35.16% | 83.21 |
 
 **Key Observations:**
 - **quick_flip**: Best overall performer with Sharpe 1.08, Calmar 2.00, 166% return, and 13.5% max DD. Long-only mode with tight stop (1 ATR), wide target (6 ATR)
@@ -136,21 +140,23 @@ Data period: 2022-01 to 2026-01 (~1493 daily candles per symbol).
 - **range_breakout**: Solid risk-adjusted returns (Calmar 1.09) with 48% win rate but 2.44 profit factor (winners > losers)
 - **volatility_regime_4h**: High trade count (281) on 4h timeframe, decent return but negative Sharpe due to volatility
 - **volatility_regime**: Most conservative with lowest max DD (11.92%), good for risk-averse portfolios
-- **regime_grid**: Highest win rate (88%) with drawdown protection limiting max DD to ~20%; exceptional profit factor (250.79) due to very few losing trades
+- **regime_grid**: High win rate (83%) with volatility kill switch protection; 80% return with optimized ADX/RSI thresholds
 
 ### Risk Management Features
 
-**Portfolio-Level Drawdown Protection (regime_grid):**
+**Portfolio-Level Risk Protection (regime_grid):**
 - Real-time drawdown monitoring against configured `max_drawdown_pct` limit
 - Automatic position closure when drawdown exceeds threshold
 - Cooldown mechanism prevents whipsawing - resumes only after 95% equity recovery
+- **Volatility Kill Switch**: Pauses trading when ATR/Price exceeds threshold (25% for daily)
 - Position exposure limits (95% of `max_capital_usage_pct`)
+- Bull-specific sell targets (`bull_sell_target_pct`) for bull regime optimization
 
 **Config Files:** All configs are in `../configs/` folder (e.g., `../configs/quick_flip_config.json`)
 
 **Tax Calculation**: 30% flat tax on profits (Indian crypto tax), no loss offset allowed.
 
-*Results verified on 2026-01-08 using OMS-based backtest engine with optimized parameters.*
+*Results verified on 2026-01-09 using OMS-based backtest engine with optimized parameters.*
 
 ## Features
 
@@ -625,7 +631,7 @@ src/
 | Strategy | Description | Best Timeframe | Sharpe | Max DD | Key Feature |
 |----------|-------------|----------------|--------|--------|-------------|
 | `volatility_regime` | ATR-based regime classification | 1d | 0.35 | 11.92% | Volatility clustering |
-| `regime_grid` | Grid trading with regime adaptation | 1d | 0.30 | 38.34% | High win rate (82%) |
+| `regime_grid` | Grid trading with regime adaptation | 1d | 0.42 | 35.16% | High win rate (83%) |
 | `range_breakout` | N-bar high/low breakout | 1d | -0.17 | 7.62% | Lowest drawdown |
 | `momentum_scalper` | EMA crossover momentum | 1d | -1.60 | 29.65% | Needs optimization |
 | `quick_flip` | Range reversal/breakout | 1d | N/A | N/A | Pattern recognition |

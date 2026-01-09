@@ -36,6 +36,25 @@ pub const INTERVALS: &[&str] = &[
     "1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "1d", "3d", "1w", "1M",
 ];
 
+/// Validate that symbols have proper INR suffix for data files
+/// Returns error message if any symbols are invalid
+pub fn validate_symbol_names(symbols: &[Symbol]) -> Option<String> {
+    let invalid: Vec<_> = symbols
+        .iter()
+        .filter(|s| !s.as_str().to_uppercase().ends_with("INR"))
+        .map(|s| s.as_str())
+        .collect();
+    
+    if invalid.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "Invalid symbol names: {:?}. Use full names with INR suffix (e.g., BTCINR, ETHINR, SOLINR)",
+            invalid
+        ))
+    }
+}
+
 /// Data source enum for selecting exchange
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DataSource {
@@ -797,6 +816,7 @@ pub async fn ensure_data_for_range(
 }
 
 /// Synchronous wrapper for ensure_data_for_range
+/// Handles both cases: called from async context or sync context
 fn ensure_data_for_range_sync(
     data_dir: impl AsRef<Path>,
     symbols: &[Symbol],
@@ -804,10 +824,28 @@ fn ensure_data_for_range_sync(
     start: Option<DateTime<Utc>>,
     end: Option<DateTime<Utc>>,
 ) -> Result<Vec<(Symbol, String)>> {
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(ensure_data_for_range(
-        data_dir, symbols, timeframes, start, end,
-    ))
+    let data_dir = data_dir.as_ref().to_path_buf();
+    let symbols = symbols.to_vec();
+    let timeframes = timeframes.to_vec();
+    
+    // Check if we're already in a Tokio runtime
+    if tokio::runtime::Handle::try_current().is_ok() {
+        // We're inside a runtime - use spawn_blocking to avoid nested runtime panic
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(ensure_data_for_range(
+                    &data_dir, &symbols, &timeframes, start, end,
+                ))
+            }).join().unwrap()
+        })
+    } else {
+        // No runtime - create one
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(ensure_data_for_range(
+            data_dir, &symbols, &timeframes, start, end,
+        ))
+    }
 }
 
 /// Check data availability and fetch missing/incomplete data from Binance.
@@ -824,6 +862,12 @@ pub fn check_and_fetch_data(
     start: Option<DateTime<Utc>>,
     end: Option<DateTime<Utc>>,
 ) -> Result<()> {
+    // Validate symbol names have INR suffix
+    if let Some(err) = validate_symbol_names(symbols) {
+        eprintln!("\n❌ {}", err);
+        std::process::exit(1);
+    }
+
     let data_dir = data_dir.as_ref();
 
     let (missing_files, needs_earlier, needs_later) =

@@ -18,7 +18,6 @@ use super::MarketRegime;
 
 /// Pre-calculated indicators to avoid redundant computation
 struct Indicators {
-    _current_atr: Option<f64>,
     current_ema_short: Option<f64>,
     current_ema_long: Option<f64>,
     current_adx: Option<f64>,
@@ -32,14 +31,12 @@ impl Indicators {
         let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
         let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
 
-        let atr_values = atr(&high, &low, &close, config.adx_period); // Use same period as ADX
         let ema_short = ema(&close, config.ema_short_period);
         let ema_long = ema(&close, config.ema_long_period);
         let adx_values = adx(&high, &low, &close, config.adx_period);
         let rsi_values = rsi(&close, config.rsi_period);
 
         Self {
-            _current_atr: atr_values.last().and_then(|&x| x),
             current_ema_short: ema_short.last().and_then(|&x| x),
             current_ema_long: ema_long.last().and_then(|&x| x),
             current_adx: adx_values.last().and_then(|&x| x),
@@ -47,7 +44,7 @@ impl Indicators {
         }
     }
 
-    /// Calculate ATR only (for stop/target/trailing methods)
+    /// Calculate ATR only (for stop/target/trailing methods and volatility check)
     fn atr_only(candles: &[Candle], atr_period: usize) -> Option<f64> {
         let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
         let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
@@ -274,7 +271,7 @@ impl RegimeGridStrategy {
             }
         }
 
-        // Place fewer sell orders (2 levels) at higher prices
+        // Place fewer sell orders (2 levels) at higher prices using bull_sell_target_pct
         if let Some(pos) = ctx.current_position {
             let existing_sell_prices: Vec<f64> = ctx
                 .open_orders
@@ -283,12 +280,15 @@ impl RegimeGridStrategy {
                 .map(|o| o.limit_price.unwrap())
                 .collect();
 
+            // Use bull_sell_target_pct for sell placement (e.g., 2.5% above current)
+            let bull_sell_spacing = current_price * self.config.bull_sell_target_pct;
+
             for i in 1..=sell_levels {
-                let sell_price = current_price + (grid_spacing * i as f64 * 1.5);
+                let sell_price = current_price + (bull_sell_spacing * i as f64);
 
                 let has_nearby_order = existing_sell_prices
                     .iter()
-                    .any(|&p| (p - sell_price).abs() < grid_spacing * 0.2);
+                    .any(|&p| (p - sell_price).abs() < bull_sell_spacing * 0.2);
 
                 if !has_nearby_order {
                     // Use position quantity for sells, ensure positive and capped
@@ -370,6 +370,40 @@ impl Strategy for RegimeGridStrategy {
             return orders;
         }
 
+        // 1b. Check ATR/price ratio for volatility kill - activate if too volatile
+        let current_price = ctx.candles.last().unwrap().close;
+        if let Some(current_atr) = Indicators::atr_only(ctx.candles, self.config.atr_period_1h) {
+            let volatility_ratio = current_atr / current_price;
+            if volatility_ratio > self.config.volatility_kill_threshold {
+                tracing::warn!(
+                    "{} Volatility kill switch activated: ATR/Price={:.2}% > threshold={:.2}%",
+                    ctx.symbol,
+                    volatility_ratio * 100.0,
+                    self.config.volatility_kill_threshold * 100.0
+                );
+                // Set pause until
+                {
+                    let mut state = self.state.write().unwrap();
+                    state.paused_until = Some(
+                        Utc::now()
+                            + chrono::Duration::hours(self.config.volatility_pause_hours as i64),
+                    );
+                }
+                // Close any open position
+                if let Some(pos) = ctx.current_position {
+                    match pos.side {
+                        Side::Buy => {
+                            orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity))
+                        }
+                        Side::Sell => {
+                            orders.push(OrderRequest::market_buy(ctx.symbol.clone(), pos.quantity))
+                        }
+                    }
+                }
+                return orders;
+            }
+        }
+
         // 2. CRITICAL: Check portfolio drawdown with cooldown logic
         // Ensure peak_equity is never less than current equity (shouldn't happen, but guard against it)
         let effective_peak = ctx.peak_equity.max(ctx.equity);
@@ -390,12 +424,10 @@ impl Strategy for RegimeGridStrategy {
                     // Still in cooldown - only close positions, don't open new ones
                     if let Some(pos) = ctx.current_position {
                         match pos.side {
-                            Side::Buy => {
-                                orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity))
-                            }
-                            Side::Sell => {
-                                orders.push(OrderRequest::market_buy(ctx.symbol.clone(), pos.quantity))
-                            }
+                            Side::Buy => orders
+                                .push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity)),
+                            Side::Sell => orders
+                                .push(OrderRequest::market_buy(ctx.symbol.clone(), pos.quantity)),
                         }
                     }
                     return orders;

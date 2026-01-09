@@ -13,19 +13,18 @@
   "grid": {
     "_optimization": [
       {
-        "calmar_ratio": 9.83,
-        "expectancy": 19822.35,
-        "max_drawdown": 25.6,
-        "optimized_at": "2026-01-06 02:10:17",
-        "sharpe_ratio": 2.23,
+        "calmar_ratio": 1.45,
+        "expectancy": 1278.22,
+        "max_drawdown": 73.3,
+        "optimized_at": "2026-01-09 15:03:44",
+        "sharpe_ratio": 1.38,
         "symbols": [
-          "BTCINR",
           "ETHINR",
           "SOLINR"
         ],
-        "total_return": 16891.7,
-        "total_trades": 650,
-        "win_rate": 93.1
+        "total_return": 105.7,
+        "total_trades": 63,
+        "win_rate": 74.6
       }
     ],
     "adx_sideways_threshold": [
@@ -70,7 +69,7 @@
   },
   "strategy": {
     "adx_period": 14,
-    "adx_sideways_threshold": 25,
+    "adx_sideways_threshold": 30,
     "atr_period_1h": 14,
     "bull_buy_distance_pct": 0.035,
     "bull_grid_spacing_pct": 0.01,
@@ -78,7 +77,7 @@
     "bull_sell_target_pct": 0.025,
     "buy_distance_after_sell_pct": 0.06,
     "cancel_threshold_pct": 0.12,
-    "ema_band_pct": 0.08,
+    "ema_band_pct": 0.15,
     "ema_long_period": 200,
     "ema_short_period": 50,
     "grid_spacing_pct": 0.01,
@@ -87,16 +86,16 @@
     "max_drawdown_pct": 0.2,
     "max_grids": 10,
     "name": "regime_grid",
-    "rsi_bear_threshold": 30,
-    "rsi_bull_max": 80,
-    "rsi_bull_min": 40,
+    "rsi_bear_threshold": 25,
+    "rsi_bull_max": 65,
+    "rsi_bull_min": 50,
     "rsi_period": 14,
     "sell_target_pct": 0.04,
-    "stop_atr_multiple": 3,
+    "stop_atr_multiple": 2,
     "timeframe": "1d",
-    "trailing_activation_pct": 0.025,
+    "trailing_activation_pct": 0.03,
     "trailing_atr_multiple": 1.0,
-    "volatility_kill_threshold": 0.035,
+    "volatility_kill_threshold": 0.25,
     "volatility_pause_hours": 12
   },
   "tax": {
@@ -118,7 +117,6 @@
     "max_positions": 5,
     "risk_per_trade": 0.15,
     "symbols": [
-      "BTCINR",
       "ETHINR",
       "SOLINR"
     ]

@@ -14,8 +14,6 @@ pub struct RegimeGridConfig {
     pub grid_spacing_pct: f64,
     /// Sell target above buy price as percentage (default: 0.04 = 4%)
     pub sell_target_pct: f64,
-    /// Distance for new buy after sell as percentage (default: 0.06 = 6%)
-    pub buy_distance_after_sell_pct: f64,
     /// Cancel orders too far from price as percentage (default: 0.12 = 12%)
     pub cancel_threshold_pct: f64,
 
@@ -48,15 +46,13 @@ pub struct RegimeGridConfig {
     pub bull_grid_spacing_pct: f64,
     /// Sell target in bull market (default: 0.025 = 2.5%)
     pub bull_sell_target_pct: f64,
-    /// Buy distance in bull market (default: 0.035 = 3.5%)
-    pub bull_buy_distance_pct: f64,
 
     // Risk Management (MANDATORY)
     /// Maximum capital allocated to grid (default: 0.40 = 40%)
     pub max_capital_usage_pct: f64,
     /// Maximum drawdown before stop (default: 0.20 = 20%)
     pub max_drawdown_pct: f64,
-    /// ATR/Price ratio for volatility kill switch (default: 0.035 = 3.5%)
+    /// ATR/Price ratio for volatility kill switch (default: 0.15 = 15% for daily, use lower for intraday)
     pub volatility_kill_threshold: f64,
     /// Hours to pause after volatility kill switch (default: 12)
     pub volatility_pause_hours: u64,
@@ -79,7 +75,6 @@ impl Default for RegimeGridConfig {
             max_grids: 10,
             grid_spacing_pct: 0.01,
             sell_target_pct: 0.04,
-            buy_distance_after_sell_pct: 0.06,
             cancel_threshold_pct: 0.12,
 
             // Regime Detection
@@ -98,12 +93,11 @@ impl Default for RegimeGridConfig {
             bull_max_grids: 5,
             bull_grid_spacing_pct: 0.01,
             bull_sell_target_pct: 0.025,
-            bull_buy_distance_pct: 0.035,
 
             // Risk Management
             max_capital_usage_pct: 0.40,
             max_drawdown_pct: 0.20,
-            volatility_kill_threshold: 0.035,
+            volatility_kill_threshold: 0.15, // 15% for daily timeframe
             volatility_pause_hours: 12,
             atr_period_1h: 14,
 
