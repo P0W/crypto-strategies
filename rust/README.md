@@ -1,6 +1,6 @@
 # Crypto Strategies - Rust Implementation
 
-[![Strategy Regression Tests](https://github.com/prashant-srivastava/crypto-strategies/actions/workflows/regression-tests.yml/badge.svg)](https://github.com/prashant-srivastava/crypto-strategies/actions/workflows/regression-tests.yml)
+[![Strategy Regression Tests](https://github.com/P0W/crypto-strategies/actions/workflows/regression-tests.yml/badge.svg)](https://github.com/P0W/crypto-strategies/actions/workflows/regression-tests.yml)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 

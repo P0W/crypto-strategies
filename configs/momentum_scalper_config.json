@@ -14,11 +14,11 @@
   "grid": {
     "_optimization": [
       {
-        "calmar_ratio": 0.77,
-        "expectancy": 376.55,
-        "max_drawdown": 24.7,
-        "optimized_at": "2026-01-08 13:55:24",
-        "sharpe_ratio": 0.55,
+        "calmar_ratio": 2.85,
+        "expectancy": 542.9,
+        "max_drawdown": 13.6,
+        "optimized_at": "2026-01-09 15:38:20",
+        "sharpe_ratio": 1.06,
         "symbols": [
           "BTCINR",
           "ETHINR",
@@ -26,9 +26,9 @@
           "BNBINR",
           "XRPINR"
         ],
-        "total_return": 104.1,
-        "total_trades": 276,
-        "win_rate": 45.7
+        "total_return": 38.0,
+        "total_trades": 70,
+        "win_rate": 47.1
       }
     ],
     "adx_threshold": [
@@ -68,12 +68,12 @@
   },
   "strategy": {
     "adx_period": 14,
-    "adx_threshold": 20,
+    "adx_threshold": 0,
     "allow_short": false,
     "atr_period": 14,
     "cooldown_bars": 0,
     "ema_fast": 13,
-    "ema_slow": 21,
+    "ema_slow": 55,
     "ema_trend": 50,
     "exit_on_cross": true,
     "macd_fast": 12,
