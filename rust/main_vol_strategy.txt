@@ -2,18 +2,17 @@
 //!
 //! Strategy implementation for trading based on volatility regime classification.
 //!
-//! Uses batch indicator calculation per signal, matching the proven main branch
-//! implementation for consistent signal generation.
+//! Performance optimized: Indicators are calculated once per generate_signal call
+//! and reused across all helper methods to avoid O(N²) complexity.
 
 use crate::indicators::{adx, atr, ema};
-use crate::oms::{OrderRequest, StrategyContext};
 use crate::strategies::Strategy;
-use crate::{Candle, Position, Side};
+use crate::{Candle, Position, Signal, Symbol};
 
 use super::config::VolatilityRegimeConfig;
 use super::VolatilityRegime;
 
-/// Pre-calculated indicators to avoid redundant computation within a single call
+/// Pre-calculated indicators to avoid redundant computation
 struct Indicators {
     atr_values: Vec<Option<f64>>,
     current_atr: Option<f64>,
@@ -53,15 +52,13 @@ impl Indicators {
 }
 
 /// Volatility Regime Adaptive Strategy
-///
-/// Uses batch indicator calculation matching main branch for proven results.
 pub struct VolatilityRegimeStrategy {
     config: VolatilityRegimeConfig,
 }
 
 impl VolatilityRegimeStrategy {
     pub fn new(config: VolatilityRegimeConfig) -> Self {
-        Self { config }
+        VolatilityRegimeStrategy { config }
     }
 
     /// Classify volatility regime
@@ -140,21 +137,18 @@ impl Strategy for VolatilityRegimeStrategy {
         "volatility_regime"
     }
 
-    fn clone_boxed(&self) -> Box<dyn Strategy> {
-        Box::new(VolatilityRegimeStrategy::new(self.config.clone()))
-    }
-
-    fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest> {
-        let candles = ctx.candles;
-        let mut orders = Vec::new();
-
-        // Minimum warmup check matching main branch
+    fn generate_signal(
+        &self,
+        _symbol: &Symbol,
+        candles: &[Candle],
+        position: Option<&Position>,
+    ) -> Signal {
         let min_warmup = (self.config.atr_period + 2 * self.config.adx_period)
             .max(self.config.atr_period + self.config.volatility_lookback)
             .max(self.config.ema_slow);
 
         if candles.len() < min_warmup {
-            return orders;
+            return Signal::Flat;
         }
 
         // Calculate all indicators ONCE
@@ -162,66 +156,53 @@ impl Strategy for VolatilityRegimeStrategy {
         let current_price = candles.last().unwrap().close;
 
         // Position exit logic
-        if let Some(pos) = ctx.current_position {
+        if let Some(pos) = position {
             if let Some(VolatilityRegime::Extreme) = self.classify_regime(candles, &ind) {
-                orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity));
-                return orders;
+                return Signal::Flat;
             }
 
-            // Early exit: if profitable and price below slow EMA
             if pos.unrealized_pnl(current_price) >= 0.0 {
                 if let Some(slow_ema) = ind.current_ema_slow {
                     if current_price < slow_ema {
-                        orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity));
-                        return orders;
+                        return Signal::Flat;
                     }
                 }
             }
 
-            return orders; // Hold position
+            return Signal::Long;
         }
 
         // Entry logic
         let regime = match self.classify_regime(candles, &ind) {
             Some(r) => r,
-            None => return orders,
+            None => return Signal::Flat,
         };
 
         if regime != VolatilityRegime::Compression && regime != VolatilityRegime::Normal {
-            return orders;
+            return Signal::Flat;
         }
 
         if !self.is_trend_confirmed(&ind) {
-            return orders;
+            return Signal::Flat;
         }
 
         if self.is_breakout(candles, &ind) {
-            orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
-        }
-
-        orders
-    }
-
-    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
-        let current_atr =
-            Indicators::atr_only(candles, self.config.atr_period).unwrap_or(entry_price * 0.05);
-        let stop_distance = self.config.stop_atr_multiple * current_atr;
-
-        match side {
-            Side::Buy => entry_price - stop_distance,
-            Side::Sell => entry_price + stop_distance,
+            Signal::Long
+        } else {
+            Signal::Flat
         }
     }
 
-    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
+    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64 {
         let current_atr =
             Indicators::atr_only(candles, self.config.atr_period).unwrap_or(entry_price * 0.05);
-        let target_distance = self.config.target_atr_multiple * current_atr;
+        entry_price - self.config.stop_atr_multiple * current_atr
+    }
 
-        match side {
-            Side::Buy => entry_price + target_distance,
-            Side::Sell => entry_price - target_distance,
-        }
+    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64) -> f64 {
+        let current_atr =
+            Indicators::atr_only(candles, self.config.atr_period).unwrap_or(entry_price * 0.05);
+        entry_price + self.config.target_atr_multiple * current_atr
     }
 
     fn update_trailing_stop(
@@ -233,50 +214,33 @@ impl Strategy for VolatilityRegimeStrategy {
         let current_atr =
             Indicators::atr_only(candles, self.config.atr_period).unwrap_or(current_price * 0.05);
 
-        if current_atr <= 0.0 {
-            return None;
-        }
+        let profit_atr = if current_atr > 0.0 {
+            (current_price - position.entry_price) / current_atr
+        } else {
+            0.0
+        };
 
-        match position.side {
-            Side::Buy => {
-                // Long position: profit when price rises
-                let profit_atr = (current_price - position.average_entry_price) / current_atr;
-                if profit_atr >= self.config.trailing_activation {
-                    let new_stop = current_price - self.config.trailing_atr_multiple * current_atr;
-                    let entry_stop =
-                        position.average_entry_price - self.config.stop_atr_multiple * current_atr;
-                    Some(new_stop.max(entry_stop)) // Trail UP, never below entry stop
-                } else {
-                    None
-                }
-            }
-            Side::Sell => {
-                // Short position: profit when price falls
-                let profit_atr = (position.average_entry_price - current_price) / current_atr;
-                if profit_atr >= self.config.trailing_activation {
-                    let new_stop = current_price + self.config.trailing_atr_multiple * current_atr;
-                    let entry_stop =
-                        position.average_entry_price + self.config.stop_atr_multiple * current_atr;
-                    Some(new_stop.min(entry_stop)) // Trail DOWN, never above entry stop
-                } else {
-                    None
-                }
-            }
+        let current_stop = position.trailing_stop.unwrap_or(position.stop_price);
+
+        if profit_atr >= self.config.trailing_activation {
+            let new_stop = current_price - self.config.trailing_atr_multiple * current_atr;
+            Some(new_stop.max(current_stop))
+        } else if position.trailing_stop.is_some() {
+            Some(current_stop)
+        } else {
+            None
         }
     }
 
     fn get_regime_score(&self, candles: &[Candle]) -> f64 {
         let ind = Indicators::new(candles, &self.config);
-
         match self.classify_regime(candles, &ind) {
-            Some(VolatilityRegime::Compression) | Some(VolatilityRegime::Normal) => {
-                if self.is_trend_confirmed(&ind) {
-                    1.0
-                } else {
-                    0.5
-                }
-            }
-            _ => 0.0,
+            Some(VolatilityRegime::Compression) => 1.5,
+            Some(VolatilityRegime::Normal) => 1.0,
+            Some(VolatilityRegime::Expansion) => 0.8,
+            Some(VolatilityRegime::Extreme) => 0.5,
+            None => 1.0,
         }
     }
 }
+
