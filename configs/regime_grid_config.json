@@ -13,58 +13,77 @@
   "grid": {
     "_optimization": [
       {
-        "calmar_ratio": 1.45,
-        "expectancy": 1278.22,
-        "max_drawdown": 73.3,
-        "optimized_at": "2026-01-09 15:30:02",
-        "sharpe_ratio": 1.38,
+        "calmar_ratio": 17.9,
+        "expectancy": 1668.28,
+        "max_drawdown": 8.7,
+        "optimized_at": "2026-01-09 17:12:23",
+        "sharpe_ratio": 2.21,
         "symbols": [
           "ETHINR",
           "SOLINR"
         ],
-        "total_return": 105.7,
-        "total_trades": 63,
-        "win_rate": 74.6
+        "total_return": 155.8,
+        "total_trades": 92,
+        "win_rate": 83.7
       }
     ],
     "adx_sideways_threshold": [
+      20.0,
       25.0,
-      30.0,
-      35.0
+      30.0
     ],
     "ema_band_pct": [
+      0.05,
       0.08,
+      0.1
+    ],
+    "grid_spacing_pct": [
+      0.015,
+      0.02,
+      0.025
+    ],
+    "max_capital_usage_pct": [
+      0.15,
+      0.2,
+      0.25
+    ],
+    "max_drawdown_pct": [
       0.1,
       0.12,
       0.15
     ],
+    "max_grids": [
+      3,
+      5,
+      7
+    ],
     "rsi_bear_threshold": [
-      25.0,
       30.0,
-      35.0
+      35.0,
+      40.0
     ],
     "rsi_bull_max": [
       65.0,
-      70.0,
-      75.0,
-      80.0
+      70.0
     ],
     "rsi_bull_min": [
-      40.0,
       45.0,
       50.0
     ],
+    "sell_target_pct": [
+      0.03,
+      0.04,
+      0.05
+    ],
     "stop_atr_multiple": [
+      1.0,
       1.5,
-      2.0,
-      2.5,
-      3.0
+      2.0
     ],
     "trailing_activation_pct": [
+      0.015,
       0.02,
-      0.025,
-      0.03,
-      0.035
+      0.025
     ]
   },
   "strategy": {
@@ -77,23 +96,23 @@
     "bull_sell_target_pct": 0.025,
     "buy_distance_after_sell_pct": 0.06,
     "cancel_threshold_pct": 0.12,
-    "ema_band_pct": 0.15,
+    "ema_band_pct": 0.1,
     "ema_long_period": 200,
     "ema_short_period": 50,
-    "grid_spacing_pct": 0.01,
+    "grid_spacing_pct": 0.025,
     "high_volatility_candle_pct": 0.05,
-    "max_capital_usage_pct": 0.4,
-    "max_drawdown_pct": 0.2,
-    "max_grids": 10,
+    "max_capital_usage_pct": 0.25,
+    "max_drawdown_pct": 0.1,
+    "max_grids": 7,
     "name": "regime_grid",
-    "rsi_bear_threshold": 25,
-    "rsi_bull_max": 65,
-    "rsi_bull_min": 50,
+    "rsi_bear_threshold": 30,
+    "rsi_bull_max": 70,
+    "rsi_bull_min": 45,
     "rsi_period": 14,
-    "sell_target_pct": 0.04,
-    "stop_atr_multiple": 2,
+    "sell_target_pct": 0.03,
+    "stop_atr_multiple": 1,
     "timeframe": "1d",
-    "trailing_activation_pct": 0.03,
+    "trailing_activation_pct": 0.015,
     "trailing_atr_multiple": 1.0,
     "volatility_kill_threshold": 0.25,
     "volatility_pause_hours": 12

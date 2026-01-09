@@ -97,11 +97,11 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 
 | Strategy | Symbols | Return | Sharpe | Calmar | Max DD | Win Rate | Profit Factor | Trades | Expectancy |
 |----------|---------|--------|--------|--------|--------|----------|---------------|--------|------------|
+| **regime_grid** | ETH,SOL | 155.80% | 2.21 | 17.90 | 8.70% | 83.70% | - | 92 | ₹1,668 |
 | **quick_flip** | BTC,ETH,SOL,BNB,XRP | 26.01% | 1.63 | 4.51 | 5.76% | 63.64% | 2.78 | 22 | ₹1,182 |
 | **momentum_scalper** | BTC,ETH,SOL,BNB,XRP | 38.00% | 1.06 | 2.79 | 13.61% | 47.14% | 1.77 | 70 | ₹543 |
 | **range_breakout** | BTC,ETH,SOL,BNB,XRP | 24.75% | 1.50 | 3.33 | 7.43% | 83.33% | 6.96 | 18 | ₹1,375 |
 | **volatility_regime** | BTC,ETH,SOL,BNB,XRP | 6.38% | 0.19 | 1.20 | 5.31% | 45.45% | 1.27 | 11 | ₹580 |
-| **regime_grid** | ETH,SOL | 105.70% | 1.38 | 1.44 | 73.34% | 74.60% | 3.47 | 63 | ₹1,278 |
 
 ### Strategy Configurations
 
@@ -211,7 +211,7 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 </details>
 
 <details>
-<summary><b>regime_grid</b> - Highest absolute return (105.70%)</summary>
+<summary><b>regime_grid</b> - Best overall (Sharpe 2.21, Calmar 17.90, Return 155.80%)</summary>
 
 ```json
 {
@@ -220,18 +220,23 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
         "initial_capital": 100000,
         "risk_per_trade": 0.15,
         "max_positions": 5,
-        "max_drawdown": 0.25
+        "max_drawdown": 0.15
     },
     "strategy": {
         "name": "regime_grid",
         "timeframe": "1d",
-        "atr_period": 14,
-        "regime_lookback": 20,
-        "grid_levels": 5,
-        "grid_spacing_atr": 0.5,
-        "high_vol_threshold": 1.5,
-        "low_vol_threshold": 0.7,
-        "profit_target_atr": 1.0
+        "adx_period": 14,
+        "adx_sideways_threshold": 30,
+        "ema_band_pct": 0.10,
+        "max_capital_usage_pct": 0.25,
+        "max_drawdown_pct": 0.10,
+        "max_grids": 7,
+        "rsi_bear_threshold": 30,
+        "rsi_bull_min": 45,
+        "rsi_bull_max": 70,
+        "sell_target_pct": 0.03,
+        "stop_atr_multiple": 1.0,
+        "trailing_activation_pct": 0.015
     }
 }
 ```
