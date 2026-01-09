@@ -4,14 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Crypto Trading Strategy System** - A production-grade automated trading system for CoinDCX (Indian crypto exchange).
+**Crypto Trading Strategy System** - A production-grade automated trading system for CoinDCX (Indian crypto exchange) and Zerodha (Indian equity).
 
-This is a **multi-language repository** with two implementations:
+This is a **Rust-only repository** with high-performance backtesting and live trading capabilities.
 
-| Implementation | Directory | Language | Status |
-|---------------|-----------|----------|--------|
-| **Rust** | `rust/` | Rust | Production-ready (performance focus) |
-| **Python** | `py/` | Python | Production-ready (prototyping focus) |
+> **Note**: A legacy Python implementation exists in the [`python`](https://github.com/P0W/crypto-strategies/tree/python) branch but is deprecated and unmaintained.
 
 **Core Strategy**: Volatility Regime Adaptive Strategy (VRAS) exploiting volatility clustering and regime persistence inefficiencies in crypto markets.
 
@@ -19,20 +16,21 @@ This is a **multi-language repository** with two implementations:
 
 ```
 crypto-strategies/
-├── rust/                 # Rust implementation
-│   ├── src/              # Source code
-│   ├── tests/            # Integration tests
-│   ├── Cargo.toml        # Rust dependencies
-│   └── README.md         # Rust-specific docs
-├── py/                   # Python implementation
-│   ├── src/              # Source code
-│   ├── pyproject.toml    # Python dependencies
-│   └── README.md         # Python-specific docs
+├── src/                  # Rust source code
+│   ├── commands/         # CLI commands (backtest, optimize, live, download)
+│   ├── oms/              # Order Management System
+│   ├── strategies/       # Trading strategies
+│   ├── binance/          # Binance API (data only)
+│   ├── coindcx/          # CoinDCX API (trading)
+│   ├── zerodha/          # Zerodha Kite API (equity)
+│   └── common/           # Shared utilities
+├── tests/                # Integration tests
 ├── configs/              # Shared configuration files (JSON)
 ├── data/                 # Shared OHLCV data (CSV)
 ├── results/              # Backtest results
 ├── logs/                 # Trading logs
 ├── .env                  # API credentials
+├── Cargo.toml            # Rust dependencies
 └── README.md             # Project overview
 ```
 
@@ -42,11 +40,7 @@ crypto-strategies/
 
 **IMPORTANT**: During development, use **debug builds** (no `--release` flag) for faster compilation. Only use `--release` when explicitly asked or for final performance testing.
 
-### Rust Implementation
-
 ```bash
-cd rust
-
 # Build (debug - default for development)
 cargo build
 
@@ -54,10 +48,10 @@ cargo build
 cargo build --release
 
 # Run backtest (debug - use during development)
-cargo run -- backtest --config ../configs/sample_config.json
+cargo run -- backtest --config configs/sample_config.json
 
 # Run backtest (release - only for performance testing)
-cargo run --release -- backtest --config ../configs/sample_config.json
+cargo run --release -- backtest --config configs/sample_config.json
 
 # Run optimization (debug)
 cargo run -- optimize --mode quick
@@ -66,62 +60,45 @@ cargo run -- optimize --mode quick
 cargo test
 ```
 
-### Python Implementation
-
-```bash
-cd py
-
-# Setup (using UV)
-uv venv
-.venv\Scripts\activate  # Windows
-uv pip install -e .
-
-# Run backtest
-uv run backtest --config ../configs/sample_config.json
-
-# Run optimization
-uv run optimize --strategy volatility_regime --mode quick
-```
-
 ### Environment Configuration
 ```bash
-# Create .env from template (in repo root)
+# Create .env from template
 copy .env.example .env  # Windows
 # cp .env.example .env  # Linux/Mac
 
 # Add CoinDCX credentials to .env
 COINDCX_API_KEY=your_api_key_here
 COINDCX_API_SECRET=your_api_secret_here
+ZERODHA_API_KEY=your_kite_api_key
+ZERODHA_ACCESS_TOKEN=your_access_token
 ```
 
-## High-Level Architecture (Rust)
-
-All Rust source files are in `rust/src/`.
+## High-Level Architecture
 
 ### Three Execution Modes
 
-1. **Backtest** (`rust/src/commands/backtest.rs`) - Historical P&L simulation
+1. **Backtest** (`src/commands/backtest.rs`) - Historical P&L simulation
    - Loads OHLCV data → Runs event-driven simulation → Outputs performance metrics
 
-2. **Optimize** (`rust/src/commands/optimize.rs`) - Parameter grid search
+2. **Optimize** (`src/commands/optimize.rs`) - Parameter grid search
    - Generates parameter combinations → Runs parallel backtests → Ranks by Sharpe/Calmar/etc.
 
-3. **Live** (`rust/src/commands/live.rs`) - Real-time trading
+3. **Live** (`src/commands/live.rs`) - Real-time trading
    - Paper or live mode → State persistence → Crash recovery
 
 ### Core Components
 
-**Strategy Framework** (`rust/src/strategies/`)
+**Strategy Framework** (`src/strategies/`)
 - Trait-based plugin architecture: `Strategy` trait defines signal generation interface
 - Current implementation: `volatility_regime/` - Exploits GARCH clustering via regime classification
 - Easy to add new strategies by implementing the `Strategy` trait
 
-**Risk Management** (`rust/src/risk.rs`)
+**Risk Management** (`src/risk.rs`)
 - Multi-layer protection: position sizing, portfolio heat limits, drawdown-based de-risking
 - Consecutive loss protection: reduces size after 3 losses
 - Hard halt at 20% drawdown
 
-**Backtesting Engine** (`rust/src/backtest.rs`)
+**Backtesting Engine** (`src/backtest.rs`)
 - Event-driven simulation processing each candle chronologically
 - Multi-symbol support with automatic data alignment
 - Handles stop loss, take profit, and trailing stops
@@ -129,33 +106,26 @@ All Rust source files are in `rust/src/`.
 - T+1 execution model: orders placed on day T execute at day T+1's open price
 - Sharpe uses 365 trading days (crypto markets), 5% risk-free rate, sample std dev (n-1)
 
-**Python vs Rust Differences**
-Both implementations produce similar results but may differ slightly due to:
-- Execution timing: Backtrader vs custom Rust engine handle T+1 execution differently
-- Position sizing: Minor differences in equity calculations at order time
-- Order execution: Slippage application and price rounding
-Trade count and direction should match; PnL may vary ~10-30% between implementations.
-
-**Exchange Client** (`rust/src/exchange.rs`)
+**Exchange Client** (`src/coindcx/client.rs`)
 - Production-ready CoinDCX API wrapper with:
   - Circuit breaker pattern (fails fast after consecutive errors)
   - Exponential backoff retries (3 retries with jitter)
   - Rate limiting (token bucket algorithm via Semaphore)
   - HMAC-SHA256 request signing
 
-**State Persistence** (`rust/src/state_manager.rs`)
+**State Persistence** (`src/state_manager.rs`)
 - SQLite-based persistence with auto JSON backup
 - Stores: open positions, portfolio checkpoints, trade history
 - Enables crash recovery and maintains audit trail
 
-**Data Management** (`rust/src/data.rs`)
+**Data Management** (`src/data.rs`)
 - CSV-based OHLCV loading
 - Multi-symbol alignment (finds common date range)
 - Expected format: `datetime,open,high,low,close,volume`
 
 ### Key Architectural Patterns
 
-**Type-Driven Design** (`rust/src/types.rs`)
+**Type-Driven Design** (`src/types.rs`)
 - Core domain model: `Candle` → `Signal` → `Position` → `Trade` → `PerformanceMetrics`
 - All types are serializable for persistence
 - Strong type safety prevents data corruption
@@ -177,7 +147,7 @@ pub trait Strategy: Send + Sync {
 - Before any trade entry, validates: trading not halted, within position limits, portfolio heat OK
 - Returns position size adjusted for current drawdown and losing streaks
 
-**Configuration Hierarchy** (`rust/src/config.rs`)
+**Configuration Hierarchy** (`src/config.rs`)
 - JSON-based config structure:
   - `exchange`: fees, slippage, rate limits
   - `trading`: pairs, capital, risk limits, drawdown thresholds
@@ -236,7 +206,7 @@ pub trait Strategy: Send + Sync {
    - Regime Exit: Immediate close if Extreme regime
    - Trend Exit: Close if price < EMA(21) (only if profitable)
 
-**Configuration** (`rust/src/strategies/volatility_regime/config.rs`):
+**Configuration** (`src/strategies/volatility_regime/config.rs`):
 - All parameters are configurable via JSON `strategy` section
 - Key params: `atr_period`, `volatility_lookback`, thresholds, EMA/ADX settings
 
@@ -249,17 +219,15 @@ The system includes India's crypto tax regime:
 
 This ensures backtest results reflect post-tax reality. Target is 2:1 reward-risk with >50% win rate to overcome 30% tax drag.
 
-## Multi-Language Repository Structure
+## Rust Implementation
 
-This repository contains both Python and Rust implementations:
-- `py/` - Original Python implementation
-- `rust/` - Rust rewrite for performance
+This is a Rust-only repository optimized for:
+- **Type safety**: Compile-time guarantees eliminate runtime type errors
+- **Performance**: 10-100x faster backtests enable more thorough optimization
+- **Production resilience**: No runtime errors from type mismatches
+- **Memory safety**: No segfaults or use-after-free bugs
 
-**Why Rust:**
-- Type safety eliminates entire categories of bugs
-- Performance: 10-100x faster backtests enable more thorough optimization
-- Production resilience: No runtime errors from type mismatches
-- Memory safety: No segfaults or use-after-free bugs
+> A legacy Python implementation exists in the [`python`](https://github.com/P0W/crypto-strategies/tree/python) branch but is deprecated.
 
 **Current Status:**
 - ✅ Backtest mode: Production-ready
@@ -326,16 +294,16 @@ cargo test -- --nocapture  # Show println! output
 5. Update `main_backtest_cmd.rs` to recognize new strategy name
 6. Add grid params in `grid_params.rs` for optimization
 
-### Modifying Risk Rules (Rust)
+### Modifying Risk Rules
 
-1. Edit `rust/src/risk.rs::RiskManager`
+1. Edit `src/risk.rs::RiskManager`
 2. Update `calculate_position_size()` or `should_halt_trading()` logic
-3. Ensure config changes reflected in `rust/src/config.rs::TradingConfig`
-4. Test with: `cd rust && cargo test risk::`
+3. Ensure config changes reflected in `src/config.rs::TradingConfig`
+4. Test with: `cargo test risk::`
 
-### Adding New Indicators (Rust)
+### Adding New Indicators
 
-1. Add function to `rust/src/indicators.rs`
+1. Add function to `src/indicators.rs`
 2. Return Vec<f64> or single f64 value
 3. Test edge cases (empty data, NaN handling)
 
@@ -373,11 +341,11 @@ cargo test -- --nocapture  # Show println! output
 - Work-stealing scheduler for load balance
 - Integrates with Indicatif for progress bars
 
-## Module Dependency Graph (Rust)
+## Module Dependency Graph
 
 ```
-rust/src/main.rs (CLI dispatch, logging)
-  ├─→ main_backtest_cmd.rs
+src/main.rs (CLI dispatch, logging)
+  ├─→ commands/backtest.rs
   │     ├─→ config.rs
   │     ├─→ data.rs
   │     ├─→ backtest.rs
@@ -387,13 +355,13 @@ rust/src/main.rs (CLI dispatch, logging)
   │     │     └─→ types.rs
   │     └─→ strategies/volatility_regime/*
   │
-  ├─→ main_optimize_cmd.rs
+  ├─→ commands/optimize.rs
   │     ├─→ optimizer.rs
   │     │     └─→ backtest.rs (via parallel iter)
   │     └─→ strategies/volatility_regime/grid_params.rs
   │
-  └─→ main_live_cmd.rs
-        ├─→ exchange.rs (CoinDCX API client)
+  └─→ commands/live.rs
+        ├─→ coindcx/client.rs (CoinDCX API client)
         ├─→ state_manager.rs (SQLite persistence)
         └─→ risk.rs
 

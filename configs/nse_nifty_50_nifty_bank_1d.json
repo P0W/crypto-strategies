@@ -1,7 +1,7 @@
 {
   "backtest": {
     "commission": 0.0003,
-    "data_dir": "../data",
+    "data_dir": "./data",
     "end_date": "2025-12-31",
     "results_dir": "results",
     "start_date": "2025-01-01",

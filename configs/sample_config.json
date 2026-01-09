@@ -44,8 +44,8 @@
         "loss_offset_allowed": false
     },
     "backtest": {
-        "data_dir": "../data",
-        "results_dir": "../results",
+        "data_dir": "./data",
+        "results_dir": "./results",
         "commission": 0.001
     },
     "grid": {

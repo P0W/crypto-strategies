@@ -1,8 +1,8 @@
 {
   "backtest": {
     "commission": 0.001,
-    "data_dir": "../data",
-    "results_dir": "../results"
+    "data_dir": "./data",
+    "results_dir": "./results"
   },
   "exchange": {
     "assumed_slippage": 0.001,
