@@ -4,28 +4,15 @@
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-High-performance Rust trading system with **production-grade Order Management System (OMS)** for backtesting and live trading on CoinDCX (Indian crypto exchange) and Zerodha (Indian equity).
+High-performance Rust trading system for backtesting and live trading on CoinDCX (crypto) and Zerodha (equity).
 
 > **Note**: A legacy Python implementation exists in the [`python`](https://github.com/P0W/crypto-strategies/tree/python) branch but is deprecated and unmaintained.
-
-## 🎯 OMS Architecture
-
-The system features a complete Order Management System enabling:
-- **Order lifecycle management**: Pending → Submitted → Open → Filled/Cancelled
-- **Intra-candle fill detection**: Buy limit fills if `candle.low <= limit_price`
-- **FIFO position accounting**: Multiple fills per position with weighted average entry
-- **Grid trading support**: Place multiple simultaneous limit orders per symbol
-- **Multi-timeframe strategies**: Access multiple timeframes in strategy logic
-- **Order-based execution**: Strategies generate orders, not just signals
 
 ## Quick Start
 
 ```bash
-# Build (debug for development)
+# Build
 cargo build
-
-# Build (release for production/optimization)
-cargo build --release
 
 # Run backtest
 cargo run -- backtest --config configs/sample_config.json
@@ -37,134 +24,125 @@ cargo run --release -- optimize --config configs/sample_config.json
 cargo test
 ```
 
-### Environment Configuration
+### Environment Setup
 
 ```bash
 # Create .env from template
 copy .env.example .env  # Windows
+cp .env.example .env    # Linux/Mac
 
-# Add credentials
+# Add exchange credentials to .env
 COINDCX_API_KEY=your_api_key_here
 COINDCX_API_SECRET=your_api_secret_here
-ZERODHA_API_KEY=your_kite_api_key
-ZERODHA_ACCESS_TOKEN=your_access_token
 ```
-
-## Repository Structure
-
-```
-├── src/              # Rust source code
-│   ├── commands/     # CLI commands (backtest, optimize, live, download)
-│   ├── oms/          # Order Management System
-│   ├── strategies/   # Trading strategies
-│   ├── binance/      # Binance API (data only)
-│   ├── coindcx/      # CoinDCX API (trading)
-│   ├── zerodha/      # Zerodha Kite API (equity)
-│   └── common/       # Shared utilities
-├── tests/            # Integration tests
-├── configs/          # Strategy configuration files (JSON)
-├── data/             # Historical OHLCV data (CSV)
-├── results/          # Backtest results and charts
-├── logs/             # Trading logs
-├── .env              # API credentials (create from .env.example)
-└── Cargo.toml        # Rust dependencies
-```
-
-### ⚠️ Important: Currency Handling
-
-The system is **currency-agnostic** - all calculations work with dimensionless numbers. No currency conversion is performed. Simply ensure your `initial_capital` (in config) and price data (in CSV files) are in the **same currency**.
-
-**Current data files contain USD prices** despite the "INR" suffix in filenames.
-
-## Verified Backtest Results
-
-All strategies backtested with **₹100,000 initial capital** on crypto pairs (BTC, ETH, SOL, BNB, XRP) with INR.
-Data period: 2022-01 to 2026-01 (~1493 daily candles per symbol).
-
-| Strategy | Timeframe | Sharpe | Calmar | Return | Post-Tax | Win Rate | Trades | Max DD | Profit Factor |
-|----------|-----------|--------|--------|--------|----------|----------|--------|--------|---------------|
-| **quick_flip** | 1d | 1.08 | 2.00 | 166.08% | 116.31% | 56.55% | 145 | 13.54% | 2.73 |
-| **momentum_scalper** | 1d | 0.55 | 0.77 | 104.13% | 72.95% | 45.65% | 276 | 24.69% | 1.41 |
-| **range_breakout** | 1d | 0.71 | 1.09 | 92.74% | 64.92% | 48.28% | 116 | 15.93% | 2.44 |
-| **volatility_regime_4h** | 4h | -0.36 | 0.94 | 92.25% | 64.59% | 54.09% | 281 | 18.50% | 1.72 |
-| **volatility_regime** | 1d | 0.35 | 0.76 | 42.38% | 29.66% | 52.00% | 50 | 11.92% | 2.04 |
-| **regime_grid** | 1d | 0.42 | 0.44 | 80.19% | 58.92% | 83.02% | 53 | 35.16% | 83.21 |
-
-**Tax Calculation**: 30% flat tax on profits (Indian crypto tax), no loss offset allowed.
-
-*Results verified on 2026-01-09 using OMS-based backtest engine with optimized parameters.*
 
 ## Commands
 
-### Download Historical Data
+### Backtest
 
 ```bash
-# Download from Binance (default, no auth required)
-cargo run -- download --symbols BTC,ETH,SOL --timeframes 5m,15m,1h,1d --days 180
-
-# Download from CoinDCX
-cargo run -- download --symbols BTC,ETH --timeframes 1h,1d --days 90 --source coindcx
-```
-
-### Backtesting
-
-```bash
-# Run backtest
 cargo run -- backtest --config configs/sample_config.json
 
-# With date range filter
-cargo run -- backtest --config configs/sample_config.json --start 2024-01-01 --end 2024-12-31
-
-# Override capital
-cargo run -- backtest --config configs/sample_config.json --capital 50000
+# Options:
+#   -c, --config <FILE>     Config file path
+#   -s, --strategy <NAME>   Override strategy name
+#   --capital <AMOUNT>      Override initial capital
+#   --start <YYYY-MM-DD>    Start date filter
+#   --end <YYYY-MM-DD>      End date filter
+#   -v, --verbose           Verbose logging
 ```
 
-### Optimization
+### Optimize
 
 ```bash
-# Run optimization (uses grid from config)
 cargo run --release -- optimize --config configs/sample_config.json
 
-# Test multiple coin combinations
-cargo run --release -- optimize --coins BTC,ETH,SOL,BNB --min-combo 2
-
-# Sort by different metrics
-cargo run --release -- optimize --sort-by calmar
+# Options:
+#   -c, --config <FILE>       Config with grid section
+#   --sort-by <METRIC>        Sort by: sharpe, calmar, return, win_rate, profit_factor
+#   -t, --top <N>             Show top N results
+#   --coins <LIST>            Coins to test (e.g., "BTC,ETH,SOL")
+#   --timeframes <LIST>       Timeframes to test (e.g., "1h,4h,1d")
+#   -O, --override <PARAMS>   Override grid params (e.g., "ema_fast=5,8,13")
 ```
 
 ### Live Trading
 
 ```bash
-# Paper trading (safe, simulated)
-cargo run -- live --config configs/sample_config.json --paper
+cargo run -- live --config configs/sample_config.json --paper   # Paper trading
+cargo run -- live --config configs/sample_config.json --live    # Real trading (CAUTION!)
+```
 
-# Live trading with real money (CAUTION!)
-cargo run -- live --live
+### Download Data
+
+```bash
+cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 ```
 
 ## Available Strategies
 
-| Strategy | Description | Best Timeframe | Key Feature |
-|----------|-------------|----------------|-------------|
-| `volatility_regime` | ATR-based regime classification | 1d | Volatility clustering |
-| `regime_grid` | Grid trading with regime adaptation | 1d | High win rate (83%) |
-| `range_breakout` | N-bar high/low breakout | 1d | Lowest drawdown |
-| `momentum_scalper` | EMA crossover momentum | 1d | High trade count |
-| `quick_flip` | Range reversal/breakout | 1d | Best Sharpe (1.08) |
+| Strategy | Description |
+|----------|-------------|
+| `volatility_regime` | ATR-based regime classification with trend confirmation |
+| `momentum_scalper` | EMA crossover with momentum filters |
+| `range_breakout` | N-bar high/low breakout |
+| `quick_flip` | Range breakout with strong candle confirmation |
+| `regime_grid` | Grid trading with volatility regime adaptation |
 
-## Features
+## Repository Structure
 
-- **🎯 Order Management System**: Production-grade OMS with order lifecycle, FIFO P&L, grid trading
-- **⚡ Performance**: 10-100x faster backtests than Python enabling thorough optimization
-- **🔒 Type Safety**: Compile-time guarantees eliminate runtime type errors
-- **📊 Multi-Timeframe**: Strategies access multiple timeframes (e.g., 1d + 4h + 1h)
-- **⚙️ Parallel Optimization**: Rayon-based grid search across all CPU cores
-- **🏭 Production Ready**: Circuit breakers, rate limiting, state persistence
-- **🌐 Multiple Exchanges**: CoinDCX (crypto) and Zerodha Kite (equity)
+```
+├── src/
+│   ├── main.rs           # CLI entry point
+│   ├── backtest.rs       # Backtesting engine
+│   ├── optimizer.rs      # Parameter optimization
+│   ├── risk.rs           # Position sizing & drawdown control
+│   ├── indicators.rs     # Technical indicators (ATR, EMA, RSI, etc.)
+│   ├── commands/         # CLI command handlers
+│   ├── strategies/       # Trading strategies
+│   ├── oms/              # Order Management System
+│   ├── coindcx/          # CoinDCX exchange client
+│   ├── zerodha/          # Zerodha Kite client
+│   └── binance/          # Binance data client
+├── configs/              # Strategy configuration files
+├── data/                 # Historical OHLCV data (CSV)
+├── tests/                # Integration tests
+└── docs/                 # Documentation
+```
+
+## Configuration
+
+Strategy configs are JSON files with these sections:
+
+```json
+{
+    "trading": {
+        "symbols": ["BTCINR", "ETHINR"],
+        "initial_capital": 100000,
+        "risk_per_trade": 0.15,
+        "max_positions": 5,
+        "max_drawdown": 0.20
+    },
+    "strategy": {
+        "name": "volatility_regime",
+        "timeframe": "1d",
+        "atr_period": 14,
+        "ema_fast": 8,
+        "ema_slow": 21
+    },
+    "grid": {
+        "ema_fast": [5, 8, 13],
+        "ema_slow": [21, 34]
+    }
+}
+```
+
+See `configs/sample_config.json` for a complete example.
 
 ## Documentation
 
-- [CLAUDE.md](CLAUDE.md) - AI coding assistant guidance
+- [Creating Strategies](docs/CREATING_STRATEGIES.md) - Step-by-step guide to building custom strategies
+- [CLAUDE.md](CLAUDE.md) - AI assistant guidance for development
 
 ## License
 
