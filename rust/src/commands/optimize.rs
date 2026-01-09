@@ -632,8 +632,9 @@ pub fn run(
             let should_update = match baseline_metric {
                 Some(baseline) => {
                     let improvement = best_metric - baseline;
-                    // Use small epsilon to avoid updates due to floating-point precision
-                    if improvement > 0.001 {
+                    // Use 0.01 epsilon (1% Sharpe) to avoid updates due to floating-point precision
+                    // This prevents false "better" detections when values are essentially equal
+                    if improvement > 0.01 {
                         println!(
                             "  Best result ({:.2}) is better than current ({:.2}) by {:.2}",
                             best_metric, baseline, improvement
