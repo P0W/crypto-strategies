@@ -41,6 +41,7 @@ jobs:
             ${{ runner.os }}-cargo-
       
       - name: 🔨 Build release binary
+        working-directory: rust
         run: cargo build --release
       
       - name: 🧪 Run regime_grid regression test
@@ -49,8 +50,8 @@ jobs:
           echo "## 🎯 regime_grid Strategy" >> $GITHUB_STEP_SUMMARY
           
           # Run optimizer using root config
-          OUTPUT=$(./target/release/crypto-strategies optimize \
-            --config ../configs/regime_grid_config.json \
+          OUTPUT=$(./rust/target/release/crypto-strategies optimize \
+            --config configs/regime_grid_config.json \
             --top 1 2>&1) || true
           
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
@@ -74,8 +75,8 @@ jobs:
           echo "## 🎯 quick_flip Strategy" >> $GITHUB_STEP_SUMMARY
           
           # Run optimizer using root config
-          OUTPUT=$(./target/release/crypto-strategies optimize \
-            --config ../configs/quick_flip_config.json \
+          OUTPUT=$(./rust/target/release/crypto-strategies optimize \
+            --config configs/quick_flip_config.json \
             --top 1 2>&1) || true
           
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
@@ -99,8 +100,8 @@ jobs:
           echo "## 🎯 momentum_scalper Strategy" >> $GITHUB_STEP_SUMMARY
           
           # Run optimizer using root config
-          OUTPUT=$(./target/release/crypto-strategies optimize \
-            --config ../configs/momentum_scalper_config.json \
+          OUTPUT=$(./rust/target/release/crypto-strategies optimize \
+            --config configs/momentum_scalper_config.json \
             --top 1 2>&1) || true
           
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
@@ -124,8 +125,8 @@ jobs:
           echo "## 🎯 range_breakout Strategy" >> $GITHUB_STEP_SUMMARY
           
           # Run optimizer using root config
-          OUTPUT=$(./target/release/crypto-strategies optimize \
-            --config ../configs/range_breakout_config.json \
+          OUTPUT=$(./rust/target/release/crypto-strategies optimize \
+            --config configs/range_breakout_config.json \
             --top 1 2>&1) || true
           
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
@@ -149,8 +150,8 @@ jobs:
           echo "## 🎯 volatility_regime Strategy" >> $GITHUB_STEP_SUMMARY
           
           # Run optimizer using root config
-          OUTPUT=$(./target/release/crypto-strategies optimize \
-            --config ../configs/volatility_regime_config.json \
+          OUTPUT=$(./rust/target/release/crypto-strategies optimize \
+            --config configs/volatility_regime_config.json \
             --top 1 2>&1) || true
           
           echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
@@ -223,13 +224,18 @@ jobs:
             ${{ runner.os }}-cargo-
       
       - name: 📝 Check formatting
+        working-directory: rust
         run: cargo fmt --all -- --check
       
       - name: 🔎 Run Clippy lints
+        working-directory: rust
         run: cargo clippy --all-targets --all-features -- -D warnings
       
       - name: 🧪 Run unit tests
+        working-directory: rust
         run: cargo test --lib --verbose
       
       - name: 🧪 Run integration tests
+        working-directory: rust
         run: cargo test --test '*' --verbose || true  # Allow integration tests to fail if no data
+
