@@ -154,7 +154,10 @@ impl Strategy for QuickFlipStrategy {
             return orders;
         }
 
-        let current = ctx.candles.last().unwrap();
+        let current = match ctx.candles.last() {
+            Some(c) => c,
+            None => return orders,
+        };
         let prev = &ctx.candles[ctx.candles.len() - 2];
 
         // BREAKOUT LONG: Close breaks above range high

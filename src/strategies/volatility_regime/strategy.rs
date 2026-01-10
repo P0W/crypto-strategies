@@ -128,7 +128,10 @@ impl VolatilityRegimeStrategy {
             .fold(f64::MIN, f64::max);
 
         let breakout_level = recent_high - self.config.breakout_atr_multiple * current_atr;
-        let current_close = candles.last().unwrap().close;
+        let current_close = match candles.last() {
+            Some(c) => c.close,
+            None => return false,
+        };
         let prev_close = candles[n - 2].close;
 
         current_close > breakout_level && prev_close <= breakout_level
@@ -159,7 +162,10 @@ impl Strategy for VolatilityRegimeStrategy {
 
         // Calculate all indicators ONCE
         let ind = Indicators::new(candles, &self.config);
-        let current_price = candles.last().unwrap().close;
+        let current_price = match candles.last() {
+            Some(c) => c.close,
+            None => return orders,
+        };
 
         // Position exit logic
         if let Some(pos) = ctx.current_position {

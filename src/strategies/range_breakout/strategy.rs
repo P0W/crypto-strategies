@@ -98,7 +98,10 @@ impl RangeBreakoutStrategy {
         let avg_vol: f64 =
             candles[start..end].iter().map(|c| c.volume).sum::<f64>() / (end - start) as f64;
 
-        let current_vol = candles.last().unwrap().volume;
+        let current_vol = match candles.last() {
+            Some(c) => c.volume,
+            None => return true,
+        };
 
         // Volume should be at least 80% of average for valid breakout
         current_vol > avg_vol * 0.8
@@ -114,7 +117,10 @@ impl RangeBreakoutStrategy {
         let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
         let ema_vals = ema(&close, self.config.trend_ema);
 
-        let current_close = candles.last().unwrap().close;
+        let current_close = match candles.last() {
+            Some(c) => c.close,
+            None => return (true, true),
+        };
         let current_ema = ema_vals.last().and_then(|&x| x).unwrap_or(current_close);
 
         let is_bullish = current_close > current_ema;
@@ -184,7 +190,10 @@ impl Strategy for RangeBreakoutStrategy {
             return orders;
         }
 
-        let current = ctx.candles.last().unwrap();
+        let current = match ctx.candles.last() {
+            Some(c) => c,
+            None => return orders,
+        };
         let prev = &ctx.candles[ctx.candles.len() - 2];
 
         // Get range boundaries (excluding current bar)

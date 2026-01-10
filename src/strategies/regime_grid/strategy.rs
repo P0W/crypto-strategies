@@ -371,7 +371,10 @@ impl Strategy for RegimeGridStrategy {
         }
 
         // 1b. Check ATR/price ratio for volatility kill - activate if too volatile
-        let current_price = ctx.candles.last().unwrap().close;
+        let current_price = match ctx.candles.last() {
+            Some(c) => c.close,
+            None => return orders,
+        };
         if let Some(current_atr) = Indicators::atr_only(ctx.candles, self.config.atr_period_1h) {
             let volatility_ratio = current_atr / current_price;
             if volatility_ratio > self.config.volatility_kill_threshold {
@@ -479,7 +482,10 @@ impl Strategy for RegimeGridStrategy {
         }
 
         // 3. Check position exposure limit - don't add more if already at max
-        let current_price = ctx.candles.last().unwrap().close;
+        let current_price = match ctx.candles.last() {
+            Some(c) => c.close,
+            None => return orders,
+        };
         let position_value = ctx
             .current_position
             .map(|p| p.quantity * current_price)
