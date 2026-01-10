@@ -267,33 +267,63 @@ flowchart TD
     end
 
     subgraph StateManager["SqliteStateManager"]
-        SavePos["save_position()"]
-        LoadPos["load_positions()"]
-        SaveChk["save_checkpoint()"]
-        LoadChk["load_checkpoint()"]
-        RecordTrade["record_trade()"]
-        ExportJSON["export_json()"]
+        subgraph PositionOps["Position Operations"]
+            SavePos["save_position"]
+            LoadPos["load_positions"]
+            GetPos["get_position"]
+        end
+        subgraph CheckpointOps["Checkpoint Operations"]
+            SaveChk["save_checkpoint"]
+            LoadChk["load_checkpoint"]
+        end
+        subgraph TradeOps["Trade Operations"]
+            RecordTrade["record_trade"]
+        end
+        subgraph BackupOps["Backup"]
+            ExportJSON["export_json"]
+        end
     end
 
-    subgraph SQLite["SQLite Database"]
-        Positions[("positions table")]
-        Checkpoints[("checkpoints table")]
-        Trades[("trades table")]
+    subgraph SQLite["SQLite Database (WAL mode)"]
+        Positions[("positions
+        - symbol PK
+        - side, quantity
+        - entry_price, entry_time
+        - stop_loss, take_profit
+        - status, order_id
+        - pnl, exit_price, exit_time
+        - metadata")]
+        Checkpoints[("checkpoints
+        - timestamp, cycle_count
+        - portfolio_value, cash
+        - open_positions
+        - drawdown_pct
+        - consecutive_losses
+        - config_hash")]
+        Trades[("trades
+        - symbol, side, quantity
+        - entry/exit price/time
+        - gross_pnl, fees, tax, net_pnl
+        - exit_reason, strategy_signal
+        - atr_at_entry, stop_loss
+        - risk_reward_actual")]
     end
 
     subgraph Backup["JSON Backup"]
-        JSONFile[("backup.json")]
+        JSONFile[("state_backup.json")]
     end
 
-    Engine -->|open/close position| SavePos
-    Engine -->|get current positions| LoadPos
+    Engine -->|open/update position| SavePos
+    Engine -->|query all positions| LoadPos
+    Engine -->|query single symbol| GetPos
     Engine -->|periodic snapshot| SaveChk
     Engine -->|crash recovery| LoadChk
     Engine -->|completed trade| RecordTrade
-    Engine -->|backup trigger| ExportJSON
+    Engine -->|auto backup| ExportJSON
 
     SavePos --> Positions
     LoadPos --> Positions
+    GetPos --> Positions
     SaveChk --> Checkpoints
     LoadChk --> Checkpoints
     RecordTrade --> Trades
