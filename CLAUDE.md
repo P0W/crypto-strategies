@@ -283,6 +283,23 @@ cargo test --release  # With optimizations
 cargo test -- --nocapture  # Show println! output
 ```
 
+### Pre-Commit CI Checks
+
+**IMPORTANT**: Before committing, ensure all CI checks pass locally:
+
+```bash
+# 1. Format code (required)
+cargo fmt --all
+
+# 2. Run clippy lints (must pass with no warnings)
+cargo clippy --all-targets --all-features -- -D warnings
+
+# 3. Run all tests
+cargo test
+```
+
+The GitHub Actions workflow (`.github/workflows/regression-tests.yml`) runs these checks automatically on push/PR. Commits that fail these checks will break CI.
+
 ## Common Development Workflows
 
 ### Adding a New Strategy
