@@ -25,7 +25,7 @@ use crypto_strategies::multi_timeframe::{MultiTimeframeCandles, MultiTimeframeDa
 use crypto_strategies::oms::{ExecutionEngine, Fill, OrderBook, PositionManager, StrategyContext};
 use crypto_strategies::risk::RiskManager;
 use crypto_strategies::state_manager::{
-    create_state_manager, Checkpoint, Position as StatePosition, SqliteStateManager,
+    create_state_manager, Checkpoint, PendingOrder, Position as StatePosition, SqliteStateManager,
 };
 use crypto_strategies::strategies::{self, Strategy};
 use crypto_strategies::{Config, Money, Side, Symbol, Trade};
@@ -317,6 +317,54 @@ impl LiveTrader {
                 sp.entry_price,
                 sp.pnl
             );
+        }
+
+        // Load pending orders and restore to orderbooks
+        let pending_orders = self.state_manager.load_pending_orders()?;
+        if !pending_orders.is_empty() {
+            info!("📋 Restoring {} pending order(s)...", pending_orders.len());
+            for po in pending_orders {
+                let symbol = Symbol::new(&po.symbol);
+                let side = if po.side == "sell" { Side::Sell } else { Side::Buy };
+                let order_type = match po.order_type.as_str() {
+                    "limit" => crypto_strategies::oms::OrderType::Limit,
+                    "stop" => crypto_strategies::oms::OrderType::Stop,
+                    "stop_limit" => crypto_strategies::oms::OrderType::StopLimit,
+                    _ => crypto_strategies::oms::OrderType::Market,
+                };
+
+                let order = crypto_strategies::oms::Order {
+                    id: po.order_id.parse().unwrap_or(0),
+                    symbol: symbol.clone(),
+                    side,
+                    order_type,
+                    quantity: Money::from_f64(po.quantity),
+                    limit_price: po.limit_price.map(Money::from_f64),
+                    stop_price: po.stop_price.map(Money::from_f64),
+                    filled_quantity: Money::ZERO,
+                    remaining_quantity: Money::from_f64(po.quantity),
+                    average_fill_price: Money::ZERO,
+                    state: crypto_strategies::oms::OrderState::Open,
+                    time_in_force: crypto_strategies::oms::TimeInForce::GTC,
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                    strategy_tag: None,
+                    client_id: po.client_id,
+                    created_bar_idx: None,
+                };
+
+                let orderbook = self.orderbooks.entry(symbol.clone()).or_default();
+                orderbook.add_order(order);
+
+                info!(
+                    "  ✓ Restored {} {} @ {:?}",
+                    po.side.to_uppercase(),
+                    symbol,
+                    po.limit_price.or(po.stop_price)
+                );
+            }
+            // Clear from DB since they're now in memory
+            self.state_manager.clear_pending_orders()?;
         }
 
         info!(
@@ -979,6 +1027,34 @@ impl LiveTrader {
                 metadata,
             };
             self.state_manager.save_position(&sp)?;
+        }
+
+        // Save pending orders from all orderbooks
+        self.state_manager.clear_pending_orders()?;
+        for (symbol, orderbook) in &self.orderbooks {
+            for order in orderbook.get_all_orders() {
+                if order.state == crypto_strategies::oms::OrderState::Open
+                    || order.state == crypto_strategies::oms::OrderState::PartiallyFilled
+                {
+                    let po = PendingOrder {
+                        order_id: order.id.to_string(),
+                        symbol: symbol.to_string(),
+                        side: if order.side == Side::Buy { "buy" } else { "sell" }.to_string(),
+                        order_type: match order.order_type {
+                            crypto_strategies::oms::OrderType::Limit => "limit",
+                            crypto_strategies::oms::OrderType::Stop => "stop",
+                            crypto_strategies::oms::OrderType::StopLimit => "stop_limit",
+                            crypto_strategies::oms::OrderType::Market => "market",
+                        }
+                        .to_string(),
+                        quantity: order.remaining_quantity.to_f64(),
+                        limit_price: order.limit_price.map(|p| p.to_f64()),
+                        stop_price: order.stop_price.map(|p| p.to_f64()),
+                        client_id: order.client_id.clone(),
+                    };
+                    self.state_manager.save_pending_order(&po)?;
+                }
+            }
         }
 
         Ok(())

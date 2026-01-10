@@ -266,6 +266,7 @@ flowchart TD
         Engine["Trading Engine"]
         EntryLevels["entry_levels HashMap"]
         TrailingStops["trailing_stops HashMap"]
+        OrderBooks["orderbooks HashMap"]
     end
 
     subgraph StateManager["SqliteStateManager"]
@@ -278,11 +279,13 @@ flowchart TD
             SaveChk["save_checkpoint"]
             LoadChk["load_checkpoint"]
         end
+        subgraph OrderOps["Order Operations"]
+            SaveOrder["save_pending_order"]
+            LoadOrders["load_pending_orders"]
+            ClearOrders["clear_pending_orders"]
+        end
         subgraph TradeOps["Trade Operations"]
             RecordTrade["record_trade"]
-        end
-        subgraph BackupOps["Backup"]
-            ExportJSON["export_json"]
         end
     end
 
@@ -292,58 +295,54 @@ flowchart TD
         - side, quantity
         - entry_price, entry_time
         - stop_loss, take_profit
-        - status, order_id
-        - pnl, exit_price
         - metadata (trailing_stop)")]
         Checkpoints[("checkpoints
         - timestamp, cycle_count
         - portfolio_value, cash
-        - open_positions
         - drawdown_pct
-        - consecutive_losses
-        - config_hash")]
+        - consecutive_losses")]
+        PendingOrders[("pending_orders
+        - order_id PK
+        - symbol, side
+        - order_type, quantity
+        - limit_price, stop_price
+        - client_id")]
         Trades[("trades
         - symbol, side, quantity
         - entry/exit price/time
         - gross_pnl, fees, tax, net_pnl
-        - exit_reason, strategy_signal
-        - atr_at_entry, stop_loss
-        - risk_reward_actual")]
+        - exit_reason")]
     end
 
-    subgraph Backup["JSON Backup"]
-        JSONFile[("state_backup.json")]
-    end
-
-    subgraph Recovery["Crash Recovery"]
-        LoadChkRecovery["1. Load checkpoint"]
-        LoadPosRecovery["2. Load positions"]
-        RestoreLevels["3. Restore entry_levels"]
-        RestoreTrailing["4. Restore trailing_stops"]
+    subgraph Recovery["Crash Recovery Flow"]
+        R1["1. Load checkpoint"]
+        R2["2. Load positions"]
+        R3["3. Restore entry_levels"]
+        R4["4. Restore trailing_stops"]
+        R5["5. Restore pending_orders"]
     end
 
     Engine -->|periodic + shutdown| SaveChk
-    SaveChk -->|includes| SavePos
+    SaveChk --> SavePos
+    SaveChk --> SaveOrder
     EntryLevels -->|stop_loss, take_profit| SavePos
     TrailingStops -->|in metadata| SavePos
+    OrderBooks -->|all pending| SaveOrder
 
-    Engine -->|on restart| LoadChkRecovery
-    LoadChkRecovery --> LoadPosRecovery
-    LoadPosRecovery --> RestoreLevels
-    RestoreLevels --> RestoreTrailing
+    Engine -->|on restart| R1
+    R1 --> R2 --> R3 --> R4 --> R5
 
     SavePos --> Positions
-    LoadPos --> Positions
-    GetPos --> Positions
+    SaveOrder --> PendingOrders
     SaveChk --> Checkpoints
-    LoadChk --> Checkpoints
     RecordTrade --> Trades
-    ExportJSON --> JSONFile
 
-    LoadChkRecovery -.->|reads| Checkpoints
-    LoadPosRecovery -.->|reads| Positions
-    RestoreLevels -.->|from stop_loss/take_profit| EntryLevels
-    RestoreTrailing -.->|from metadata| TrailingStops
+    R1 -.->|reads| Checkpoints
+    R2 -.->|reads| Positions
+    R5 -.->|reads| PendingOrders
+    R3 -.->|restores| EntryLevels
+    R4 -.->|restores| TrailingStops
+    R5 -.->|restores| OrderBooks
 ```
 
 ### Crash Recovery Flow
@@ -353,14 +352,27 @@ flowchart TD
 3. **Load positions**: Restores all open positions to `PositionManager`
 4. **Restore entry_levels**: Stop/target prices restored from `positions.stop_loss/take_profit`
 5. **Restore trailing_stops**: Trailing stop values restored from `positions.metadata`
+6. **Restore pending_orders**: All pending orders restored to `OrderBook` per symbol
 
 ### Persistence Triggers
 
 | Event | Action |
 |-------|--------|
-| Every 10 cycles | `save_checkpoint` with all positions |
+| Every 10 cycles | `save_checkpoint` with positions + pending orders |
 | Ctrl+C / SIGINT | Graceful shutdown with final checkpoint |
 | Position open/close | Saved in next checkpoint cycle |
+
+### Full State Persistence
+
+| State | Table | Recovery |
+|-------|-------|----------|
+| Open positions | `positions` | ✅ Full |
+| Cash balance | `checkpoints` | ✅ Full |
+| Stop/Target levels | `positions.stop_loss/take_profit` | ✅ Full |
+| Trailing stops | `positions.metadata` | ✅ Full |
+| Consecutive losses | `checkpoints` | ✅ Full |
+| Drawdown | `checkpoints` | ✅ Full |
+| Pending orders | `pending_orders` | ✅ Full |
 
 ## Data Flow Summary
 

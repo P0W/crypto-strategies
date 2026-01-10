@@ -86,6 +86,18 @@ pub struct TradeRecord {
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingOrder {
+    pub order_id: String,
+    pub symbol: String,
+    pub side: String,
+    pub order_type: String,
+    pub quantity: f64,
+    pub limit_price: Option<f64>,
+    pub stop_price: Option<f64>,
+    pub client_id: Option<String>,
+}
+
 // =============================================================================
 // State Manager Implementation
 // =============================================================================
@@ -210,6 +222,27 @@ impl SqliteStateManager {
         )?;
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)",
+            [],
+        )?;
+
+        // Orders table for pending order persistence
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS pending_orders (
+                order_id TEXT PRIMARY KEY,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                order_type TEXT NOT NULL,
+                quantity REAL NOT NULL,
+                limit_price REAL,
+                stop_price REAL,
+                client_id TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_orders_symbol ON pending_orders(symbol)",
             [],
         )?;
 
@@ -456,14 +489,80 @@ impl SqliteStateManager {
         Ok(())
     }
 
+    /// Save a pending order to the database
+    pub fn save_pending_order(&self, order: &PendingOrder) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO pending_orders 
+             (order_id, symbol, side, order_type, quantity, limit_price, stop_price, client_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                order.order_id,
+                order.symbol,
+                order.side,
+                order.order_type,
+                order.quantity,
+                order.limit_price,
+                order.stop_price,
+                order.client_id,
+            ],
+        )?;
+        debug!("Pending order saved: {} {}", order.side, order.symbol);
+        Ok(())
+    }
+
+    /// Load all pending orders from the database
+    pub fn load_pending_orders(&self) -> Result<Vec<PendingOrder>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT * FROM pending_orders")?;
+
+        let orders = stmt
+            .query_map([], |row| {
+                Ok(PendingOrder {
+                    order_id: row.get(0)?,
+                    symbol: row.get(1)?,
+                    side: row.get(2)?,
+                    order_type: row.get(3)?,
+                    quantity: row.get(4)?,
+                    limit_price: row.get(5)?,
+                    stop_price: row.get(6)?,
+                    client_id: row.get(7)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(orders)
+    }
+
+    /// Clear all pending orders (called after orders are restored to orderbook)
+    pub fn clear_pending_orders(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM pending_orders", [])?;
+        debug!("Pending orders cleared");
+        Ok(())
+    }
+
+    /// Remove a specific pending order by ID
+    pub fn remove_pending_order(&self, order_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM pending_orders WHERE order_id = ?1",
+            params![order_id],
+        )?;
+        Ok(())
+    }
+
     pub fn export_json(&self) -> Result<()> {
         let positions = self.load_positions(None)?;
         let checkpoint = self.load_checkpoint()?;
+        let pending_orders = self.load_pending_orders()?;
 
         let state = serde_json::json!({
             "exported_at": Utc::now().to_rfc3339(),
             "positions": positions,
             "checkpoint": checkpoint,
+            "pending_orders": pending_orders,
         });
 
         std::fs::write(
