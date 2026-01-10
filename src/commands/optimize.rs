@@ -142,7 +142,7 @@ pub fn run(
             .trading
             .symbols()
             .iter()
-            .map(|s| s.0.clone())
+            .map(|s| s.as_str().to_string())
             .collect();
         info!("Using config symbols: {:?}", default_symbols);
         vec![default_symbols]
@@ -159,7 +159,7 @@ pub fn run(
     let all_symbols: Vec<Symbol> = symbol_groups
         .iter()
         .flatten()
-        .map(|s| Symbol(s.clone()))
+        .map(Symbol::new)
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
@@ -231,7 +231,7 @@ pub fn run(
         for timeframe in &timeframes_to_test {
             task_config.set_timeframe(timeframe);
 
-            let symbol_list: Vec<Symbol> = symbols_vec.iter().map(|s| Symbol(s.clone())).collect();
+            let symbol_list: Vec<Symbol> = symbols_vec.iter().map(Symbol::new).collect();
             match data::load_multi_symbol_with_range(
                 &task_config.backtest.data_dir,
                 &symbol_list,
@@ -907,7 +907,7 @@ fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<Optimiza
     use crypto_strategies::backtest::Backtester;
     use crypto_strategies::multi_timeframe::MultiTimeframeData;
 
-    let symbol_list: Vec<Symbol> = task.symbols_vec.iter().map(|s| Symbol(s.clone())).collect();
+    let symbol_list: Vec<Symbol> = task.symbols_vec.iter().map(Symbol::new).collect();
 
     // Create strategy to get its requirements
     let strategy = match strategies::create_strategy(param_config) {

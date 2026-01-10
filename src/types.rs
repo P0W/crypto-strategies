@@ -132,13 +132,38 @@ impl Candle {
     }
 }
 
-/// Trading pair symbol
+/// Trading pair symbol using Arc<str> for cheap cloning
+///
+/// Symbols are frequently cloned when passed to strategies, orders, and positions.
+/// Using Arc<str> instead of String reduces heap allocations from O(n) to O(1) per clone.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Symbol(pub String);
+#[serde(transparent)]
+pub struct Symbol(#[serde(with = "arc_str_serde")] std::sync::Arc<str>);
+
+/// Custom serde for Arc<str>
+mod arc_str_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::sync::Arc;
+
+    pub fn serialize<S>(value: &Arc<str>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(value)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Arc<str>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(Arc::from(s.as_str()))
+    }
+}
 
 impl Symbol {
-    pub fn new(s: impl Into<String>) -> Self {
-        Symbol(s.into())
+    pub fn new(s: impl AsRef<str>) -> Self {
+        Symbol(std::sync::Arc::from(s.as_ref()))
     }
 
     pub fn as_str(&self) -> &str {

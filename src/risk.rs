@@ -536,4 +536,267 @@ mod tests {
             return_pct_inr
         );
     }
+
+    // =========================================================================
+    // Edge Case Tests: Portfolio Heat + Drawdown Multiplier Interaction
+    // =========================================================================
+
+    /// Test: Drawdown warning level reduces position size by 50%
+    #[test]
+    fn test_drawdown_warning_multiplier() {
+        let mut rm = RiskManagerConfig::default()
+            .with_capital(100_000.0)
+            .with_risk_per_trade(0.02)
+            .with_max_position_pct(0.50) // 50% to avoid position cap interfering
+            .with_drawdown_levels(0.10, 0.15, 0.50, 0.25)
+            .build();
+
+        // Normal conditions: full size
+        let entry = 100.0;
+        let stop = 95.0; // $5 stop distance
+        let positions: Vec<&Position> = vec![];
+
+        let normal_size = rm.calculate_position_size_with_regime(entry, stop, &positions, 1.0);
+        // Risk = $2,000, stop = $5 → size = 400
+        assert_eq!(normal_size, 400.0);
+
+        // 12% drawdown (above warning, below critical)
+        rm.update_capital(88_000.0);
+        let warning_size = rm.calculate_position_size_with_regime(entry, stop, &positions, 1.0);
+        // Risk = $1,760 (88k * 2%), multiplier = 0.5 → adjusted = $880
+        // Size = 880 / 5 = 176
+        assert_eq!(warning_size, 176.0);
+    }
+
+    /// Test: Drawdown critical level reduces position size by 75%
+    #[test]
+    fn test_drawdown_critical_multiplier() {
+        let mut rm = RiskManagerConfig::default()
+            .with_capital(100_000.0)
+            .with_risk_per_trade(0.02)
+            .with_max_position_pct(0.50) // 50% to avoid position cap interfering
+            .with_drawdown_levels(0.10, 0.15, 0.50, 0.25)
+            .build();
+
+        // 17% drawdown (above critical)
+        rm.update_capital(83_000.0);
+        let entry = 100.0;
+        let stop = 95.0;
+        let positions: Vec<&Position> = vec![];
+
+        let critical_size = rm.calculate_position_size_with_regime(entry, stop, &positions, 1.0);
+        // Risk = $1,660 (83k * 2%), multiplier = 0.25 → adjusted = $415
+        // Size = 415 / 5 = 83
+        assert_eq!(critical_size, 83.0);
+    }
+
+    /// Test: Portfolio heat limits new position even when drawdown allows
+    #[test]
+    fn test_portfolio_heat_limits_position() {
+        use crate::oms::types::{Fill, Position as OmsPosition};
+        use crate::Side;
+        use chrono::Utc;
+
+        let rm = RiskManagerConfig::default()
+            .with_capital(100_000.0)
+            .with_risk_per_trade(0.02)
+            .with_max_portfolio_heat(0.05) // Only 5% heat allowed
+            .build();
+
+        // Create existing position with risk_amount = $4,000 (4% heat)
+        let fill = Fill {
+            order_id: 1,
+            price: 100.0,
+            quantity: 100.0,
+            timestamp: Utc::now(),
+            commission: 0.0,
+            is_maker: true,
+        };
+        let mut pos = OmsPosition::from_fill(fill, crate::Symbol::new("BTCUSDT"), Side::Buy);
+        pos.set_risk_amount(4_000.0); // 4% of capital at risk
+
+        let positions: Vec<&Position> = vec![&pos];
+
+        let entry = 100.0;
+        let stop = 95.0; // $5 stop, normal size would be 400
+
+        let size = rm.calculate_position_size_with_regime(entry, stop, &positions, 1.0);
+
+        // Max heat = $5,000, current heat = $4,000, remaining = $1,000
+        // New position risk would be $2,000 but limited to $1,000
+        // Size = 1000 / 5 = 200
+        assert_eq!(size, 200.0);
+    }
+
+    /// Test: Both portfolio heat AND drawdown multiplier active simultaneously
+    /// This is the key edge case where both constraints interact
+    #[test]
+    fn test_portfolio_heat_and_drawdown_combined() {
+        use crate::oms::types::{Fill, Position as OmsPosition};
+        use crate::Side;
+        use chrono::Utc;
+
+        let mut rm = RiskManagerConfig::default()
+            .with_capital(100_000.0)
+            .with_risk_per_trade(0.02)
+            .with_max_portfolio_heat(0.05) // 5% heat limit
+            .with_drawdown_levels(0.10, 0.15, 0.50, 0.25)
+            .build();
+
+        // 12% drawdown → warning multiplier (0.5)
+        rm.update_capital(88_000.0);
+
+        // Create existing position with 3% heat
+        let fill = Fill {
+            order_id: 1,
+            price: 100.0,
+            quantity: 100.0,
+            timestamp: Utc::now(),
+            commission: 0.0,
+            is_maker: true,
+        };
+        let mut pos = OmsPosition::from_fill(fill, crate::Symbol::new("BTCUSDT"), Side::Buy);
+        pos.set_risk_amount(2_640.0); // 3% of 88k
+
+        let positions: Vec<&Position> = vec![&pos];
+
+        let entry = 100.0;
+        let stop = 95.0; // $5 stop
+
+        let size = rm.calculate_position_size_with_regime(entry, stop, &positions, 1.0);
+
+        // Base risk = 88,000 * 0.02 = $1,760
+        // Drawdown multiplier = 0.5 → adjusted risk = $880
+        // Max heat = 88,000 * 0.05 = $4,400
+        // Current heat = $2,640, remaining = $1,760
+        // Since adjusted risk ($880) < remaining heat ($1,760), no heat limiting
+        // Size = 880 / 5 = 176
+        assert_eq!(size, 176.0);
+    }
+
+    /// Test: Portfolio heat exhausted completely blocks new positions
+    #[test]
+    fn test_portfolio_heat_exhausted() {
+        use crate::oms::types::{Fill, Position as OmsPosition};
+        use crate::Side;
+        use chrono::Utc;
+
+        let rm = RiskManagerConfig::default()
+            .with_capital(100_000.0)
+            .with_risk_per_trade(0.02)
+            .with_max_portfolio_heat(0.04) // 4% heat limit
+            .build();
+
+        // Create position that exhausts all heat
+        let fill = Fill {
+            order_id: 1,
+            price: 100.0,
+            quantity: 100.0,
+            timestamp: Utc::now(),
+            commission: 0.0,
+            is_maker: true,
+        };
+        let mut pos = OmsPosition::from_fill(fill, crate::Symbol::new("BTCUSDT"), Side::Buy);
+        pos.set_risk_amount(4_000.0); // Exactly 4% heat
+
+        let positions: Vec<&Position> = vec![&pos];
+
+        let entry = 100.0;
+        let stop = 95.0;
+
+        let size = rm.calculate_position_size_with_regime(entry, stop, &positions, 1.0);
+
+        // Heat exhausted → no new position allowed
+        assert_eq!(size, 0.0);
+    }
+
+    /// Test: Consecutive losses reduce position size independently of drawdown
+    #[test]
+    fn test_consecutive_losses_multiplier() {
+        let mut rm = RiskManagerConfig::default()
+            .with_capital(100_000.0)
+            .with_risk_per_trade(0.02)
+            .with_max_position_pct(0.50) // 50% to avoid position cap interfering
+            .with_consecutive_loss_protection(3, 0.75)
+            .build();
+
+        let entry = 100.0;
+        let stop = 95.0;
+        let positions: Vec<&Position> = vec![];
+
+        // Normal size
+        let normal = rm.calculate_position_size_with_regime(entry, stop, &positions, 1.0);
+        assert_eq!(normal, 400.0);
+
+        // Record 3 consecutive losses
+        rm.record_loss();
+        rm.record_loss();
+        rm.record_loss();
+
+        let reduced = rm.calculate_position_size_with_regime(entry, stop, &positions, 1.0);
+        // Risk = $2,000 * 0.75 = $1,500, size = 1500 / 5 = 300
+        assert_eq!(reduced, 300.0);
+    }
+
+    /// Test: All three multipliers stack (drawdown + losses + regime)
+    #[test]
+    fn test_all_multipliers_stack() {
+        let mut rm = RiskManagerConfig::default()
+            .with_capital(100_000.0)
+            .with_risk_per_trade(0.02)
+            .with_max_position_pct(0.50) // 50% to avoid position cap interfering
+            .with_drawdown_levels(0.10, 0.15, 0.50, 0.25)
+            .with_consecutive_loss_protection(3, 0.75)
+            .build();
+
+        // 12% drawdown → 0.5 multiplier
+        rm.update_capital(88_000.0);
+
+        // 3 consecutive losses → 0.75 multiplier
+        rm.record_loss();
+        rm.record_loss();
+        rm.record_loss();
+
+        let entry = 100.0;
+        let stop = 95.0;
+        let positions: Vec<&Position> = vec![];
+
+        // Regime score = 0.8
+        let size = rm.calculate_position_size_with_regime(entry, stop, &positions, 0.8);
+
+        // Base risk = 88,000 * 0.02 = $1,760
+        // Regime adjusted = $1,760 * 0.8 = $1,408
+        // Drawdown multiplier = 0.5 → $704
+        // Loss multiplier = 0.75 → $528
+        // Size = 528 / 5 = 105.6
+        assert!((size - 105.6).abs() < 0.01);
+    }
+
+    /// Test: Win resets consecutive loss counter
+    #[test]
+    fn test_win_resets_loss_counter() {
+        let mut rm = RiskManagerConfig::default()
+            .with_capital(100_000.0)
+            .with_risk_per_trade(0.02)
+            .with_max_position_pct(0.50) // 50% to avoid position cap interfering
+            .with_consecutive_loss_protection(3, 0.75)
+            .build();
+
+        // Record 2 losses
+        rm.record_loss();
+        rm.record_loss();
+        assert_eq!(rm.consecutive_losses, 2);
+
+        // Win resets counter
+        rm.record_win();
+        assert_eq!(rm.consecutive_losses, 0);
+        assert_eq!(rm.consecutive_wins, 1);
+
+        // Position size should be full again
+        let entry = 100.0;
+        let stop = 95.0;
+        let positions: Vec<&Position> = vec![];
+        let size = rm.calculate_position_size_with_regime(entry, stop, &positions, 1.0);
+        assert_eq!(size, 400.0);
+    }
 }
