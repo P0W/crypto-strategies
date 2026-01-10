@@ -104,7 +104,7 @@ flowchart TD
 ```mermaid
 flowchart LR
     subgraph Strategy
-        GenOrders["generate_orders()"]
+        GenOrders["generate_orders"]
     end
 
     subgraph OrderFlow["Order Flow"]
@@ -115,8 +115,8 @@ flowchart LR
 
     subgraph Execution
         ExecEngine["ExecutionEngine"]
-        CheckFill["check_fill()"]
-        ExecFill["execute_fill()"]
+        CheckFill["check_fill"]
+        ExecFill["execute_fill"]
         Fill["Fill"]
     end
 
@@ -127,13 +127,13 @@ flowchart LR
     end
 
     GenOrders -->|creates| OrderRequest
-    OrderRequest -->|into_order()| Order
-    Order -->|add_order()| OrderBook
-    OrderBook -->|get_fillable_orders()| ExecEngine
+    OrderRequest -->|into_order| Order
+    Order -->|add_order| OrderBook
+    OrderBook -->|get_fillable_orders| ExecEngine
     ExecEngine --> CheckFill
     CheckFill -->|candle OHLC match| ExecFill
     ExecFill -->|creates| Fill
-    Fill -->|add_fill()| PosMgr
+    Fill -->|add_fill| PosMgr
     PosMgr -->|FIFO accounting| Position
     Position -->|on close| Trade
 ```
@@ -187,14 +187,14 @@ classDiagram
     class Strategy {
         <<trait>>
         +name() str
-        +clone_boxed() Box~Strategy~
-        +generate_orders(ctx: StrategyContext) Vec~OrderRequest~
+        +clone_boxed() Box
+        +generate_orders(ctx) Vec
         +calculate_stop_loss(candles, entry_price) f64
         +calculate_take_profit(candles, entry_price) f64
-        +update_trailing_stop(position, price, candles) Option~f64~
-        +required_timeframes() Vec~str~
+        +update_trailing_stop(position, price, candles) Option
+        +required_timeframes() Vec
         +get_regime_score(candles) f64
-        +on_bar(ctx: StrategyContext)
+        +on_bar(ctx)
         +on_order_filled(fill, position)
         +on_trade_closed(trade)
         +init()
@@ -202,9 +202,9 @@ classDiagram
 
     class StrategyContext {
         +symbol: String
-        +candles: Vec~Candle~
-        +position: Option~Position~
-        +pending_orders: Vec~Order~
+        +candles: Vec
+        +position: Option
+        +pending_orders: Vec
         +cash: f64
         +portfolio_value: f64
     }
@@ -214,8 +214,8 @@ classDiagram
         +side: OrderSide
         +order_type: OrderType
         +quantity: Money
-        +limit_price: Option~Money~
-        +stop_price: Option~Money~
+        +limit_price: Option
+        +stop_price: Option
     }
 
     Strategy ..> StrategyContext : uses
