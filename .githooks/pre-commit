@@ -1,0 +1,7 @@
+#!/bin/sh
+# Pre-commit hook - runs cargo fmt and clippy
+set -e
+echo "🔧 Pre-commit: checking fmt + clippy..."
+cargo fmt --all -- --check || { echo "❌ Run 'cargo fmt --all' to fix"; exit 1; }
+cargo clippy --all-targets -- -D warnings 2>/dev/null || { echo "❌ Fix clippy warnings"; exit 1; }
+echo "✅ OK"

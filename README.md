@@ -39,9 +39,8 @@ COINDCX_API_SECRET=your_api_secret_here
 ### Development Setup
 
 ```bash
-# Install pre-commit hooks (runs fmt + clippy before each commit)
-./scripts/setup-dev.sh   # Linux/Mac
-sh scripts/setup-dev.sh  # Windows Git Bash
+# Enable pre-commit hooks (runs fmt + clippy before each commit)
+git config core.hooksPath .githooks
 ```
 
 ## Commands
