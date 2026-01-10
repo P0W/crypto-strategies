@@ -13,18 +13,18 @@
   "grid": {
     "_optimization": [
       {
-        "calmar_ratio": 13.77,
-        "expectancy": 1787.56,
-        "max_drawdown": 9.9,
-        "optimized_at": "2026-01-09 18:35:06",
-        "sharpe_ratio": 2.59,
+        "calmar_ratio": 17.13,
+        "expectancy": 1376.08,
+        "max_drawdown": 11.6,
+        "optimized_at": "2026-01-10 13:42:04",
+        "sharpe_ratio": 2.69,
         "symbols": [
           "ETHINR",
           "SOLINR"
         ],
-        "total_return": 135.6,
-        "total_trades": 75,
-        "win_rate": 81.3
+        "total_return": 197.3,
+        "total_trades": 82,
+        "win_rate": 72.0
       }
     ],
     "adx_sideways_threshold": [
@@ -96,13 +96,13 @@
     "bull_sell_target_pct": 0.025,
     "buy_distance_after_sell_pct": 0.06,
     "cancel_threshold_pct": 0.12,
-    "ema_band_pct": 0.05,
+    "ema_band_pct": 0.08,
     "ema_long_period": 200,
     "ema_short_period": 50,
-    "grid_spacing_pct": 0.025,
+    "grid_spacing_pct": 0.015,
     "high_volatility_candle_pct": 0.05,
-    "max_capital_usage_pct": 0.2,
-    "max_drawdown_pct": 0.1,
+    "max_capital_usage_pct": 0.25,
+    "max_drawdown_pct": 0.15,
     "max_grids": 7,
     "name": "regime_grid",
     "rsi_bear_threshold": 30,
@@ -110,7 +110,7 @@
     "rsi_bull_min": 45,
     "rsi_period": 14,
     "sell_target_pct": 0.03,
-    "stop_atr_multiple": 1.5,
+    "stop_atr_multiple": 1,
     "timeframe": "1d",
     "trailing_activation_pct": 0.015,
     "trailing_atr_multiple": 1.0,
