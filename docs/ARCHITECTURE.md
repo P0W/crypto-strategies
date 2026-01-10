@@ -264,6 +264,8 @@ flowchart TD
 flowchart TD
     subgraph LiveTrading["Live Trading Engine"]
         Engine["Trading Engine"]
+        EntryLevels["entry_levels HashMap"]
+        TrailingStops["trailing_stops HashMap"]
     end
 
     subgraph StateManager["SqliteStateManager"]
@@ -291,8 +293,8 @@ flowchart TD
         - entry_price, entry_time
         - stop_loss, take_profit
         - status, order_id
-        - pnl, exit_price, exit_time
-        - metadata")]
+        - pnl, exit_price
+        - metadata (trailing_stop)")]
         Checkpoints[("checkpoints
         - timestamp, cycle_count
         - portfolio_value, cash
@@ -313,13 +315,22 @@ flowchart TD
         JSONFile[("state_backup.json")]
     end
 
-    Engine -->|open/update position| SavePos
-    Engine -->|query all positions| LoadPos
-    Engine -->|query single symbol| GetPos
-    Engine -->|periodic snapshot| SaveChk
-    Engine -->|crash recovery| LoadChk
-    Engine -->|completed trade| RecordTrade
-    Engine -->|auto backup| ExportJSON
+    subgraph Recovery["Crash Recovery"]
+        LoadChkRecovery["1. Load checkpoint"]
+        LoadPosRecovery["2. Load positions"]
+        RestoreLevels["3. Restore entry_levels"]
+        RestoreTrailing["4. Restore trailing_stops"]
+    end
+
+    Engine -->|periodic + shutdown| SaveChk
+    SaveChk -->|includes| SavePos
+    EntryLevels -->|stop_loss, take_profit| SavePos
+    TrailingStops -->|in metadata| SavePos
+
+    Engine -->|on restart| LoadChkRecovery
+    LoadChkRecovery --> LoadPosRecovery
+    LoadPosRecovery --> RestoreLevels
+    RestoreLevels --> RestoreTrailing
 
     SavePos --> Positions
     LoadPos --> Positions
@@ -328,7 +339,28 @@ flowchart TD
     LoadChk --> Checkpoints
     RecordTrade --> Trades
     ExportJSON --> JSONFile
+
+    LoadChkRecovery -.->|reads| Checkpoints
+    LoadPosRecovery -.->|reads| Positions
+    RestoreLevels -.->|from stop_loss/take_profit| EntryLevels
+    RestoreTrailing -.->|from metadata| TrailingStops
 ```
+
+### Crash Recovery Flow
+
+1. **On startup**: `recover_state()` called
+2. **Load checkpoint**: Restores `cycle_count`, `cash`, `consecutive_losses`, `drawdown`
+3. **Load positions**: Restores all open positions to `PositionManager`
+4. **Restore entry_levels**: Stop/target prices restored from `positions.stop_loss/take_profit`
+5. **Restore trailing_stops**: Trailing stop values restored from `positions.metadata`
+
+### Persistence Triggers
+
+| Event | Action |
+|-------|--------|
+| Every 10 cycles | `save_checkpoint` with all positions |
+| Ctrl+C / SIGINT | Graceful shutdown with final checkpoint |
+| Position open/close | Saved in next checkpoint cycle |
 
 ## Data Flow Summary
 

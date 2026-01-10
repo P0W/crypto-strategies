@@ -291,6 +291,24 @@ impl LiveTrader {
 
             self.position_manager.add_fill(fill, symbol.clone(), side);
 
+            // Restore stop/target levels if saved
+            if sp.stop_loss > 0.0 || sp.take_profit > 0.0 {
+                self.entry_levels
+                    .insert(symbol.clone(), (sp.stop_loss, sp.take_profit));
+                info!(
+                    "  └─ Restored levels: stop={:.2}, target={:.2}",
+                    sp.stop_loss, sp.take_profit
+                );
+            }
+
+            // Restore trailing stop from metadata if present
+            if let Some(trailing) = sp.metadata.get("trailing_stop") {
+                if let Some(trailing_val) = trailing.as_f64() {
+                    self.trailing_stops.insert(symbol.clone(), trailing_val);
+                    info!("  └─ Restored trailing stop: {:.2}", trailing_val);
+                }
+            }
+
             info!(
                 "  ✓ {} {} {:.6} @ {:.2} (P&L: {:.2})",
                 symbol,
@@ -926,20 +944,39 @@ impl LiveTrader {
         self.state_manager.save_checkpoint(&checkpoint)?;
 
         for (symbol, pos) in self.position_manager.get_all_positions() {
+            // Get cached stop/target levels if available
+            let (stop_loss, take_profit) = self
+                .entry_levels
+                .get(symbol)
+                .copied()
+                .unwrap_or((0.0, 0.0));
+
+            // Use trailing stop if set, otherwise initial stop
+            let active_stop = self.trailing_stops.get(symbol).copied().unwrap_or(stop_loss);
+
+            let mut metadata = MetadataMap::new();
+            // Persist trailing stop in metadata for recovery
+            if let Some(&trailing) = self.trailing_stops.get(symbol) {
+                metadata.insert(
+                    "trailing_stop".to_string(),
+                    serde_json::json!(trailing),
+                );
+            }
+
             let sp = StatePosition {
                 symbol: symbol.to_string(),
                 side: if pos.side == Side::Buy { "buy" } else { "sell" }.to_string(),
                 entry_price: pos.average_entry_price.to_f64(),
                 quantity: pos.quantity.to_f64(),
-                stop_loss: 0.0,
-                take_profit: 0.0,
+                stop_loss: active_stop,
+                take_profit,
                 status: "open".to_string(),
                 order_id: None,
                 pnl: pos.unrealized_pnl.to_f64(),
                 exit_price: 0.0,
                 entry_time: Some(pos.entry_time().to_rfc3339()),
                 exit_time: None,
-                metadata: MetadataMap::new(),
+                metadata,
             };
             self.state_manager.save_position(&sp)?;
         }
