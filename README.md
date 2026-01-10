@@ -36,6 +36,14 @@ COINDCX_API_KEY=your_api_key_here
 COINDCX_API_SECRET=your_api_secret_here
 ```
 
+### Development Setup
+
+```bash
+# Install pre-commit hooks (runs fmt + clippy before each commit)
+./scripts/setup-dev.sh   # Linux/Mac
+sh scripts/setup-dev.sh  # Windows Git Bash
+```
+
 ## Commands
 
 ### Backtest
