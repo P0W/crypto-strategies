@@ -26,13 +26,15 @@ jobs:
   regression-tests:
     name: 🧪 Strategy Regression Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
         with:
           lfs: true
-          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
 
       - name: 🦀 Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -142,22 +144,29 @@ jobs:
           echo "better=$BETTER" >> $GITHUB_OUTPUT
 
       - name: 📝 Commit better configs
-        if: steps.regression.outputs.better != ''
+        if: steps.regression.outputs.better != '' && github.event_name == 'push'
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
           BETTER="${{ steps.regression.outputs.better }}"
           for strategy in $BETTER; do
             git add "configs/${strategy}_config.json"
           done
           
-          git commit -m "chore: auto-update optimized configs [skip ci]
+          git commit -m "chore: auto-update optimized configs
 
           Updated strategies:$BETTER
           
           Triggered by: ${{ github.sha }}"
           git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: ⚠️ Better configs found (PR)
+        if: steps.regression.outputs.better != '' && github.event_name == 'pull_request'
+        run: |
+          echo "::warning::Better configs found for:${{ steps.regression.outputs.better }}. Merge this PR and run workflow again to auto-update."
 
       - name: ❌ Fail if any regression test failed
         if: steps.regression.outputs.failed != ''
