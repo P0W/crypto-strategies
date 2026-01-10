@@ -198,8 +198,5 @@ jobs:
       - name: 🔎 Run Clippy lints
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-      - name: 🧪 Run unit tests
-        run: cargo test --lib --verbose
-
-      - name: 🧪 Run integration tests
-        run: cargo test --test '*' --verbose || true
+      - name: 🧪 Run all tests
+        run: cargo test --all-targets --verbose
