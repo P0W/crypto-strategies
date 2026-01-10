@@ -325,7 +325,11 @@ impl LiveTrader {
             info!("📋 Restoring {} pending order(s)...", pending_orders.len());
             for po in pending_orders {
                 let symbol = Symbol::new(&po.symbol);
-                let side = if po.side == "sell" { Side::Sell } else { Side::Buy };
+                let side = if po.side == "sell" {
+                    Side::Sell
+                } else {
+                    Side::Buy
+                };
                 let order_type = match po.order_type.as_str() {
                     "limit" => crypto_strategies::oms::OrderType::Limit,
                     "stop" => crypto_strategies::oms::OrderType::Stop,
@@ -993,22 +997,20 @@ impl LiveTrader {
 
         for (symbol, pos) in self.position_manager.get_all_positions() {
             // Get cached stop/target levels if available
-            let (stop_loss, take_profit) = self
-                .entry_levels
-                .get(symbol)
-                .copied()
-                .unwrap_or((0.0, 0.0));
+            let (stop_loss, take_profit) =
+                self.entry_levels.get(symbol).copied().unwrap_or((0.0, 0.0));
 
             // Use trailing stop if set, otherwise initial stop
-            let active_stop = self.trailing_stops.get(symbol).copied().unwrap_or(stop_loss);
+            let active_stop = self
+                .trailing_stops
+                .get(symbol)
+                .copied()
+                .unwrap_or(stop_loss);
 
             let mut metadata = MetadataMap::new();
             // Persist trailing stop in metadata for recovery
             if let Some(&trailing) = self.trailing_stops.get(symbol) {
-                metadata.insert(
-                    "trailing_stop".to_string(),
-                    serde_json::json!(trailing),
-                );
+                metadata.insert("trailing_stop".to_string(), serde_json::json!(trailing));
             }
 
             let sp = StatePosition {
@@ -1039,7 +1041,12 @@ impl LiveTrader {
                     let po = PendingOrder {
                         order_id: order.id.to_string(),
                         symbol: symbol.to_string(),
-                        side: if order.side == Side::Buy { "buy" } else { "sell" }.to_string(),
+                        side: if order.side == Side::Buy {
+                            "buy"
+                        } else {
+                            "sell"
+                        }
+                        .to_string(),
                         order_type: match order.order_type {
                             crypto_strategies::oms::OrderType::Limit => "limit",
                             crypto_strategies::oms::OrderType::Stop => "stop",
