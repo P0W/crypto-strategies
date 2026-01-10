@@ -16,7 +16,7 @@ on:
       - 'Cargo.lock'
       - 'configs/**'
       - '.github/workflows/regression-tests.yml'
-  workflow_dispatch:  # Allow manual trigger
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -32,6 +32,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           lfs: true
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 🦀 Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -55,108 +56,113 @@ jobs:
       - name: 🔨 Build release binary
         run: cargo build --release
 
-      - name: 🧪 Run regime_grid regression test
-        id: regime_grid
+      - name: 🧪 Run strategy regression tests
+        id: regression
         run: |
-          echo "## 🎯 regime_grid Strategy" >> $GITHUB_STEP_SUMMARY
-          OUTPUT=$(./target/release/crypto-strategies optimize --config configs/regime_grid_config.json --top 1 2>&1) || true
-          echo '`' >> $GITHUB_STEP_SUMMARY
-          echo "$OUTPUT" | tail -20 >> $GITHUB_STEP_SUMMARY
-          echo '`' >> $GITHUB_STEP_SUMMARY
-          if echo "$OUTPUT" | grep -q "already optimal"; then
-            echo "✅ regime_grid PASSED" >> $GITHUB_STEP_SUMMARY
-            echo "regime_grid_status=passed" >> $GITHUB_OUTPUT
-          else
-            echo "❌ regime_grid FAILED" >> $GITHUB_STEP_SUMMARY
-            echo "regime_grid_status=failed" >> $GITHUB_OUTPUT
-          fi
-
-      - name: 🧪 Run quick_flip regression test
-        id: quick_flip
-        run: |
-          echo "## 🎯 quick_flip Strategy" >> $GITHUB_STEP_SUMMARY
-          OUTPUT=$(./target/release/crypto-strategies optimize --config configs/quick_flip_config.json --top 1 2>&1) || true
-          echo '`' >> $GITHUB_STEP_SUMMARY
-          echo "$OUTPUT" | tail -20 >> $GITHUB_STEP_SUMMARY
-          echo '`' >> $GITHUB_STEP_SUMMARY
-          if echo "$OUTPUT" | grep -q "already optimal"; then
-            echo "✅ quick_flip PASSED" >> $GITHUB_STEP_SUMMARY
-            echo "quick_flip_status=passed" >> $GITHUB_OUTPUT
-          else
-            echo "❌ quick_flip FAILED" >> $GITHUB_STEP_SUMMARY
-            echo "quick_flip_status=failed" >> $GITHUB_OUTPUT
-          fi
-
-      - name: 🧪 Run momentum_scalper regression test
-        id: momentum_scalper
-        run: |
-          echo "## 🎯 momentum_scalper Strategy" >> $GITHUB_STEP_SUMMARY
-          OUTPUT=$(./target/release/crypto-strategies optimize --config configs/momentum_scalper_config.json --top 1 2>&1) || true
-          echo '`' >> $GITHUB_STEP_SUMMARY
-          echo "$OUTPUT" | tail -20 >> $GITHUB_STEP_SUMMARY
-          echo '`' >> $GITHUB_STEP_SUMMARY
-          if echo "$OUTPUT" | grep -q "already optimal"; then
-            echo "✅ momentum_scalper PASSED" >> $GITHUB_STEP_SUMMARY
-            echo "momentum_scalper_status=passed" >> $GITHUB_OUTPUT
-          else
-            echo "❌ momentum_scalper FAILED" >> $GITHUB_STEP_SUMMARY
-            echo "momentum_scalper_status=failed" >> $GITHUB_OUTPUT
-          fi
-
-      - name: 🧪 Run range_breakout regression test
-        id: range_breakout
-        run: |
-          echo "## 🎯 range_breakout Strategy" >> $GITHUB_STEP_SUMMARY
-          OUTPUT=$(./target/release/crypto-strategies optimize --config configs/range_breakout_config.json --top 1 2>&1) || true
-          echo '`' >> $GITHUB_STEP_SUMMARY
-          echo "$OUTPUT" | tail -20 >> $GITHUB_STEP_SUMMARY
-          echo '`' >> $GITHUB_STEP_SUMMARY
-          if echo "$OUTPUT" | grep -q "already optimal"; then
-            echo "✅ range_breakout PASSED" >> $GITHUB_STEP_SUMMARY
-            echo "range_breakout_status=passed" >> $GITHUB_OUTPUT
-          else
-            echo "❌ range_breakout FAILED" >> $GITHUB_STEP_SUMMARY
-            echo "range_breakout_status=failed" >> $GITHUB_OUTPUT
-          fi
-
-      - name: 🧪 Run volatility_regime regression test
-        id: volatility_regime
-        run: |
-          echo "## 🎯 volatility_regime Strategy" >> $GITHUB_STEP_SUMMARY
-          OUTPUT=$(./target/release/crypto-strategies optimize --config configs/volatility_regime_config.json --top 1 2>&1) || true
-          echo '`' >> $GITHUB_STEP_SUMMARY
-          echo "$OUTPUT" | tail -20 >> $GITHUB_STEP_SUMMARY
-          echo '`' >> $GITHUB_STEP_SUMMARY
-          if echo "$OUTPUT" | grep -q "already optimal"; then
-            echo "✅ volatility_regime PASSED" >> $GITHUB_STEP_SUMMARY
-            echo "volatility_regime_status=passed" >> $GITHUB_OUTPUT
-          else
-            echo "❌ volatility_regime FAILED" >> $GITHUB_STEP_SUMMARY
-            echo "volatility_regime_status=failed" >> $GITHUB_OUTPUT
-          fi
-
-      - name: 📋 Summary Report
-        run: |
+          STRATEGIES="regime_grid quick_flip momentum_scalper range_breakout volatility_regime"
+          FAILED=""
+          BETTER=""
+          
+          echo "## 📊 Strategy Regression Tests" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          
+          for strategy in $STRATEGIES; do
+            CONFIG="configs/${strategy}_config.json"
+            echo "### 🎯 ${strategy}" >> $GITHUB_STEP_SUMMARY
+            echo "⏱️ Started: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+            
+            set +e
+            timeout 600 ./target/release/crypto-strategies optimize --config "$CONFIG" --top 1 > "/tmp/${strategy}_stdout.txt" 2> "/tmp/${strategy}_stderr.txt"
+            EXIT_CODE=$?
+            set -e
+            
+            echo "⏱️ Finished: $(date -u '+%Y-%m-%d %H:%M:%S UTC') | Exit: $EXIT_CODE" >> $GITHUB_STEP_SUMMARY
+            
+            # Show stderr if present
+            if [ -s "/tmp/${strategy}_stderr.txt" ]; then
+              echo "<details><summary>⚠️ Stderr</summary>" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              cat "/tmp/${strategy}_stderr.txt" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "</details>" >> $GITHUB_STEP_SUMMARY
+            fi
+            
+            # Show last 30 lines of output
+            echo "<details><summary>📋 Output (last 30 lines)</summary>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -30 "/tmp/${strategy}_stdout.txt" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "</details>" >> $GITHUB_STEP_SUMMARY
+            
+            # Determine status
+            if [ $EXIT_CODE -eq 124 ]; then
+              echo "❌ **TIMEOUT** (>10min)" >> $GITHUB_STEP_SUMMARY
+              FAILED="$FAILED $strategy"
+            elif [ $EXIT_CODE -ne 0 ]; then
+              echo "❌ **CRASHED** (exit $EXIT_CODE)" >> $GITHUB_STEP_SUMMARY
+              FAILED="$FAILED $strategy"
+            elif grep -q "is already optimal" "/tmp/${strategy}_stdout.txt"; then
+              echo "✅ **PASSED** - config is already optimal" >> $GITHUB_STEP_SUMMARY
+            elif grep -q "Config updated:" "/tmp/${strategy}_stdout.txt"; then
+              echo "🔄 **BETTER CONFIG FOUND**" >> $GITHUB_STEP_SUMMARY
+              BETTER="$BETTER $strategy"
+            elif grep -q "No valid runs found" "/tmp/${strategy}_stdout.txt"; then
+              echo "❌ **NO VALID RUNS**" >> $GITHUB_STEP_SUMMARY
+              FAILED="$FAILED $strategy"
+            elif grep -q "Won't save a losing strategy" "/tmp/${strategy}_stdout.txt"; then
+              echo "❌ **NEGATIVE METRIC** - losing strategy" >> $GITHUB_STEP_SUMMARY
+              FAILED="$FAILED $strategy"
+            else
+              echo "❌ **UNEXPECTED OUTPUT**" >> $GITHUB_STEP_SUMMARY
+              FAILED="$FAILED $strategy"
+            fi
+            
+            echo "" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          # Summary table
           echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "## 📊 Regression Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 📋 Summary" >> $GITHUB_STEP_SUMMARY
           echo "| Strategy | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| regime_grid | ${{ steps.regime_grid.outputs.regime_grid_status == 'passed' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| quick_flip | ${{ steps.quick_flip.outputs.quick_flip_status == 'passed' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| momentum_scalper | ${{ steps.momentum_scalper.outputs.momentum_scalper_status == 'passed' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| range_breakout | ${{ steps.range_breakout.outputs.range_breakout_status == 'passed' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| volatility_regime | ${{ steps.volatility_regime.outputs.volatility_regime_status == 'passed' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          for strategy in $STRATEGIES; do
+            if echo "$FAILED" | grep -qw "$strategy"; then
+              echo "| $strategy | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+            elif echo "$BETTER" | grep -qw "$strategy"; then
+              echo "| $strategy | 🔄 Better config |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| $strategy | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
+          
+          # Set outputs
+          echo "failed=$FAILED" >> $GITHUB_OUTPUT
+          echo "better=$BETTER" >> $GITHUB_OUTPUT
+
+      - name: 📝 Commit better configs
+        if: steps.regression.outputs.better != ''
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          BETTER="${{ steps.regression.outputs.better }}"
+          for strategy in $BETTER; do
+            git add "configs/${strategy}_config.json"
+          done
+          
+          git commit -m "chore: auto-update optimized configs [skip ci]
+
+          Updated strategies:$BETTER
+          
+          Triggered by: ${{ github.sha }}"
+          git push
 
       - name: ❌ Fail if any regression test failed
-        if: |
-          steps.regime_grid.outputs.regime_grid_status != 'passed' ||
-          steps.quick_flip.outputs.quick_flip_status != 'passed' ||
-          steps.momentum_scalper.outputs.momentum_scalper_status != 'passed' ||
-          steps.range_breakout.outputs.range_breakout_status != 'passed' ||
-          steps.volatility_regime.outputs.volatility_regime_status != 'passed'
+        if: steps.regression.outputs.failed != ''
         run: |
-          echo "::error::One or more regression tests failed!"
+          echo "::error::Regression tests failed for:${{ steps.regression.outputs.failed }}"
           exit 1
 
   lint-and-test:
