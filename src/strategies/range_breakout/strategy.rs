@@ -271,15 +271,12 @@ impl Strategy for RangeBreakoutStrategy {
 
         let current_atr = self.get_current_atr(candles);
         let trail_distance = self.config.trailing_atr * current_atr;
-        let entry_price = position.average_entry_price;
+        let entry_price = position.average_entry_price.to_f64();
 
         match position.side {
             Side::Buy => {
-                // For long: trail stop below current price
-                // Only trail if we're in profit
                 if current_price > entry_price {
                     let new_stop = current_price - trail_distance;
-                    // Ensure new stop is above entry minus initial stop distance
                     let min_stop = entry_price - (self.config.stop_atr * current_atr);
                     if new_stop > min_stop {
                         return Some(new_stop);
@@ -288,11 +285,8 @@ impl Strategy for RangeBreakoutStrategy {
                 None
             }
             Side::Sell => {
-                // For short: trail stop above current price
-                // Only trail if we're in profit
                 if current_price < entry_price {
                     let new_stop = current_price + trail_distance;
-                    // Ensure new stop is below entry plus initial stop distance
                     let max_stop = entry_price + (self.config.stop_atr * current_atr);
                     if new_stop < max_stop {
                         return Some(new_stop);

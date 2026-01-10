@@ -20,7 +20,7 @@ use crate::multi_timeframe::MultiTimeframeCandles;
 use crate::oms::{ExecutionEngine, Order, OrderBook, Position, PositionManager, StrategyContext};
 use crate::risk::RiskManager;
 use crate::Strategy;
-use crate::{Config, PerformanceMetrics, Side, Symbol, Trade};
+use crate::{Config, Money, PerformanceMetrics, Side, Symbol, Trade};
 
 /// Backtest result container
 #[derive(Debug, Default)]
@@ -166,7 +166,7 @@ impl Backtester {
 
                                     // Check if we have enough cash for buy orders (matches main branch)
                                     if order.side == Side::Buy {
-                                        let position_value = fill_price * order.quantity;
+                                        let position_value = fill_price * order.quantity.to_f64();
                                         let commission =
                                             position_value * self.config.exchange.taker_fee;
                                         let cash_needed = position_value + commission;
@@ -192,18 +192,21 @@ impl Backtester {
                                         candle.datetime.format("%Y-%m-%d"),
                                         order.side,
                                         symbol,
-                                        fill.price
+                                        fill.price.to_f64()
                                     );
 
                                     // Update cash
                                     match order.side {
                                         Side::Buy => {
-                                            let cost = fill.price * fill.quantity + fill.commission;
+                                            let cost = (fill.price * fill.quantity
+                                                + fill.commission)
+                                                .to_f64();
                                             cash -= cost;
                                         }
                                         Side::Sell => {
-                                            let proceeds =
-                                                fill.price * fill.quantity - fill.commission;
+                                            let proceeds = (fill.price * fill.quantity
+                                                - fill.commission)
+                                                .to_f64();
                                             cash += proceeds;
                                         }
                                     }
@@ -231,8 +234,10 @@ impl Backtester {
                                     // NEW POSITION: Set risk_amount for portfolio heat calculation
                                     if !had_position_before && has_position_after {
                                         if let Some((stop_price, _)) = entry_levels.get(&symbol) {
-                                            let stop_distance = (fill.price - stop_price).abs();
-                                            let risk_amount = stop_distance * fill.quantity;
+                                            let stop_distance =
+                                                (fill.price.to_f64() - stop_price).abs();
+                                            let risk_amount =
+                                                stop_distance * fill.quantity.to_f64();
                                             if let Some(pos) =
                                                 position_manager.get_position_mut(&symbol)
                                             {
@@ -249,7 +254,7 @@ impl Backtester {
                                             // Use proper trade creation method
                                             let trade = self.create_trade_from_position(
                                                 &prev,
-                                                fill.price,
+                                                fill.price.to_f64(),
                                                 candle.datetime,
                                             );
 
@@ -336,11 +341,13 @@ impl Backtester {
                                 // Update cash based on fill
                                 match order.side {
                                     Side::Buy => {
-                                        let cost = fill.price * fill.quantity + fill.commission;
+                                        let cost =
+                                            (fill.price * fill.quantity + fill.commission).to_f64();
                                         cash -= cost;
                                     }
                                     Side::Sell => {
-                                        let proceeds = fill.price * fill.quantity - fill.commission;
+                                        let proceeds =
+                                            (fill.price * fill.quantity - fill.commission).to_f64();
                                         cash += proceeds;
                                     }
                                 }
@@ -349,7 +356,6 @@ impl Backtester {
                                 let had_position_before =
                                     position_manager.get_position(symbol).is_some();
                                 let prev_pos = if had_position_before {
-                                    // Get raw position (even if qty=0) for trade creation
                                     position_manager.get_position_raw(symbol).cloned()
                                 } else {
                                     None
@@ -372,8 +378,9 @@ impl Backtester {
                                 // NEW POSITION: Set risk_amount for portfolio heat calculation
                                 if !had_position_before && has_position_after {
                                     if let Some((stop_price, _)) = entry_levels.get(symbol) {
-                                        let stop_distance = (fill.price - stop_price).abs();
-                                        let risk_amount = stop_distance * fill.quantity;
+                                        let stop_distance =
+                                            (fill.price.to_f64() - stop_price).abs();
+                                        let risk_amount = stop_distance * fill.quantity.to_f64();
                                         if let Some(pos) = position_manager.get_position_mut(symbol)
                                         {
                                             pos.set_risk_amount(risk_amount);
@@ -386,7 +393,10 @@ impl Backtester {
                                     candle.datetime.format("%Y-%m-%d"),
                                     had_position_before,
                                     has_position_after,
-                                    prev_pos.as_ref().map(|p| p.quantity).unwrap_or(0.0)
+                                    prev_pos
+                                        .as_ref()
+                                        .map(|p| p.quantity.to_f64())
+                                        .unwrap_or(0.0)
                                 );
 
                                 if had_position_before && (!has_position_after || side_changed) {
@@ -394,7 +404,7 @@ impl Backtester {
                                     if let Some(closed_pos) = prev_pos {
                                         let trade = self.create_trade_from_position(
                                             &closed_pos,
-                                            fill.price,
+                                            fill.price.to_f64(),
                                             candle.datetime,
                                         );
 
@@ -476,14 +486,11 @@ impl Backtester {
 
                 // Calculate total value
                 if let Some(pos) = &position_data {
-                    total_value += pos.quantity * price;
+                    total_value += pos.quantity.to_f64() * price;
 
-                    // CRITICAL FIX: Use cached stop/target levels from entry time
-                    // Main branch stores these at entry in PendingOrder; we cache them here
+                    // Use cached stop/target levels from entry time
                     let (stop_price, target_price) =
                         *entry_levels.entry(symbol.clone()).or_insert_with(|| {
-                            // First time seeing this position - calculate and cache stop/target
-                            // Use entry slice for correct ATR calculation
                             let entry_slice = match primary
                                 .binary_search_by_key(&pos.first_entry_time, |c| c.datetime)
                             {
@@ -500,19 +507,20 @@ impl Backtester {
                                 }
                             };
 
+                            let entry_f64 = pos.average_entry_price.to_f64();
                             let stop = self
                                 .strategy
-                                .calculate_stop_loss(entry_slice, pos.average_entry_price, pos.side);
+                                .calculate_stop_loss(entry_slice, entry_f64, pos.side);
                             let target = self
                                 .strategy
-                                .calculate_take_profit(entry_slice, pos.average_entry_price, pos.side);
+                                .calculate_take_profit(entry_slice, entry_f64, pos.side);
 
                             tracing::debug!(
                                 "{} {} {:?} ENTRY LEVELS CACHED: entry={:.4} stop={:.4} target={:.4}",
                                 pos.first_entry_time.format("%Y-%m-%d"),
                                 symbol,
                                 pos.side,
-                                pos.average_entry_price,
+                                entry_f64,
                                 stop,
                                 target
                             );
@@ -523,7 +531,7 @@ impl Backtester {
                         "{} {} position check: entry={:.2} current={:.2} stop={:.2} target={:.2} low={:.2} high={:.2}",
                         candle.datetime.format("%Y-%m-%d"),
                         symbol,
-                        pos.average_entry_price,
+                        pos.average_entry_price.to_f64(),
                         price,
                         stop_price,
                         target_price,
@@ -588,7 +596,6 @@ impl Backtester {
 
                         // T+1 mode: Queue for next day execution
                         if self.config.backtest.use_t1_execution {
-                            // Store stop/target order for next candle
                             let order_id = close_order.id;
                             orderbooks
                                 .entry(symbol.clone())
@@ -603,15 +610,14 @@ impl Backtester {
                                 symbol,
                                 reason,
                                 pos.side,
-                                pos.average_entry_price,
+                                pos.average_entry_price.to_f64(),
                                 trigger_price
                             );
 
-                            continue; // Don't execute now, wait for next bar
+                            continue;
                         }
 
                         // Intra-candle mode: Execute immediately
-                        // Determine execution price (handle gaps)
                         let exec_price = match pos.side {
                             Side::Buy => {
                                 if candle.open < trigger_price {
@@ -635,7 +641,7 @@ impl Backtester {
                             symbol,
                             reason,
                             pos.side,
-                            pos.average_entry_price,
+                            pos.average_entry_price.to_f64(),
                             trigger_price,
                             exec_price,
                             candle.open,
@@ -645,9 +651,6 @@ impl Backtester {
                         );
 
                         // Execute immediate fill with slippage
-                        // Slippage should make the execution price WORSE for the trader
-                        // When SELLING (closing long): slippage reduces the sell price
-                        // When BUYING (closing short): slippage increases the buy price
                         let slippage_factor = match close_order.side {
                             Side::Sell => 1.0 - self.config.exchange.assumed_slippage,
                             Side::Buy => 1.0 + self.config.exchange.assumed_slippage,
@@ -656,14 +659,18 @@ impl Backtester {
                         let fill = self.execution_engine.execute_fill(
                             &mut close_order,
                             exec_price * slippage_factor,
-                            false, // Taker
+                            false,
                             candle.datetime,
                         );
 
                         // Update cash
                         match close_order.side {
-                            Side::Buy => cash -= fill.price * fill.quantity + fill.commission,
-                            Side::Sell => cash += fill.price * fill.quantity - fill.commission,
+                            Side::Buy => {
+                                cash -= (fill.price * fill.quantity + fill.commission).to_f64()
+                            }
+                            Side::Sell => {
+                                cash += (fill.price * fill.quantity - fill.commission).to_f64()
+                            }
                         }
 
                         // Remember the original position side before we update
@@ -693,13 +700,12 @@ impl Backtester {
                             trailing_stops.remove(symbol);
 
                             if position_closed {
-                                // CRITICAL: Clear closed position from manager to prevent P&L accumulation
                                 position_manager.close_position(symbol);
                             }
 
                             let trade = self.create_trade_from_position(
-                                pos, // Use the cloned position data
-                                fill.price,
+                                pos,
+                                fill.price.to_f64(),
                                 candle.datetime,
                             );
 
@@ -717,7 +723,7 @@ impl Backtester {
                             "{} {} closed @ {:.2} ({}) PnL={:.2}",
                             candle.datetime.format("%Y-%m-%d"),
                             symbol,
-                            fill.price,
+                            fill.price.to_f64(),
                             reason,
                             trades.last().map(|t| t.net_pnl.to_f64()).unwrap_or(0.0)
                         );
@@ -849,8 +855,8 @@ impl Backtester {
 
                         // Create order with risk-calculated quantity
                         let mut entry_order = order;
-                        entry_order.quantity = quantity;
-                        entry_order.remaining_quantity = quantity;
+                        entry_order.quantity = Money::from_f64(quantity);
+                        entry_order.remaining_quantity = Money::from_f64(quantity);
 
                         // CRITICAL: Cache stop/target at SIGNAL time (now), not at ENTRY time (T+1)
                         // Main branch stores these in PendingOrder at signal time
@@ -928,7 +934,7 @@ impl Backtester {
 
                         // Check if we have enough cash for buy orders (matches main branch)
                         if final_order.side == Side::Buy {
-                            let position_value = fill_price * final_order.quantity;
+                            let position_value = fill_price * final_order.quantity.to_f64();
                             let commission = position_value * self.config.exchange.taker_fee;
                             let cash_needed = position_value + commission;
                             if cash < cash_needed {
@@ -944,14 +950,18 @@ impl Backtester {
                         let fill = self.execution_engine.execute_fill(
                             &mut final_order,
                             fill_price,
-                            false, // Taker
+                            false,
                             candle.datetime,
                         );
 
                         // Update cash
                         match final_order.side {
-                            Side::Buy => cash -= fill.price * fill.quantity + fill.commission,
-                            Side::Sell => cash += fill.price * fill.quantity - fill.commission,
+                            Side::Buy => {
+                                cash -= (fill.price * fill.quantity + fill.commission).to_f64()
+                            }
+                            Side::Sell => {
+                                cash += (fill.price * fill.quantity - fill.commission).to_f64()
+                            }
                         }
 
                         // Check if we had a position before this fill
@@ -971,8 +981,8 @@ impl Backtester {
                         // NEW POSITION: Set risk_amount for portfolio heat calculation
                         if !had_position_before && has_position_after {
                             if let Some((stop_price, _)) = entry_levels.get(symbol) {
-                                let stop_distance = (fill.price - stop_price).abs();
-                                let risk_amount = stop_distance * fill.quantity;
+                                let stop_distance = (fill.price.to_f64() - stop_price).abs();
+                                let risk_amount = stop_distance * fill.quantity.to_f64();
                                 if let Some(pos) = position_manager.get_position_mut(symbol) {
                                     pos.set_risk_amount(risk_amount);
                                 }
@@ -984,7 +994,7 @@ impl Backtester {
                             if let Some(closed_pos) = prev_pos {
                                 let trade = self.create_trade_from_position(
                                     &closed_pos,
-                                    fill.price,
+                                    fill.price.to_f64(),
                                     candle.datetime,
                                 );
 
@@ -1016,8 +1026,8 @@ impl Backtester {
                             candle.datetime.format("%Y-%m-%d"),
                             final_order.side,
                             symbol,
-                            fill.price,
-                            fill.quantity
+                            fill.price.to_f64(),
+                            fill.quantity.to_f64()
                         );
 
                         // Notify strategy
@@ -1038,8 +1048,8 @@ impl Backtester {
                                 candle.datetime.format("%Y-%m-%d"),
                                 final_order.side,
                                 symbol,
-                                final_order.limit_price.unwrap_or(price),
-                                final_order.quantity,
+                                final_order.limit_price.map(|p| p.to_f64()).unwrap_or(price),
+                                final_order.quantity.to_f64(),
                                 if is_entry_order {
                                     "(ENTRY)"
                                 } else {
@@ -1101,23 +1111,25 @@ impl Backtester {
         exit_price: f64,
         exit_time: DateTime<Utc>,
     ) -> Trade {
-        // Calculate P&L for the remaining position only (don't double-count realized_pnl from partial fills)
+        let entry_price = pos.average_entry_price.to_f64();
+        let quantity = pos.quantity.to_f64();
+
         let pnl = match pos.side {
-            Side::Buy => (exit_price - pos.average_entry_price) * pos.quantity,
-            Side::Sell => (pos.average_entry_price - exit_price) * pos.quantity,
+            Side::Buy => (exit_price - entry_price) * quantity,
+            Side::Sell => (entry_price - exit_price) * quantity,
         };
 
-        let commission = pos.fills.iter().map(|f| f.commission).sum::<f64>()
-            + exit_price * pos.quantity * self.config.exchange.taker_fee;
+        let commission = pos.fills.iter().map(|f| f.commission.to_f64()).sum::<f64>()
+            + exit_price * quantity * self.config.exchange.taker_fee;
 
         let net_pnl = pnl - commission;
 
         Trade::from_f64(
             pos.symbol.clone(),
             pos.side,
-            pos.average_entry_price,
+            entry_price,
             exit_price,
-            pos.quantity,
+            quantity,
             pos.first_entry_time,
             exit_time,
             pnl,

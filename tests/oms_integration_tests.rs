@@ -20,7 +20,7 @@ use crypto_strategies::strategies::volatility_regime::{
     VolatilityRegimeConfig, VolatilityRegimeStrategy,
 };
 use crypto_strategies::strategies::Strategy;
-use crypto_strategies::{Candle, Config, Side, Symbol};
+use crypto_strategies::{Candle, Config, Money, Side, Symbol};
 
 // =============================================================================
 // Test Data Generation
@@ -69,7 +69,7 @@ fn test_order_book_basic_operations() {
     let symbol = Symbol::new("BTCINR");
 
     // Add buy limit order
-    let order1 = Order::new(
+    let order1 = Order::from_f64(
         symbol.clone(),
         Side::Buy,
         OrderType::Limit,
@@ -87,7 +87,7 @@ fn test_order_book_basic_operations() {
     assert!(orderbook.get_order(order1.id).is_some());
 
     // Add another order
-    let order2 = Order::new(
+    let order2 = Order::from_f64(
         symbol.clone(),
         Side::Buy,
         OrderType::Limit,
@@ -111,7 +111,7 @@ fn test_execution_engine_intracandle_fills() {
     let engine = ExecutionEngine::new(0.0004, 0.0006, 0.001);
 
     // Buy limit order at 50000
-    let mut order = Order::new(
+    let mut order = Order::from_f64(
         Symbol::new("BTCINR"),
         Side::Buy,
         OrderType::Limit,
@@ -142,9 +142,9 @@ fn test_execution_engine_intracandle_fills() {
 
         // Execute fill
         let fill = engine.execute_fill(&mut order, info.price, info.is_maker, candle.datetime);
-        assert_eq!(fill.price, 50000.0);
-        assert_eq!(fill.quantity, 1.0);
-        assert!(fill.commission > 0.0);
+        assert_eq!(fill.price, Money::from_f64(50000.0));
+        assert_eq!(fill.quantity, Money::from_f64(1.0));
+        assert!(fill.commission > Money::ZERO);
         assert_eq!(order.state, OrderState::Filled);
     }
 }
@@ -155,61 +155,40 @@ fn test_position_manager_fifo_accounting() {
     let symbol = Symbol::new("ETHINR");
 
     // First fill - buy 1.0 @ 150000
-    let fill1 = Fill {
-        order_id: 1,
-        price: 150000.0,
-        quantity: 1.0,
-        timestamp: Utc::now(),
-        commission: 60.0,
-        is_maker: true,
-    };
+    let fill1 = Fill::from_f64(1, 150000.0, 1.0, Utc::now(), 60.0, true);
 
     pm.add_fill(fill1.clone(), symbol.clone(), Side::Buy);
 
     let pos = pm.get_position(&symbol).unwrap();
-    assert_eq!(pos.quantity, 1.0);
-    assert_eq!(pos.average_entry_price, 150000.0);
+    assert_eq!(pos.quantity, Money::from_f64(1.0));
+    assert_eq!(pos.average_entry_price, Money::from_f64(150000.0));
     assert_eq!(pos.fills.len(), 1);
 
     // Second fill - buy 2.0 @ 160000
-    let fill2 = Fill {
-        order_id: 2,
-        price: 160000.0,
-        quantity: 2.0,
-        timestamp: Utc::now(),
-        commission: 128.0,
-        is_maker: true,
-    };
+    let fill2 = Fill::from_f64(2, 160000.0, 2.0, Utc::now(), 128.0, true);
 
     pm.add_fill(fill2.clone(), symbol.clone(), Side::Buy);
 
     let pos = pm.get_position(&symbol).unwrap();
-    assert_eq!(pos.quantity, 3.0);
+    assert_eq!(pos.quantity, Money::from_f64(3.0));
     // Weighted average: (150000*1 + 160000*2) / 3 = 156666.67
-    assert!((pos.average_entry_price - 156666.67).abs() < 1.0);
+    assert!((pos.average_entry_price.to_f64() - 156666.67).abs() < 1.0);
     assert_eq!(pos.fills.len(), 2);
 
     // Close 1.5 units @ 165000 (FIFO: closes 1.0 @ 150k, 0.5 @ 160k)
-    let fill3 = Fill {
-        order_id: 3,
-        price: 165000.0,
-        quantity: 1.5,
-        timestamp: Utc::now(),
-        commission: 99.0,
-        is_maker: false,
-    };
+    let fill3 = Fill::from_f64(3, 165000.0, 1.5, Utc::now(), 99.0, false);
 
     pm.add_fill(fill3, symbol.clone(), Side::Sell);
 
     let pos = pm.get_position(&symbol).unwrap();
-    assert_eq!(pos.quantity, 1.5); // 3.0 - 1.5
+    assert_eq!(pos.quantity, Money::from_f64(1.5)); // 3.0 - 1.5
     assert_eq!(pos.fills.len(), 1); // Only the partial fill remains
 
     // Realized P&L should be calculated
     // First fill: (165000 - 150000) * 1.0 = 15000
     // Second fill: (165000 - 160000) * 0.5 = 2500
     // Total: 17500 - commissions
-    assert!(pos.realized_pnl > 17000.0); // Should be close to 17500 minus commissions
+    assert!(pos.realized_pnl.to_f64() > 17000.0); // Should be close to 17500 minus commissions
 }
 
 #[test]
@@ -245,7 +224,7 @@ fn test_volatility_regime_strategy_generates_orders() {
     // Verify orders are valid if generated
     for order_req in orders {
         assert_eq!(order_req.symbol, symbol);
-        assert!(order_req.quantity > 0.0);
+        assert!(order_req.quantity > Money::ZERO);
 
         // Market orders should have no limit/stop price
         if order_req.order_type == OrderType::Market {
@@ -344,21 +323,21 @@ fn test_order_request_builders() {
     let market_buy = OrderRequest::market_buy(symbol.clone(), 1.5);
     assert_eq!(market_buy.side, Side::Buy);
     assert_eq!(market_buy.order_type, OrderType::Market);
-    assert_eq!(market_buy.quantity, 1.5);
+    assert_eq!(market_buy.quantity, Money::from_f64(1.5));
     assert!(market_buy.limit_price.is_none());
 
     // Limit sell
     let limit_sell = OrderRequest::limit_sell(symbol.clone(), 2.0, 150000.0);
     assert_eq!(limit_sell.side, Side::Sell);
     assert_eq!(limit_sell.order_type, OrderType::Limit);
-    assert_eq!(limit_sell.quantity, 2.0);
-    assert_eq!(limit_sell.limit_price, Some(150000.0));
+    assert_eq!(limit_sell.quantity, Money::from_f64(2.0));
+    assert_eq!(limit_sell.limit_price, Some(Money::from_f64(150000.0)));
 
     // Stop buy
     let stop_buy = OrderRequest::stop_buy(symbol.clone(), 1.0, 155000.0);
     assert_eq!(stop_buy.side, Side::Buy);
     assert_eq!(stop_buy.order_type, OrderType::Stop);
-    assert_eq!(stop_buy.stop_price, Some(155000.0));
+    assert_eq!(stop_buy.stop_price, Some(Money::from_f64(155000.0)));
 
     // With client ID
     let with_id =
@@ -377,7 +356,7 @@ fn test_large_order_book_performance() {
 
     // Add 1000 orders
     for i in 0..1000 {
-        let order = Order::new(
+        let order = Order::from_f64(
             symbol.clone(),
             if i % 2 == 0 { Side::Buy } else { Side::Sell },
             OrderType::Limit,
@@ -411,32 +390,18 @@ fn test_position_manager_edge_cases() {
     assert!(pm.get_position(&symbol).is_none());
 
     // Add fill, then close completely
-    let fill = Fill {
-        order_id: 1,
-        price: 100000.0,
-        quantity: 1.0,
-        timestamp: Utc::now(),
-        commission: 40.0,
-        is_maker: true,
-    };
+    let fill = Fill::from_f64(1, 100000.0, 1.0, Utc::now(), 40.0, true);
 
     pm.add_fill(fill, symbol.clone(), Side::Buy);
     assert!(pm.get_position(&symbol).is_some());
 
     // Close with exact quantity
-    let close_fill = Fill {
-        order_id: 2,
-        price: 110000.0,
-        quantity: 1.0,
-        timestamp: Utc::now(),
-        commission: 44.0,
-        is_maker: false,
-    };
+    let close_fill = Fill::from_f64(2, 110000.0, 1.0, Utc::now(), 44.0, false);
 
     pm.add_fill(close_fill, symbol.clone(), Side::Sell);
 
     // Position should still exist but with 0 quantity
     if let Some(pos) = pm.get_position(&symbol) {
-        assert!(pos.quantity < 0.001); // Near zero
+        assert!(pos.quantity.to_f64() < 0.001); // Near zero
     }
 }

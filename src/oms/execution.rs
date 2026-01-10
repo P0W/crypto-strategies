@@ -1,7 +1,7 @@
 //! Execution engine with intra-candle fill detection
 
 use crate::oms::types::{Fill, Order, OrderState, OrderType};
-use crate::{Candle, Side};
+use crate::{Candle, Money, Side};
 use chrono::{DateTime, Utc};
 
 /// Fill price with maker/taker flag
@@ -28,36 +28,21 @@ impl ExecutionEngine {
         }
     }
 
-    /// Check if order fills during this candle
-    ///
-    /// # Arguments
-    /// * `order` - The order to check
-    /// * `candle` - The current candle
-    /// * `current_bar_idx` - Current bar index (for look-ahead bias prevention)
-    ///
-    /// # Look-Ahead Bias Prevention
-    /// Limit orders cannot fill on the same bar they were created. This prevents
-    /// the unrealistic scenario where a strategy places a limit order at bar N
-    /// and it fills using bar N's OHLC data (which wouldn't be known until bar close).
     pub fn check_fill(
         &self,
         order: &Order,
         candle: &Candle,
         current_bar_idx: Option<usize>,
     ) -> Option<FillPrice> {
-        // Look-ahead bias prevention: limit orders cannot fill on the same bar
-        // they were created. In live trading, you place order at bar close,
-        // it can only fill on subsequent bars.
         if let (Some(created_idx), Some(current_idx)) = (order.created_bar_idx, current_bar_idx) {
             if matches!(order.order_type, OrderType::Limit) && created_idx >= current_idx {
-                return None; // Cannot fill same bar or earlier
+                return None;
             }
         }
 
         match (order.side, order.order_type) {
-            // Buy limit: fills if candle low ≤ limit price
             (Side::Buy, OrderType::Limit) => {
-                let limit_price = order.limit_price?;
+                let limit_price = order.limit_price?.to_f64();
                 if candle.low <= limit_price {
                     Some(FillPrice {
                         price: limit_price,
@@ -67,10 +52,8 @@ impl ExecutionEngine {
                     None
                 }
             }
-
-            // Sell limit: fills if candle high ≥ limit price
             (Side::Sell, OrderType::Limit) => {
-                let limit_price = order.limit_price?;
+                let limit_price = order.limit_price?.to_f64();
                 if candle.high >= limit_price {
                     Some(FillPrice {
                         price: limit_price,
@@ -80,12 +63,9 @@ impl ExecutionEngine {
                     None
                 }
             }
-
-            // Buy stop: triggers if candle high ≥ stop price
             (Side::Buy, OrderType::Stop) => {
-                let stop_price = order.stop_price?;
+                let stop_price = order.stop_price?.to_f64();
                 if candle.high >= stop_price {
-                    // Becomes market order, fills at stop price + slippage
                     Some(FillPrice {
                         price: stop_price * (1.0 + self.slippage),
                         is_maker: false,
@@ -94,10 +74,8 @@ impl ExecutionEngine {
                     None
                 }
             }
-
-            // Sell stop: triggers if candle low ≤ stop price
             (Side::Sell, OrderType::Stop) => {
-                let stop_price = order.stop_price?;
+                let stop_price = order.stop_price?.to_f64();
                 if candle.low <= stop_price {
                     Some(FillPrice {
                         price: stop_price * (1.0 - self.slippage),
@@ -107,19 +85,14 @@ impl ExecutionEngine {
                     None
                 }
             }
-
-            // Market orders: fill at candle open
             (_, OrderType::Market) => Some(FillPrice {
                 price: candle.open,
                 is_maker: false,
             }),
-
-            // StopLimit not yet implemented
             (_, OrderType::StopLimit) => None,
         }
     }
 
-    /// Execute a partial fill
     pub fn execute_partial_fill(
         &self,
         order: &mut Order,
@@ -128,34 +101,31 @@ impl ExecutionEngine {
         is_maker: bool,
         timestamp: DateTime<Utc>,
     ) -> Fill {
-        let fill_qty = f64::min(order.remaining_quantity, max_fill_qty);
+        let fill_qty = Money::from_f64(f64::min(order.remaining_quantity.to_f64(), max_fill_qty));
+        let fill_price_m = Money::from_f64(fill_price);
 
-        // Calculate commission
         let commission_rate = if is_maker {
             self.maker_commission_rate
         } else {
             self.taker_commission_rate
         };
-        let commission = fill_price * fill_qty * commission_rate;
+        let commission = fill_price_m * fill_qty * Money::from_f64(commission_rate);
 
-        // Update average fill price (weighted average)
+        // Update weighted average fill price
         let prev_total_value = order.average_fill_price * order.filled_quantity;
-        let new_value = fill_price * fill_qty;
+        let new_value = fill_price_m * fill_qty;
         let new_total_qty = order.filled_quantity + fill_qty;
 
-        order.average_fill_price = if new_total_qty > 0.0 {
+        order.average_fill_price = if new_total_qty.is_positive() {
             (prev_total_value + new_value) / new_total_qty
         } else {
-            fill_price
+            fill_price_m
         };
 
-        // Update quantities
         order.filled_quantity += fill_qty;
         order.remaining_quantity -= fill_qty;
 
-        // Update state
-        order.state = if order.remaining_quantity <= 1e-8 {
-            // Use epsilon for floating point comparison
+        order.state = if order.remaining_quantity.to_f64() <= 1e-8 {
             OrderState::Filled
         } else {
             OrderState::PartiallyFilled
@@ -165,7 +135,7 @@ impl ExecutionEngine {
 
         Fill {
             order_id: order.id,
-            price: fill_price,
+            price: fill_price_m,
             quantity: fill_qty,
             timestamp,
             commission,
@@ -173,7 +143,6 @@ impl ExecutionEngine {
         }
     }
 
-    /// Execute a complete fill (convenience wrapper)
     pub fn execute_fill(
         &self,
         order: &mut Order,
@@ -184,7 +153,7 @@ impl ExecutionEngine {
         self.execute_partial_fill(
             order,
             fill_price,
-            order.remaining_quantity,
+            order.remaining_quantity.to_f64(),
             is_maker,
             timestamp,
         )
@@ -204,7 +173,7 @@ mod tests {
     #[test]
     fn test_buy_limit_fill() {
         let engine = ExecutionEngine::new(0.0004, 0.0006, 0.001);
-        let order = Order::new(
+        let order = Order::from_f64(
             Symbol::new("BTCUSDT"),
             Side::Buy,
             OrderType::Limit,
@@ -215,7 +184,6 @@ mod tests {
             None,
         );
 
-        // Candle touches limit price
         let candle = create_candle(51000.0, 52000.0, 49500.0, 50500.0);
         let fill = engine.check_fill(&order, &candle, None);
 
@@ -228,7 +196,7 @@ mod tests {
     #[test]
     fn test_buy_limit_no_fill() {
         let engine = ExecutionEngine::new(0.0004, 0.0006, 0.001);
-        let order = Order::new(
+        let order = Order::from_f64(
             Symbol::new("BTCUSDT"),
             Side::Buy,
             OrderType::Limit,
@@ -239,17 +207,15 @@ mod tests {
             None,
         );
 
-        // Candle doesn't reach limit price
         let candle = create_candle(51000.0, 52000.0, 50100.0, 51500.0);
         let fill = engine.check_fill(&order, &candle, None);
-
         assert!(fill.is_none());
     }
 
     #[test]
     fn test_sell_limit_fill() {
         let engine = ExecutionEngine::new(0.0004, 0.0006, 0.001);
-        let order = Order::new(
+        let order = Order::from_f64(
             Symbol::new("BTCUSDT"),
             Side::Sell,
             OrderType::Limit,
@@ -260,7 +226,6 @@ mod tests {
             None,
         );
 
-        // Candle reaches limit price
         let candle = create_candle(51000.0, 52500.0, 50500.0, 51500.0);
         let fill = engine.check_fill(&order, &candle, None);
 
@@ -273,7 +238,7 @@ mod tests {
     #[test]
     fn test_buy_stop_fill() {
         let engine = ExecutionEngine::new(0.0004, 0.0006, 0.001);
-        let order = Order::new(
+        let order = Order::from_f64(
             Symbol::new("BTCUSDT"),
             Side::Buy,
             OrderType::Stop,
@@ -284,20 +249,19 @@ mod tests {
             None,
         );
 
-        // Candle triggers stop
         let candle = create_candle(50000.0, 51500.0, 49500.0, 50500.0);
         let fill = engine.check_fill(&order, &candle, None);
 
         assert!(fill.is_some());
         let fill = fill.unwrap();
-        assert!(fill.price > 51000.0); // Has slippage
+        assert!(fill.price > 51000.0);
         assert!(!fill.is_maker);
     }
 
     #[test]
     fn test_market_order_fill() {
         let engine = ExecutionEngine::new(0.0004, 0.0006, 0.001);
-        let order = Order::new(
+        let order = Order::from_f64(
             Symbol::new("BTCUSDT"),
             Side::Buy,
             OrderType::Market,
@@ -313,14 +277,14 @@ mod tests {
 
         assert!(fill.is_some());
         let fill = fill.unwrap();
-        assert_eq!(fill.price, 50000.0); // Fills at open
+        assert_eq!(fill.price, 50000.0);
         assert!(!fill.is_maker);
     }
 
     #[test]
     fn test_partial_fill() {
         let engine = ExecutionEngine::new(0.0004, 0.0006, 0.001);
-        let mut order = Order::new(
+        let mut order = Order::from_f64(
             Symbol::new("BTCUSDT"),
             Side::Buy,
             OrderType::Limit,
@@ -333,22 +297,19 @@ mod tests {
 
         let timestamp = Utc::now();
 
-        // Fill 3 out of 10
         let fill1 = engine.execute_partial_fill(&mut order, 50000.0, 3.0, true, timestamp);
-        assert_eq!(fill1.quantity, 3.0);
-        assert_eq!(order.filled_quantity, 3.0);
-        assert_eq!(order.remaining_quantity, 7.0);
+        assert_eq!(fill1.quantity.to_f64(), 3.0);
+        assert_eq!(order.filled_quantity.to_f64(), 3.0);
+        assert_eq!(order.remaining_quantity.to_f64(), 7.0);
         assert_eq!(order.state, OrderState::PartiallyFilled);
 
-        // Fill remaining 7
         let fill2 = engine.execute_partial_fill(&mut order, 50100.0, 7.0, true, timestamp);
-        assert_eq!(fill2.quantity, 7.0);
-        assert_eq!(order.filled_quantity, 10.0);
-        assert!(order.remaining_quantity < 1e-8);
+        assert_eq!(fill2.quantity.to_f64(), 7.0);
+        assert_eq!(order.filled_quantity.to_f64(), 10.0);
+        assert!(order.remaining_quantity.to_f64() < 1e-8);
         assert_eq!(order.state, OrderState::Filled);
 
-        // Check weighted average price
         let expected_avg = (50000.0 * 3.0 + 50100.0 * 7.0) / 10.0;
-        assert!((order.average_fill_price - expected_avg).abs() < 0.01);
+        assert!((order.average_fill_price.to_f64() - expected_avg).abs() < 0.01);
     }
 }

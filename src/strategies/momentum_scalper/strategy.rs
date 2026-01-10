@@ -222,14 +222,20 @@ impl Strategy for MomentumScalperStrategy {
         if let Some(pos) = ctx.current_position {
             // Exit on EMA cross
             if self.should_exit_on_cross(&ind, true) {
-                orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity));
+                orders.push(OrderRequest::market_sell(
+                    ctx.symbol.clone(),
+                    pos.quantity.to_f64(),
+                ));
                 return orders;
             }
 
             // Exit on max hold bars
             if let Some(state) = self.get_state(ctx.symbol) {
                 if state.bars_in_position >= self.config.max_hold_bars {
-                    orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity));
+                    orders.push(OrderRequest::market_sell(
+                        ctx.symbol.clone(),
+                        pos.quantity.to_f64(),
+                    ));
                     return orders;
                 }
             }
@@ -240,7 +246,10 @@ impl Strategy for MomentumScalperStrategy {
                 momentum,
                 MomentumState::WeakBearish | MomentumState::StrongBearish
             ) {
-                orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity));
+                orders.push(OrderRequest::market_sell(
+                    ctx.symbol.clone(),
+                    pos.quantity.to_f64(),
+                ));
                 return orders;
             }
 
@@ -311,8 +320,9 @@ impl Strategy for MomentumScalperStrategy {
         let current_atr =
             Indicators::atr_only(candles, self.config.atr_period).unwrap_or(current_price * 0.01);
 
+        let entry_price = position.average_entry_price.to_f64();
         let profit_atr = if current_atr > 0.0 {
-            (current_price - position.average_entry_price) / current_atr
+            (current_price - entry_price) / current_atr
         } else {
             0.0
         };

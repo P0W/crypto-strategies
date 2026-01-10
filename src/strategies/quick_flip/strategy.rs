@@ -230,9 +230,8 @@ impl Strategy for QuickFlipStrategy {
         current_price: f64,
         candles: &[Candle],
     ) -> Option<f64> {
-        // Move stop to breakeven when we're 1 ATR in profit
         let current_atr = self.get_atr(candles);
-        let entry = position.average_entry_price;
+        let entry = position.average_entry_price.to_f64();
 
         match position.side {
             Side::Buy => {

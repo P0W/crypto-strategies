@@ -170,7 +170,10 @@ impl Strategy for VolatilityRegimeStrategy {
         // Position exit logic
         if let Some(pos) = ctx.current_position {
             if let Some(VolatilityRegime::Extreme) = self.classify_regime(candles, &ind) {
-                orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity));
+                orders.push(OrderRequest::market_sell(
+                    ctx.symbol.clone(),
+                    pos.quantity.to_f64(),
+                ));
                 return orders;
             }
 
@@ -178,7 +181,10 @@ impl Strategy for VolatilityRegimeStrategy {
             if pos.unrealized_pnl(current_price) >= 0.0 {
                 if let Some(slow_ema) = ind.current_ema_slow {
                     if current_price < slow_ema {
-                        orders.push(OrderRequest::market_sell(ctx.symbol.clone(), pos.quantity));
+                        orders.push(OrderRequest::market_sell(
+                            ctx.symbol.clone(),
+                            pos.quantity.to_f64(),
+                        ));
                         return orders;
                     }
                 }
@@ -243,27 +249,25 @@ impl Strategy for VolatilityRegimeStrategy {
             return None;
         }
 
+        let entry_price = position.average_entry_price.to_f64();
+
         match position.side {
             Side::Buy => {
-                // Long position: profit when price rises
-                let profit_atr = (current_price - position.average_entry_price) / current_atr;
+                let profit_atr = (current_price - entry_price) / current_atr;
                 if profit_atr >= self.config.trailing_activation {
                     let new_stop = current_price - self.config.trailing_atr_multiple * current_atr;
-                    let entry_stop =
-                        position.average_entry_price - self.config.stop_atr_multiple * current_atr;
-                    Some(new_stop.max(entry_stop)) // Trail UP, never below entry stop
+                    let entry_stop = entry_price - self.config.stop_atr_multiple * current_atr;
+                    Some(new_stop.max(entry_stop))
                 } else {
                     None
                 }
             }
             Side::Sell => {
-                // Short position: profit when price falls
-                let profit_atr = (position.average_entry_price - current_price) / current_atr;
+                let profit_atr = (entry_price - current_price) / current_atr;
                 if profit_atr >= self.config.trailing_activation {
                     let new_stop = current_price + self.config.trailing_atr_multiple * current_atr;
-                    let entry_stop =
-                        position.average_entry_price + self.config.stop_atr_multiple * current_atr;
-                    Some(new_stop.min(entry_stop)) // Trail DOWN, never above entry stop
+                    let entry_stop = entry_price + self.config.stop_atr_multiple * current_atr;
+                    Some(new_stop.min(entry_stop))
                 } else {
                     None
                 }

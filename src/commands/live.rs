@@ -278,17 +278,16 @@ impl LiveTrader {
                 Side::Buy
             };
 
-            let fill = Fill {
-                order_id: 0,
-                price: sp.entry_price,
-                quantity: sp.quantity,
-                timestamp: sp
-                    .entry_time
+            let fill = Fill::from_f64(
+                0,
+                sp.entry_price,
+                sp.quantity,
+                sp.entry_time
                     .and_then(|t| t.parse().ok())
                     .unwrap_or_else(Utc::now),
-                commission: 0.0,
-                is_maker: true,
-            };
+                0.0,
+                true,
+            );
 
             self.position_manager.add_fill(fill, symbol.clone(), side);
 
@@ -630,16 +629,11 @@ impl LiveTrader {
             // Get or calculate stop/target levels (cached at entry time)
             let (stop_price, target_price) =
                 self.entry_levels.entry(symbol.clone()).or_insert_with(|| {
-                    let stop = self.strategy.calculate_stop_loss(
-                        candles,
-                        pos.average_entry_price,
-                        pos.side,
-                    );
-                    let target = self.strategy.calculate_take_profit(
-                        candles,
-                        pos.average_entry_price,
-                        pos.side,
-                    );
+                    let entry = pos.average_entry_price.to_f64();
+                    let stop = self.strategy.calculate_stop_loss(candles, entry, pos.side);
+                    let target = self
+                        .strategy
+                        .calculate_take_profit(candles, entry, pos.side);
                     info!(
                         "│  📍 Entry levels cached for {}: stop={:.2}, target={:.2}",
                         symbol, stop, target
@@ -694,11 +688,11 @@ impl LiveTrader {
                 let exit_order = match pos.side {
                     Side::Buy => crypto_strategies::oms::OrderRequest::market_sell(
                         symbol.clone(),
-                        pos.quantity,
+                        pos.quantity.to_f64(),
                     ),
                     Side::Sell => crypto_strategies::oms::OrderRequest::market_buy(
                         symbol.clone(),
-                        pos.quantity,
+                        pos.quantity.to_f64(),
                     ),
                 };
 
@@ -725,18 +719,18 @@ impl LiveTrader {
 
         // Step 3: Check closed positions
         if let Some(pos) = self.position_manager.get_position(symbol) {
-            if pos.quantity == 0.0 && pos.fills.len() > 1 {
+            if pos.quantity.is_zero() && pos.fills.len() > 1 {
                 let trade = Trade {
                     symbol: symbol.clone(),
                     side: pos.side,
-                    entry_price: Money::from_f64(pos.average_entry_price),
+                    entry_price: pos.average_entry_price,
                     exit_price: Money::from_f64(current_candle.close),
                     quantity: Money::from_f64(pos.total_quantity_traded()),
                     entry_time: pos.entry_time(),
                     exit_time: Utc::now(),
-                    pnl: Money::from_f64(pos.realized_pnl),
+                    pnl: pos.realized_pnl,
                     commission: Money::from_f64(pos.total_commission()),
-                    net_pnl: Money::from_f64(pos.realized_pnl - pos.total_commission()),
+                    net_pnl: pos.realized_pnl - Money::from_f64(pos.total_commission()),
                 };
 
                 self.strategy.on_trade_closed(&trade);
@@ -861,7 +855,7 @@ impl LiveTrader {
     fn calculate_portfolio_value(&self) -> f64 {
         let mut total = self.paper_cash;
         for (_sym, pos) in self.position_manager.get_all_positions() {
-            total += pos.unrealized_pnl;
+            total += pos.unrealized_pnl.to_f64();
         }
         total
     }
@@ -935,13 +929,13 @@ impl LiveTrader {
             let sp = StatePosition {
                 symbol: symbol.to_string(),
                 side: if pos.side == Side::Buy { "buy" } else { "sell" }.to_string(),
-                entry_price: pos.average_entry_price,
-                quantity: pos.quantity,
+                entry_price: pos.average_entry_price.to_f64(),
+                quantity: pos.quantity.to_f64(),
                 stop_loss: 0.0,
                 take_profit: 0.0,
                 status: "open".to_string(),
                 order_id: None,
-                pnl: pos.unrealized_pnl,
+                pnl: pos.unrealized_pnl.to_f64(),
                 exit_price: 0.0,
                 entry_time: Some(pos.entry_time().to_rfc3339()),
                 exit_time: None,

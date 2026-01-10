@@ -183,13 +183,12 @@ impl OrderBook {
     fn get_order_price(&self, order: &Order) -> f64 {
         match order.order_type {
             crate::oms::types::OrderType::Limit | crate::oms::types::OrderType::StopLimit => {
-                order.limit_price.unwrap_or(0.0)
+                order.limit_price.map(|p| p.to_f64()).unwrap_or(0.0)
             }
-            crate::oms::types::OrderType::Stop => order.stop_price.unwrap_or(0.0),
-            crate::oms::types::OrderType::Market => {
-                // Market orders shouldn't be in the book, but handle gracefully
-                0.0
+            crate::oms::types::OrderType::Stop => {
+                order.stop_price.map(|p| p.to_f64()).unwrap_or(0.0)
             }
+            crate::oms::types::OrderType::Market => 0.0,
         }
     }
 }
@@ -210,7 +209,7 @@ mod tests {
     fn test_add_and_cancel_order() {
         let mut book = OrderBook::new();
 
-        let order = Order::new(
+        let order = Order::from_f64(
             Symbol::new("BTCUSDT"),
             Side::Buy,
             OrderType::Limit,
@@ -237,7 +236,7 @@ mod tests {
         let mut book = OrderBook::new();
 
         // Add three buy orders at same price
-        let order1 = Order::new(
+        let order1 = Order::from_f64(
             Symbol::new("BTCUSDT"),
             Side::Buy,
             OrderType::Limit,
@@ -249,7 +248,7 @@ mod tests {
         );
         let id1 = order1.id;
 
-        let order2 = Order::new(
+        let order2 = Order::from_f64(
             Symbol::new("BTCUSDT"),
             Side::Buy,
             OrderType::Limit,
@@ -275,7 +274,7 @@ mod tests {
     fn test_best_bid_ask() {
         let mut book = OrderBook::new();
 
-        book.add_order(Order::new(
+        book.add_order(Order::from_f64(
             Symbol::new("BTCUSDT"),
             Side::Buy,
             OrderType::Limit,
@@ -286,7 +285,7 @@ mod tests {
             None,
         ));
 
-        book.add_order(Order::new(
+        book.add_order(Order::from_f64(
             Symbol::new("BTCUSDT"),
             Side::Buy,
             OrderType::Limit,
@@ -297,7 +296,7 @@ mod tests {
             None,
         ));
 
-        book.add_order(Order::new(
+        book.add_order(Order::from_f64(
             Symbol::new("BTCUSDT"),
             Side::Sell,
             OrderType::Limit,

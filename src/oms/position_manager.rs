@@ -1,7 +1,7 @@
 //! Position management with FIFO P&L calculation
 
 use crate::oms::types::{Fill, Position};
-use crate::{Side, Symbol};
+use crate::{Money, Side, Symbol};
 use std::collections::HashMap;
 
 /// Position manager for tracking multiple positions per symbol
@@ -20,20 +20,17 @@ impl PositionManager {
     /// Add a fill to positions (FIFO accounting)
     pub fn add_fill(&mut self, fill: Fill, symbol: Symbol, side: Side) {
         let needs_new_position = if let Some(position) = self.positions.get(&symbol) {
-            // Position exists - check if same side or opposite
             position.side != side && position.quantity <= fill.quantity
         } else {
             true
         };
 
         if needs_new_position && !self.positions.contains_key(&symbol) {
-            // New position
             let new_position = Position::from_fill(fill, symbol.clone(), side);
             self.positions.insert(symbol, new_position);
         } else if let Some(position) = self.positions.get_mut(&symbol) {
             if position.side == side {
-                // Same side - add to position
-                // FIFO weighted average entry price
+                // Same side - add to position (FIFO weighted average)
                 let prev_total_value = position.average_entry_price * position.quantity;
                 let new_value = fill.price * fill.quantity;
                 let new_total_qty = position.quantity + fill.quantity;
@@ -46,36 +43,32 @@ impl PositionManager {
                 // Opposite side - reduce or reverse position
                 let mut remaining_qty = fill.quantity;
 
-                // Close fills using FIFO
-                while remaining_qty > 0.0 && !position.fills.is_empty() {
+                while !remaining_qty.is_zero() && !position.fills.is_empty() {
                     let first_fill = &mut position.fills[0];
 
                     if first_fill.quantity <= remaining_qty {
-                        // Close entire first fill
                         let pnl = match position.side {
                             Side::Buy => (fill.price - first_fill.price) * first_fill.quantity,
                             Side::Sell => (first_fill.price - fill.price) * first_fill.quantity,
                         };
-                        position.realized_pnl += pnl - fill.commission;
+                        position.realized_pnl = position.realized_pnl + pnl - fill.commission;
                         remaining_qty -= first_fill.quantity;
                         position.quantity -= first_fill.quantity;
                         position.fills.remove(0);
                     } else {
-                        // Partially close first fill
                         let pnl = match position.side {
                             Side::Buy => (fill.price - first_fill.price) * remaining_qty,
                             Side::Sell => (first_fill.price - fill.price) * remaining_qty,
                         };
-                        position.realized_pnl += pnl - fill.commission;
+                        position.realized_pnl = position.realized_pnl + pnl - fill.commission;
                         first_fill.quantity -= remaining_qty;
                         position.quantity -= remaining_qty;
-                        remaining_qty = 0.0;
+                        remaining_qty = Money::ZERO;
                     }
                 }
 
-                // If we have remaining quantity, we've reversed the position
-                if remaining_qty > 0.0 {
-                    // Create new position in opposite direction
+                // If remaining, reverse position
+                if !remaining_qty.is_zero() {
                     position.side = match position.side {
                         Side::Buy => Side::Sell,
                         Side::Sell => Side::Buy,
@@ -99,7 +92,9 @@ impl PositionManager {
 
     /// Get position for symbol (returns None if position quantity is 0 or negative)
     pub fn get_position(&self, symbol: &Symbol) -> Option<&Position> {
-        self.positions.get(symbol).filter(|p| p.quantity > 0.0)
+        self.positions
+            .get(symbol)
+            .filter(|p| p.quantity.is_positive())
     }
 
     /// Get raw position for symbol (even if qty=0, for trade creation)
@@ -113,9 +108,10 @@ impl PositionManager {
     }
 
     /// Get all open positions as an iterator over (Symbol, &Position)
-    /// Only returns positions with quantity > 0
     pub fn get_all_positions(&self) -> impl Iterator<Item = (&Symbol, &Position)> {
-        self.positions.iter().filter(|(_, p)| p.quantity > 0.0)
+        self.positions
+            .iter()
+            .filter(|(_, p)| p.quantity.is_positive())
     }
 
     /// Update unrealized P&L for all positions
@@ -134,12 +130,18 @@ impl PositionManager {
 
     /// Get total unrealized P&L across all positions
     pub fn total_unrealized_pnl(&self) -> f64 {
-        self.positions.values().map(|p| p.unrealized_pnl).sum()
+        self.positions
+            .values()
+            .map(|p| p.unrealized_pnl.to_f64())
+            .sum()
     }
 
     /// Get total realized P&L across all positions
     pub fn total_realized_pnl(&self) -> f64 {
-        self.positions.values().map(|p| p.realized_pnl).sum()
+        self.positions
+            .values()
+            .map(|p| p.realized_pnl.to_f64())
+            .sum()
     }
 
     /// Clear all positions
@@ -149,7 +151,10 @@ impl PositionManager {
 
     /// Get count of open positions (only counts positions with quantity > 0)
     pub fn open_position_count(&self) -> usize {
-        self.positions.values().filter(|p| p.quantity > 0.0).count()
+        self.positions
+            .values()
+            .filter(|p| p.quantity.is_positive())
+            .count()
     }
 
     /// Get number of positions on specific symbol
@@ -175,14 +180,7 @@ mod tests {
     use chrono::Utc;
 
     fn create_fill(order_id: OrderId, price: f64, quantity: f64) -> Fill {
-        Fill {
-            order_id,
-            price,
-            quantity,
-            timestamp: Utc::now(),
-            commission: 0.0,
-            is_maker: true,
-        }
+        Fill::from_f64(order_id, price, quantity, Utc::now(), 0.0, true)
     }
 
     #[test]
@@ -194,8 +192,8 @@ mod tests {
         pm.add_fill(fill, symbol.clone(), Side::Buy);
 
         let pos = pm.get_position(&symbol).unwrap();
-        assert_eq!(pos.quantity, 1.0);
-        assert_eq!(pos.average_entry_price, 50000.0);
+        assert_eq!(pos.quantity.to_f64(), 1.0);
+        assert_eq!(pos.average_entry_price.to_f64(), 50000.0);
         assert_eq!(pos.side, Side::Buy);
     }
 
@@ -204,15 +202,12 @@ mod tests {
         let mut pm = PositionManager::new();
         let symbol = Symbol::new("BTCUSDT");
 
-        // First fill at 50000
         pm.add_fill(create_fill(1, 50000.0, 1.0), symbol.clone(), Side::Buy);
-
-        // Second fill at 51000
         pm.add_fill(create_fill(2, 51000.0, 1.0), symbol.clone(), Side::Buy);
 
         let pos = pm.get_position(&symbol).unwrap();
-        assert_eq!(pos.quantity, 2.0);
-        assert_eq!(pos.average_entry_price, 50500.0); // (50000 + 51000) / 2
+        assert_eq!(pos.quantity.to_f64(), 2.0);
+        assert_eq!(pos.average_entry_price.to_f64(), 50500.0);
     }
 
     #[test]
@@ -220,16 +215,13 @@ mod tests {
         let mut pm = PositionManager::new();
         let symbol = Symbol::new("BTCUSDT");
 
-        // Buy 2 BTC at 50000
         pm.add_fill(create_fill(1, 50000.0, 2.0), symbol.clone(), Side::Buy);
-
-        // Sell 1 BTC at 52000
         pm.add_fill(create_fill(2, 52000.0, 1.0), symbol.clone(), Side::Sell);
 
         let pos = pm.get_position(&symbol).unwrap();
-        assert_eq!(pos.quantity, 1.0);
+        assert_eq!(pos.quantity.to_f64(), 1.0);
         assert_eq!(pos.side, Side::Buy);
-        assert_eq!(pos.realized_pnl, 2000.0); // (52000 - 50000) * 1
+        assert_eq!(pos.realized_pnl.to_f64(), 2000.0);
     }
 
     #[test]
@@ -237,17 +229,14 @@ mod tests {
         let mut pm = PositionManager::new();
         let symbol = Symbol::new("BTCUSDT");
 
-        // Buy 1 BTC at 50000
         pm.add_fill(create_fill(1, 50000.0, 1.0), symbol.clone(), Side::Buy);
-
-        // Sell 2 BTC at 52000 (close 1, reverse 1)
         pm.add_fill(create_fill(2, 52000.0, 2.0), symbol.clone(), Side::Sell);
 
         let pos = pm.get_position(&symbol).unwrap();
-        assert_eq!(pos.quantity, 1.0);
+        assert_eq!(pos.quantity.to_f64(), 1.0);
         assert_eq!(pos.side, Side::Sell);
-        assert_eq!(pos.average_entry_price, 52000.0);
-        assert_eq!(pos.realized_pnl, 2000.0); // Profit from closing long position
+        assert_eq!(pos.average_entry_price.to_f64(), 52000.0);
+        assert_eq!(pos.realized_pnl.to_f64(), 2000.0);
     }
 
     #[test]
@@ -255,18 +244,14 @@ mod tests {
         let mut pm = PositionManager::new();
         let symbol = Symbol::new("BTCUSDT");
 
-        // Buy at different prices
         pm.add_fill(create_fill(1, 50000.0, 1.0), symbol.clone(), Side::Buy);
         pm.add_fill(create_fill(2, 51000.0, 1.0), symbol.clone(), Side::Buy);
         pm.add_fill(create_fill(3, 52000.0, 1.0), symbol.clone(), Side::Buy);
-
-        // Sell 1.5 BTC - should close first fill completely and half of second
         pm.add_fill(create_fill(4, 53000.0, 1.5), symbol.clone(), Side::Sell);
 
         let pos = pm.get_position(&symbol).unwrap();
-        assert_eq!(pos.quantity, 1.5);
-
+        assert_eq!(pos.quantity.to_f64(), 1.5);
         // Realized P&L = (53000-50000)*1.0 + (53000-51000)*0.5 = 3000 + 1000 = 4000
-        assert_eq!(pos.realized_pnl, 4000.0);
+        assert_eq!(pos.realized_pnl.to_f64(), 4000.0);
     }
 }

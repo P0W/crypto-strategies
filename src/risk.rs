@@ -297,8 +297,10 @@ impl RiskManager {
         }
 
         // Check portfolio heat - sum of risk amounts (stop_distance × quantity) for each position
-        // This matches main branch behavior where max_portfolio_heat limits total RISK, not total VALUE
-        let current_heat: f64 = current_positions.iter().map(|p| p.risk_amount).sum();
+        let current_heat: f64 = current_positions
+            .iter()
+            .map(|p| p.risk_amount.to_f64())
+            .sum();
 
         let max_allowed_heat = self.current_capital * self.max_portfolio_heat;
 
@@ -386,8 +388,7 @@ impl RiskManager {
         }
 
         // Check portfolio heat (sum risk amounts from iterator)
-        // This matches main branch behavior where max_portfolio_heat limits total RISK, not total VALUE
-        let current_heat: f64 = current_positions.map(|p| p.risk_amount).sum();
+        let current_heat: f64 = current_positions.map(|p| p.risk_amount.to_f64()).sum();
 
         let max_allowed_heat = self.current_capital * self.max_portfolio_heat;
 
@@ -604,14 +605,7 @@ mod tests {
             .build();
 
         // Create existing position with risk_amount = $4,000 (4% heat)
-        let fill = Fill {
-            order_id: 1,
-            price: 100.0,
-            quantity: 100.0,
-            timestamp: Utc::now(),
-            commission: 0.0,
-            is_maker: true,
-        };
+        let fill = Fill::from_f64(1, 100.0, 100.0, Utc::now(), 0.0, true);
         let mut pos = OmsPosition::from_fill(fill, crate::Symbol::new("BTCUSDT"), Side::Buy);
         pos.set_risk_amount(4_000.0); // 4% of capital at risk
 
@@ -647,14 +641,7 @@ mod tests {
         rm.update_capital(88_000.0);
 
         // Create existing position with 3% heat
-        let fill = Fill {
-            order_id: 1,
-            price: 100.0,
-            quantity: 100.0,
-            timestamp: Utc::now(),
-            commission: 0.0,
-            is_maker: true,
-        };
+        let fill = Fill::from_f64(1, 100.0, 100.0, Utc::now(), 0.0, true);
         let mut pos = OmsPosition::from_fill(fill, crate::Symbol::new("BTCUSDT"), Side::Buy);
         pos.set_risk_amount(2_640.0); // 3% of 88k
 
@@ -688,14 +675,7 @@ mod tests {
             .build();
 
         // Create position that exhausts all heat
-        let fill = Fill {
-            order_id: 1,
-            price: 100.0,
-            quantity: 100.0,
-            timestamp: Utc::now(),
-            commission: 0.0,
-            is_maker: true,
-        };
+        let fill = Fill::from_f64(1, 100.0, 100.0, Utc::now(), 0.0, true);
         let mut pos = OmsPosition::from_fill(fill, crate::Symbol::new("BTCUSDT"), Side::Buy);
         pos.set_risk_amount(4_000.0); // Exactly 4% heat
 
