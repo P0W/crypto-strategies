@@ -241,7 +241,12 @@ impl Trade {
     }
 }
 
-/// Portfolio statistics
+/// Round to 2 decimal places for cross-platform consistency
+fn round2(x: f64) -> f64 {
+    (x * 100.0).round() / 100.0
+}
+
+/// Portfolio statistics (all metrics rounded to 2 decimals for determinism)
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PerformanceMetrics {
     pub total_return: f64,
@@ -253,7 +258,6 @@ pub struct PerformanceMetrics {
     pub profit_factor: f64,
     /// Trading expectancy: average profit/loss per trade (in currency)
     /// Formula: (Win Rate × Avg Win) - (Loss Rate × Avg Loss)
-    /// Matches Backtrader and standard trading platforms
     pub expectancy: f64,
     pub total_trades: usize,
     pub winning_trades: usize,
@@ -264,6 +268,50 @@ pub struct PerformanceMetrics {
     pub largest_loss: f64,
     pub total_commission: f64,
     pub tax_amount: f64,
+}
+
+impl PerformanceMetrics {
+    /// Create metrics with all f64 values rounded to 2 decimal places
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        total_return: f64,
+        post_tax_return: f64,
+        sharpe_ratio: f64,
+        calmar_ratio: f64,
+        max_drawdown: f64,
+        win_rate: f64,
+        profit_factor: f64,
+        expectancy: f64,
+        total_trades: usize,
+        winning_trades: usize,
+        losing_trades: usize,
+        avg_win: f64,
+        avg_loss: f64,
+        largest_win: f64,
+        largest_loss: f64,
+        total_commission: f64,
+        tax_amount: f64,
+    ) -> Self {
+        Self {
+            total_return: round2(total_return),
+            post_tax_return: round2(post_tax_return),
+            sharpe_ratio: round2(sharpe_ratio),
+            calmar_ratio: round2(calmar_ratio),
+            max_drawdown: round2(max_drawdown),
+            win_rate: round2(win_rate),
+            profit_factor: round2(profit_factor),
+            expectancy: round2(expectancy),
+            total_trades,
+            winning_trades,
+            losing_trades,
+            avg_win: round2(avg_win),
+            avg_loss: round2(avg_loss),
+            largest_win: round2(largest_win),
+            largest_loss: round2(largest_loss),
+            total_commission: round2(total_commission),
+            tax_amount: round2(tax_amount),
+        }
+    }
 }
 
 // ============================================================================

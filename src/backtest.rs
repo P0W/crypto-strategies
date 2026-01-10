@@ -1258,24 +1258,24 @@ impl Backtester {
         let tax = taxable_gains * tax_rate;
         let post_tax_return = ((final_equity - initial_capital - tax) / initial_capital) * 100.0;
 
-        PerformanceMetrics {
+        PerformanceMetrics::new(
             total_return,
             post_tax_return,
-            sharpe_ratio: sharpe,
-            calmar_ratio: calmar,
-            max_drawdown: max_dd * 100.0,
+            sharpe,
+            calmar,
+            max_dd * 100.0,
             win_rate,
             profit_factor,
             expectancy,
-            total_trades: trades.len(),
-            winning_trades: winners.len(),
-            losing_trades: losers.len(),
+            trades.len(),
+            winners.len(),
+            losers.len(),
             avg_win,
             avg_loss,
             largest_win,
             largest_loss,
             total_commission,
-            tax_amount: tax,
-        }
+            tax,
+        )
     }
 }
