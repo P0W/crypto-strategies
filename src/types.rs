@@ -159,26 +159,59 @@ pub enum Side {
     Sell,
 }
 
-/// Completed trade record
+/// Completed trade record with precise decimal arithmetic for monetary values
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Trade {
     pub symbol: Symbol,
     pub side: Side,
-    pub entry_price: f64,
-    pub exit_price: f64,
-    pub quantity: f64,
+    pub entry_price: Money,
+    pub exit_price: Money,
+    pub quantity: Money,
     pub entry_time: DateTime<Utc>,
     pub exit_time: DateTime<Utc>,
-    pub pnl: f64,
-    pub commission: f64,
-    pub net_pnl: f64,
+    pub pnl: Money,
+    pub commission: Money,
+    pub net_pnl: Money,
 }
 
 impl Trade {
+    /// Calculate return percentage
     pub fn return_pct(&self) -> f64 {
-        match self.side {
-            Side::Buy => ((self.exit_price - self.entry_price) / self.entry_price) * 100.0,
-            Side::Sell => ((self.entry_price - self.exit_price) / self.entry_price) * 100.0,
+        if self.entry_price.is_zero() {
+            return 0.0;
+        }
+        let pct = match self.side {
+            Side::Buy => (self.exit_price - self.entry_price) / self.entry_price,
+            Side::Sell => (self.entry_price - self.exit_price) / self.entry_price,
+        };
+        pct.to_f64() * 100.0
+    }
+
+    /// Create a Trade from f64 values (for migration compatibility)
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_f64(
+        symbol: Symbol,
+        side: Side,
+        entry_price: f64,
+        exit_price: f64,
+        quantity: f64,
+        entry_time: DateTime<Utc>,
+        exit_time: DateTime<Utc>,
+        pnl: f64,
+        commission: f64,
+        net_pnl: f64,
+    ) -> Self {
+        Self {
+            symbol,
+            side,
+            entry_price: Money::from_f64(entry_price),
+            exit_price: Money::from_f64(exit_price),
+            quantity: Money::from_f64(quantity),
+            entry_time,
+            exit_time,
+            pnl: Money::from_f64(pnl),
+            commission: Money::from_f64(commission),
+            net_pnl: Money::from_f64(net_pnl),
         }
     }
 }
@@ -206,4 +239,284 @@ pub struct PerformanceMetrics {
     pub largest_loss: f64,
     pub total_commission: f64,
     pub tax_amount: f64,
+}
+
+// ============================================================================
+// Money Type - Precise Decimal Arithmetic for Monetary Values
+// ============================================================================
+
+use rust_decimal::Decimal;
+use std::cmp::Ordering;
+use std::fmt;
+use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub, SubAssign};
+
+/// Money type for precise decimal arithmetic in monetary calculations.
+///
+/// Wraps `rust_decimal::Decimal` to prevent floating-point drift in PnL tracking.
+/// Use this type for all monetary values: prices, quantities, pnl, capital, commissions.
+///
+/// # Why Money instead of f64?
+/// `0.1 + 0.2 != 0.3` in f64. Over thousands of trades, PnL tracking will drift
+/// from exchange balances, causing reconciliation failures.
+///
+/// # Example
+/// ```
+/// use crypto_strategies::Money;
+/// let price = Money::from_f64(100.50);
+/// let qty = Money::from_f64(2.0);
+/// let total = price * qty;
+/// assert_eq!(total.to_f64(), 201.0);
+/// ```
+#[derive(Debug, Clone, Copy, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Money(#[serde(with = "rust_decimal::serde::str")] Decimal);
+
+impl Money {
+    /// Zero value
+    pub const ZERO: Money = Money(Decimal::ZERO);
+
+    /// One value
+    pub const ONE: Money = Money(Decimal::ONE);
+
+    /// Create from f64 (for migration compatibility)
+    /// Note: This conversion may lose precision for values with many decimal places
+    pub fn from_f64(value: f64) -> Self {
+        Money(Decimal::try_from(value).unwrap_or_else(|_| {
+            // Fallback for extreme values (NaN, Infinity)
+            if value.is_nan() || value.is_infinite() {
+                Decimal::ZERO
+            } else {
+                Decimal::from_f64_retain(value).unwrap_or(Decimal::ZERO)
+            }
+        }))
+    }
+
+    /// Convert to f64 (for indicator calculations that require f64)
+    pub fn to_f64(self) -> f64 {
+        use rust_decimal::prelude::ToPrimitive;
+        self.0.to_f64().unwrap_or(0.0)
+    }
+
+    /// Create from i64 (for whole number values)
+    pub fn from_i64(value: i64) -> Self {
+        Money(Decimal::from(value))
+    }
+
+    /// Get absolute value
+    pub fn abs(self) -> Self {
+        Money(self.0.abs())
+    }
+
+    /// Check if value is zero
+    pub fn is_zero(self) -> bool {
+        self.0.is_zero()
+    }
+
+    /// Check if value is positive
+    pub fn is_positive(self) -> bool {
+        self.0.is_sign_positive() && !self.0.is_zero()
+    }
+
+    /// Check if value is negative
+    pub fn is_negative(self) -> bool {
+        self.0.is_sign_negative()
+    }
+
+    /// Get maximum of two values
+    pub fn max(self, other: Self) -> Self {
+        Money(self.0.max(other.0))
+    }
+
+    /// Get minimum of two values
+    pub fn min(self, other: Self) -> Self {
+        Money(self.0.min(other.0))
+    }
+
+    /// Round to specified decimal places
+    pub fn round_dp(self, dp: u32) -> Self {
+        Money(self.0.round_dp(dp))
+    }
+
+    /// Get the underlying Decimal
+    pub fn inner(self) -> Decimal {
+        self.0
+    }
+}
+
+impl Default for Money {
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
+impl fmt::Display for Money {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+// PartialEq is derived via Eq, but we need PartialOrd manually
+impl PartialEq for Money {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl PartialOrd for Money {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Money {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+impl std::hash::Hash for Money {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl Add for Money {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        Money(self.0 + rhs.0)
+    }
+}
+
+impl AddAssign for Money {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}
+
+impl Sub for Money {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self::Output {
+        Money(self.0 - rhs.0)
+    }
+}
+
+impl SubAssign for Money {
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 -= rhs.0;
+    }
+}
+
+impl Mul for Money {
+    type Output = Self;
+    fn mul(self, rhs: Self) -> Self::Output {
+        Money(self.0 * rhs.0)
+    }
+}
+
+impl Div for Money {
+    type Output = Self;
+    fn div(self, rhs: Self) -> Self::Output {
+        if rhs.0.is_zero() {
+            Money::ZERO // Safe division by zero handling
+        } else {
+            Money(self.0 / rhs.0)
+        }
+    }
+}
+
+impl Neg for Money {
+    type Output = Self;
+    fn neg(self) -> Self::Output {
+        Money(-self.0)
+    }
+}
+
+// Conversion traits for f64 interop (needed during migration)
+impl From<f64> for Money {
+    fn from(value: f64) -> Self {
+        Money::from_f64(value)
+    }
+}
+
+impl From<Money> for f64 {
+    fn from(value: Money) -> Self {
+        value.to_f64()
+    }
+}
+
+impl From<i64> for Money {
+    fn from(value: i64) -> Self {
+        Money::from_i64(value)
+    }
+}
+
+// Sum iterator support
+impl std::iter::Sum for Money {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Money::ZERO, |acc, x| acc + x)
+    }
+}
+
+impl<'a> std::iter::Sum<&'a Money> for Money {
+    fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
+        iter.fold(Money::ZERO, |acc, x| acc + *x)
+    }
+}
+
+#[cfg(test)]
+mod money_tests {
+    use super::*;
+
+    #[test]
+    fn test_money_precision() {
+        // Classic floating point problem: 0.1 + 0.2 != 0.3 in f64
+        let a = Money::from_f64(0.1);
+        let b = Money::from_f64(0.2);
+        let c = Money::from_f64(0.3);
+        assert_eq!(a + b, c, "Money should handle 0.1 + 0.2 = 0.3 correctly");
+    }
+
+    #[test]
+    fn test_money_arithmetic() {
+        let price = Money::from_f64(100.0);
+        let qty = Money::from_f64(2.5);
+        let total = price * qty;
+        assert_eq!(total.to_f64(), 250.0);
+    }
+
+    #[test]
+    fn test_money_comparison() {
+        let a = Money::from_f64(100.0);
+        let b = Money::from_f64(200.0);
+        assert!(a < b);
+        assert!(b > a);
+        assert_eq!(a.max(b), b);
+        assert_eq!(a.min(b), a);
+    }
+
+    #[test]
+    fn test_money_div_by_zero() {
+        let a = Money::from_f64(100.0);
+        let zero = Money::ZERO;
+        assert_eq!(a / zero, Money::ZERO);
+    }
+
+    #[test]
+    fn test_money_sum() {
+        let values = vec![
+            Money::from_f64(10.0),
+            Money::from_f64(20.0),
+            Money::from_f64(30.0),
+        ];
+        let total: Money = values.into_iter().sum();
+        assert_eq!(total.to_f64(), 60.0);
+    }
+
+    #[test]
+    fn test_money_serde() {
+        let money = Money::from_f64(123.456);
+        let json = serde_json::to_string(&money).unwrap();
+        let parsed: Money = serde_json::from_str(&json).unwrap();
+        assert_eq!(money, parsed);
+    }
 }

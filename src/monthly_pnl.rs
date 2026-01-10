@@ -29,10 +29,10 @@ impl MonthlyPnL {
     }
 
     fn add_trade(&mut self, trade: &Trade) {
-        self.net_pnl += trade.net_pnl;
+        self.net_pnl += trade.net_pnl.to_f64();
         self.trade_count += 1;
 
-        if trade.net_pnl > 0.0 {
+        if trade.net_pnl.is_positive() {
             self.winning_trades += 1;
         } else {
             self.losing_trades += 1;
@@ -262,7 +262,7 @@ impl MonthlyPnLMatrix {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Side, Symbol};
+    use crate::{Money, Side, Symbol};
     use chrono::TimeZone;
 
     fn create_test_trade(year: i32, month: u32, day: u32, net_pnl: f64) -> Trade {
@@ -273,14 +273,14 @@ mod tests {
         Trade {
             symbol: Symbol::new("BTCUSDT"),
             side: Side::Buy,
-            entry_price: 50000.0,
-            exit_price: 50000.0 + net_pnl,
-            quantity: 1.0,
+            entry_price: Money::from_f64(50000.0),
+            exit_price: Money::from_f64(50000.0 + net_pnl),
+            quantity: Money::from_f64(1.0),
             entry_time: dt,
             exit_time: dt,
-            pnl: net_pnl,
-            commission: 0.0,
-            net_pnl,
+            pnl: Money::from_f64(net_pnl),
+            commission: Money::ZERO,
+            net_pnl: Money::from_f64(net_pnl),
         }
     }
 

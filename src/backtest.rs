@@ -253,7 +253,7 @@ impl Backtester {
                                                 candle.datetime,
                                             );
 
-                                            if trade.net_pnl > 0.0 {
+                                            if trade.net_pnl.is_positive() {
                                                 self.risk_manager.record_win();
                                             } else {
                                                 self.risk_manager.record_loss();
@@ -399,7 +399,7 @@ impl Backtester {
                                         );
 
                                         // Record win/loss for risk manager
-                                        if trade.net_pnl > 0.0 {
+                                        if trade.net_pnl.is_positive() {
                                             self.risk_manager.record_win();
                                         } else {
                                             self.risk_manager.record_loss();
@@ -410,7 +410,7 @@ impl Backtester {
                                             candle.datetime.format("%Y-%m-%d"),
                                             symbol,
                                             side_changed,
-                                            trade.net_pnl
+                                            trade.net_pnl.to_f64()
                                         );
 
                                         // Clear cached entry levels for closed/reversed position
@@ -703,7 +703,7 @@ impl Backtester {
                                 candle.datetime,
                             );
 
-                            if trade.net_pnl > 0.0 {
+                            if trade.net_pnl.is_positive() {
                                 self.risk_manager.record_win();
                             } else {
                                 self.risk_manager.record_loss();
@@ -719,7 +719,7 @@ impl Backtester {
                             symbol,
                             fill.price,
                             reason,
-                            trades.last().map(|t| t.net_pnl).unwrap_or(0.0)
+                            trades.last().map(|t| t.net_pnl.to_f64()).unwrap_or(0.0)
                         );
 
                         // Notify strategy
@@ -989,7 +989,7 @@ impl Backtester {
                                 );
 
                                 // Record win/loss
-                                if trade.net_pnl > 0.0 {
+                                if trade.net_pnl.is_positive() {
                                     self.risk_manager.record_win();
                                 } else {
                                     self.risk_manager.record_loss();
@@ -1003,7 +1003,7 @@ impl Backtester {
                                     "{} TRADE CLOSED {} PnL={:.2} (Strategy Exit)",
                                     candle.datetime.format("%Y-%m-%d"),
                                     symbol,
-                                    trade.net_pnl
+                                    trade.net_pnl.to_f64()
                                 );
 
                                 self.strategy.on_trade_closed(&trade);
@@ -1074,7 +1074,7 @@ impl Backtester {
                 let trade = self.create_trade_from_position(&pos, exit_price, last_candle.datetime);
 
                 // Record win/loss for risk manager
-                if trade.net_pnl > 0.0 {
+                if trade.net_pnl.is_positive() {
                     self.risk_manager.record_win();
                 } else {
                     self.risk_manager.record_loss();
@@ -1112,18 +1112,18 @@ impl Backtester {
 
         let net_pnl = pnl - commission;
 
-        Trade {
-            symbol: pos.symbol.clone(),
-            side: pos.side,
-            entry_price: pos.average_entry_price,
+        Trade::from_f64(
+            pos.symbol.clone(),
+            pos.side,
+            pos.average_entry_price,
             exit_price,
-            quantity: pos.quantity,
-            entry_time: pos.first_entry_time,
+            pos.quantity,
+            pos.first_entry_time,
             exit_time,
             pnl,
             commission,
             net_pnl,
-        }
+        )
     }
 
     fn calculate_metrics(
@@ -1140,8 +1140,8 @@ impl Backtester {
         let final_equity = equity_curve.last().unwrap().1;
         let total_return = ((final_equity - initial_capital) / initial_capital) * 100.0;
 
-        let winners: Vec<&Trade> = trades.iter().filter(|t| t.net_pnl > 0.0).collect();
-        let losers: Vec<&Trade> = trades.iter().filter(|t| t.net_pnl <= 0.0).collect();
+        let winners: Vec<&Trade> = trades.iter().filter(|t| t.net_pnl.is_positive()).collect();
+        let losers: Vec<&Trade> = trades.iter().filter(|t| !t.net_pnl.is_positive()).collect();
 
         let win_rate = if !trades.is_empty() {
             (winners.len() as f64 / trades.len() as f64) * 100.0
@@ -1149,8 +1149,8 @@ impl Backtester {
             0.0
         };
 
-        let total_wins: f64 = winners.iter().map(|t| t.net_pnl).sum();
-        let total_losses: f64 = losers.iter().map(|t| t.net_pnl.abs()).sum();
+        let total_wins: f64 = winners.iter().map(|t| t.net_pnl.to_f64()).sum();
+        let total_losses: f64 = losers.iter().map(|t| t.net_pnl.abs().to_f64()).sum();
 
         let profit_factor = if total_losses > 0.0 {
             total_wins / total_losses
@@ -1174,10 +1174,16 @@ impl Backtester {
 
         let expectancy = (win_rate / 100.0) * avg_win - ((100.0 - win_rate) / 100.0) * avg_loss;
 
-        let largest_win = winners.iter().map(|t| t.net_pnl).fold(0.0, f64::max);
-        let largest_loss = losers.iter().map(|t| t.net_pnl).fold(0.0, f64::min);
+        let largest_win = winners
+            .iter()
+            .map(|t| t.net_pnl.to_f64())
+            .fold(0.0, f64::max);
+        let largest_loss = losers
+            .iter()
+            .map(|t| t.net_pnl.to_f64())
+            .fold(0.0, f64::min);
 
-        let total_commission: f64 = trades.iter().map(|t| t.commission).sum();
+        let total_commission: f64 = trades.iter().map(|t| t.commission.to_f64()).sum();
 
         // Sharpe ratio
         let returns: Vec<f64> = equity_curve

@@ -504,20 +504,20 @@ impl SqliteStateManager {
             id: None, // Auto-assigned by database
             symbol: trade.symbol.as_str().to_string(),
             side: format!("{:?}", trade.side).to_lowercase(),
-            quantity: trade.quantity,
-            entry_price: trade.entry_price,
-            exit_price: trade.exit_price,
+            quantity: trade.quantity.to_f64(),
+            entry_price: trade.entry_price.to_f64(),
+            exit_price: trade.exit_price.to_f64(),
             entry_time: trade.entry_time.to_rfc3339(),
             exit_time: trade.exit_time.to_rfc3339(),
-            gross_pnl: trade.pnl,
-            fees: trade.commission,
-            tax: if trade.net_pnl > 0.0 {
-                trade.net_pnl * 0.3
+            gross_pnl: trade.pnl.to_f64(),
+            fees: trade.commission.to_f64(),
+            tax: if trade.net_pnl.is_positive() {
+                trade.net_pnl.to_f64() * 0.3
             } else {
                 0.0
             },
-            net_pnl: trade.net_pnl,
-            pnl_pct: ((trade.exit_price - trade.entry_price) / trade.entry_price) * 100.0,
+            net_pnl: trade.net_pnl.to_f64(),
+            pnl_pct: trade.return_pct(),
             status: "closed".to_string(),
             exit_reason: "signal".to_string(),
             strategy_signal: "flat".to_string(),

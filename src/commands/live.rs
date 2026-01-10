@@ -28,7 +28,7 @@ use crypto_strategies::state_manager::{
     create_state_manager, Checkpoint, Position as StatePosition, SqliteStateManager,
 };
 use crypto_strategies::strategies::{self, Strategy};
-use crypto_strategies::{Config, Side, Symbol, Trade};
+use crypto_strategies::{Config, Money, Side, Symbol, Trade};
 
 /// Performance metrics for HFT monitoring
 #[derive(Debug, Default)]
@@ -729,19 +729,19 @@ impl LiveTrader {
                 let trade = Trade {
                     symbol: symbol.clone(),
                     side: pos.side,
-                    entry_price: pos.average_entry_price,
-                    exit_price: current_candle.close,
-                    quantity: pos.total_quantity_traded(),
+                    entry_price: Money::from_f64(pos.average_entry_price),
+                    exit_price: Money::from_f64(current_candle.close),
+                    quantity: Money::from_f64(pos.total_quantity_traded()),
                     entry_time: pos.entry_time(),
                     exit_time: Utc::now(),
-                    pnl: pos.realized_pnl,
-                    commission: pos.total_commission(),
-                    net_pnl: pos.realized_pnl - pos.total_commission(),
+                    pnl: Money::from_f64(pos.realized_pnl),
+                    commission: Money::from_f64(pos.total_commission()),
+                    net_pnl: Money::from_f64(pos.realized_pnl - pos.total_commission()),
                 };
 
                 self.strategy.on_trade_closed(&trade);
 
-                if trade.net_pnl > 0.0 {
+                if trade.net_pnl.is_positive() {
                     self.risk_manager.record_win();
                 } else {
                     self.risk_manager.record_loss();

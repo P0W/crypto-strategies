@@ -38,6 +38,10 @@ thiserror = "2.0"
 # Numerical computations
 statrs = "0.17"
 
+# Precise decimal arithmetic for monetary values
+rust_decimal = { version = "1.36", features = ["serde", "serde-with-str"] }
+rust_decimal_macros = "1.36"
+
 # Technical analysis indicators (well-maintained, minimal deps)
 ta = "0.5"
 
