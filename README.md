@@ -98,18 +98,18 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 | `regime_grid` | Grid trading with volatility regime adaptation |
 
 ## Backtest Results
-
-**Test Period**: 2021-12-04 to 2026-01-10 | **Initial Capital**: ₹100,000 | **Timeframe**: 1d
-
+ 
+**Note**: Results based on available data for each strategy (May 2025 - Jan 2026). Initial Capital: ₹100,000 | Timeframe: 1d
+ 
 ### Performance Summary
-
-| Strategy | Symbols | Return | Sharpe | Max DD | Win Rate | Trades | Expectancy |
-|----------|---------|--------|--------|--------|----------|--------|------------|
-| **regime_grid** | ETH,SOL | 150.4% | 2.78 | 9.7% | 71.6% | 88 | ₹1,377 |
-| **quick_flip** | BTC,ETH,SOL,BNB,XRP | 26.0% | 1.63 | 5.8% | 63.6% | 22 | ₹1,182 |
-| **range_breakout** | BTC,ETH,SOL,BNB,XRP | 24.8% | 1.50 | 7.4% | 83.3% | 18 | ₹1,375 |
-| **momentum_scalper** | BTC,ETH,SOL,BNB,XRP | 38.0% | 1.06 | 13.6% | 47.1% | 70 | ₹543 |
-| **volatility_regime** | BNB,BTC,SOL | 55.4% | 0.55 | 13.6% | 44.9% | 49 | ₹1,130 |
+ 
+| Strategy | Symbols | Date Range | Return | Sharpe | Max DD | Win Rate | Trades |
+|----------|---------|------------|--------|--------|--------|----------|--------|
+| **regime_grid** | ETH,SOL | 2025-07-29 to 2026-01-08 | 108.1% | 2.53 | 12.6% | 82.8% | 64 |
+| **momentum_scalper** | BTC,ETH,SOL,BNB,XRP | 2025-05-12 to 2025-10-10 | 38.0% | 1.06 | 13.6% | 47.1% | 70 |
+| **quick_flip** | BTC,ETH,SOL,BNB,XRP | 2025-05-15 to 2025-10-07 | 26.0% | 1.63 | 5.8% | 63.6% | 22 |
+| **range_breakout** | BTC,ETH,SOL,BNB,XRP | 2025-05-15 to 2025-10-10 | 24.8% | 1.50 | 7.4% | 83.3% | 18 |
+| **volatility_regime** | BNB,BTC,SOL | 2025-05-30 to 2025-10-10 | 6.4% | 0.28 | 13.6% | 45.5% | 11 |
 
 ### Strategy Configurations
 
