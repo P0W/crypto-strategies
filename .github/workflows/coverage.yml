@@ -35,9 +35,19 @@ jobs:
 
     - name: Run Backtests
       run: |
-        # Run all backtest configs
-        for config in configs/*.json; do
-          if [ ! -f "$config" ]; then continue; fi
+        # Define configs to run explicitly
+        configs=(
+          "configs/sample_config.json"
+          "configs/momentum_scalper_config.json"
+          "configs/quick_flip_config.json"
+          "configs/range_breakout_config.json"
+          "configs/regime_grid_config.json"
+          "configs/volatility_regime_config.json"
+          "configs/volatility_regime_4h_config.json"
+        )
+
+        # Run backtest for each config
+        for config in "${configs[@]}"; do
           echo "Running backtest for $config"
           
           # Standard run
@@ -59,10 +69,19 @@ jobs:
 
     - name: Run Optimization
       run: |
+        # Define configs to run explicitly
+        configs=(
+          "configs/sample_config.json"
+          "configs/momentum_scalper_config.json"
+          "configs/quick_flip_config.json"
+          "configs/range_breakout_config.json"
+          "configs/regime_grid_config.json"
+          "configs/volatility_regime_config.json"
+          "configs/volatility_regime_4h_config.json"
+        )
+
         # Run optimization for non-regime configs
-        for config in configs/*.json; do
-          if [ ! -f "$config" ]; then continue; fi
-          
+        for config in "${configs[@]}"; do
           # Exclude regime strategies (too large/slow)
           if grep -q "regime" "$config"; then
             echo "Skipping optimization for $config (regime strategy)"
