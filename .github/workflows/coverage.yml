@@ -1,0 +1,92 @@
+name: Coverage
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-Cinstrument-coverage"
+  LLVM_PROFILE_FILE: "coverage-%p-%m.profraw"
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: llvm-tools-preview
+
+    - name: Install grcov
+      run: |
+        curl -L https://github.com/mozilla/grcov/releases/latest/download/grcov-x86_64-unknown-linux-gnu.tar.bz2 | tar jxf -
+
+    - name: Build
+      run: cargo build --verbose
+
+    - name: Run Tests
+      run: cargo test --verbose
+
+    - name: Run Backtests
+      run: |
+        # Run all backtest configs
+        for config in configs/*.json; do
+          if [ ! -f "$config" ]; then continue; fi
+          echo "Running backtest for $config"
+          
+          # Standard run
+          cargo run -- backtest --config "$config"
+          
+          # Run with T+1 execution
+          cargo run -- backtest --config "$config" --use-t1-execution
+          
+          # Run with no risk limits
+          cargo run -- backtest --config "$config" --no-risk-limits
+          
+          # Run with reduced capital
+          cargo run -- backtest --config "$config" --capital 50000
+          
+          # Run with date range (using a range likely to have data if data exists)
+          # We use || true to ignore errors if data is missing for these dates
+          cargo run -- backtest --config "$config" --start 2024-01-01 --end 2024-03-01 || true
+        done
+
+    - name: Run Optimization
+      run: |
+        # Run optimization for non-regime configs
+        for config in configs/*.json; do
+          if [ ! -f "$config" ]; then continue; fi
+          
+          # Exclude regime strategies (too large/slow)
+          if grep -q "regime" "$config"; then
+            echo "Skipping optimization for $config (regime strategy)"
+            continue
+          fi
+          
+          echo "Running optimization for $config"
+          
+          # Basic optimization run (limit top results for speed)
+          cargo run -- optimize --config "$config" --top 1 --no-update
+          
+          # Sequential run
+          cargo run -- optimize --config "$config" --top 1 --sequential --no-update
+          
+          # With generic coins (if applicable, might fail if data missing, so we use || true)
+          cargo run -- optimize --config "$config" --top 1 --coins "BTC,ETH" --no-update || true
+        done
+
+    - name: Generate Coverage Report
+      run: |
+        ./grcov . -s . --binary-path ./target/debug/ -t lcov --branch --ignore-not-existing --ignore "/*" --ignore "tests/*" -o lcov.info
+
+    - name: Upload to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        files: lcov.info
+        fail_ci_if_error: false
