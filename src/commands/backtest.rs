@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use crypto_strategies::monthly_pnl::MonthlyPnLMatrix;
+use crypto_strategies::trade_analysis::{DayOfWeekAnalysis, MonthlyPnLMatrix};
 use crypto_strategies::multi_timeframe::MultiTimeframeData;
 use crypto_strategies::strategies;
 use crypto_strategies::{backtest::Backtester, data, Config};
@@ -154,6 +154,20 @@ pub fn run(opts: BacktestOptions) -> Result<()> {
 
     info!("Loaded data for {} symbols", mtf_data.len());
 
+    // Extract actual date range from loaded data
+    let (data_start, data_end) = mtf_data
+        .values()
+        .next()
+        .and_then(|mtf| {
+            let candles = mtf.primary();
+            if candles.is_empty() {
+                None
+            } else {
+                Some((candles.first().unwrap().datetime, candles.last().unwrap().datetime))
+            }
+        })
+        .unzip();
+
     // Run backtest
     let mut backtester = Backtester::new(config.clone(), strategy);
     let result = backtester.run(&mtf_data);
@@ -162,11 +176,11 @@ pub fn run(opts: BacktestOptions) -> Result<()> {
     println!("\n{}", "=".repeat(60));
     println!("BACKTEST RESULTS");
     println!("{}", "=".repeat(60));
-    if let Some(ref start) = start_date {
-        println!("Start Date:         {}", start.format("%Y-%m-%d %H:%M:%S"));
+    if let Some(start) = data_start {
+        println!("Start Date:         {}", start.format("%Y-%m-%d"));
     }
-    if let Some(ref end) = end_date {
-        println!("End Date:           {}", end.format("%Y-%m-%d %H:%M:%S"));
+    if let Some(end) = data_end {
+        println!("End Date:           {}", end.format("%Y-%m-%d"));
     }
     println!("Initial Capital:    ₹{:.2}", config.trading.initial_capital);
     println!("Total Return:       {:.2}%", result.metrics.total_return);
@@ -192,9 +206,13 @@ pub fn run(opts: BacktestOptions) -> Result<()> {
     println!("Tax (30%):          ₹{:.2}", result.metrics.tax_amount);
     println!("{}", "=".repeat(60));
 
-    // Monthly P&L matrix
+    // Performance breakdowns
+    let dow = DayOfWeekAnalysis::from_trades(&result.trades);
+    print!("{}", dow.render());
+
     let monthly = MonthlyPnLMatrix::from_trades(&result.trades);
     print!("{}", monthly.render_colored());
+    print!("{}", monthly.render_yearly_summary(config.trading.initial_capital));
 
     info!("Backtest completed");
     Ok(())

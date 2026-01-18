@@ -61,7 +61,7 @@ pub mod config;
 pub mod data;
 pub mod grid;
 pub mod indicators;
-pub mod monthly_pnl;
+pub mod trade_analysis;
 pub mod multi_timeframe;
 pub mod oms;
 pub mod optimizer;
@@ -72,7 +72,7 @@ pub mod types;
 pub mod zerodha;
 
 pub use config::Config;
-pub use monthly_pnl::MonthlyPnLMatrix;
+pub use trade_analysis::{DayOfWeekAnalysis, MonthlyPnLMatrix};
 pub use multi_timeframe::{
     MultiSymbolMultiTimeframeData, MultiTimeframeCandles, MultiTimeframeData,
 };

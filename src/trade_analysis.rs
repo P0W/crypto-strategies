@@ -1,12 +1,105 @@
-//! Monthly P&L analysis and matrix rendering
+//! Trade performance analysis
 //!
-//! This module provides functionality to break down backtest results into
-//! month-on-month profit/loss analysis with professional matrix display.
+//! This module provides functionality to analyze backtest results:
+//! - Monthly P&L matrix
+//! - Yearly performance summary
+//! - Day of week analysis
 
 use chrono::{DateTime, Datelike, Utc};
 use std::collections::BTreeMap;
 
 use crate::Trade;
+
+/// Day of week performance analysis
+pub struct DayOfWeekAnalysis {
+    /// P&L and stats per weekday (0=Mon, 6=Sun)
+    data: [DayStats; 7],
+}
+
+#[derive(Default, Clone)]
+struct DayStats {
+    total_pnl: f64,
+    trade_count: usize,
+    wins: usize,
+}
+
+impl DayOfWeekAnalysis {
+    pub fn from_trades(trades: &[Trade]) -> Self {
+        let mut data = [DayStats::default(), DayStats::default(), DayStats::default(),
+                        DayStats::default(), DayStats::default(), DayStats::default(),
+                        DayStats::default()];
+
+        for trade in trades {
+            let day_idx = trade.exit_time.weekday().num_days_from_monday() as usize;
+            data[day_idx].total_pnl += trade.net_pnl.to_f64();
+            data[day_idx].trade_count += 1;
+            if trade.net_pnl.is_positive() {
+                data[day_idx].wins += 1;
+            }
+        }
+
+        Self { data }
+    }
+
+    pub fn render(&self) -> String {
+        const GREEN: &str = "\x1b[32m";
+        const RED: &str = "\x1b[31m";
+        const RESET: &str = "\x1b[0m";
+        const BOLD: &str = "\x1b[1m";
+        const DIM: &str = "\x1b[2m";
+
+        let days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+        let mut output = String::new();
+
+        output.push_str(&format!("\n{}DAY OF WEEK PERFORMANCE{}\n", BOLD, RESET));
+        output.push_str(&format!("{}\n", "─".repeat(55)));
+        output.push_str(&format!(
+            "{}{:>5}  {:>12}  {:>8}  {:>8}  {:>10}{}\n",
+            DIM, "Day", "P&L", "Trades", "Win %", "Avg P&L", RESET
+        ));
+        output.push_str(&format!("{}\n", "─".repeat(55)));
+
+        // Find best and worst days
+        let best_idx = self.data.iter().enumerate()
+            .max_by(|a, b| a.1.total_pnl.partial_cmp(&b.1.total_pnl).unwrap())
+            .map(|(i, _)| i);
+        let worst_idx = self.data.iter().enumerate()
+            .filter(|(_, d)| d.trade_count > 0)
+            .min_by(|a, b| a.1.total_pnl.partial_cmp(&b.1.total_pnl).unwrap())
+            .map(|(i, _)| i);
+
+        for (i, stats) in self.data.iter().enumerate() {
+            if stats.trade_count == 0 {
+                output.push_str(&format!(
+                    "{}{:>5}  {:>12}  {:>8}  {:>8}  {:>10}{}\n",
+                    DIM, days[i], "-", "-", "-", "-", RESET
+                ));
+                continue;
+            }
+
+            let win_rate = (stats.wins as f64 / stats.trade_count as f64) * 100.0;
+            let avg_pnl = stats.total_pnl / stats.trade_count as f64;
+            let color = if stats.total_pnl >= 0.0 { GREEN } else { RED };
+
+            // Mark best/worst
+            let marker = if Some(i) == best_idx { " ★" }
+                        else if Some(i) == worst_idx { " ✗" }
+                        else { "" };
+
+            output.push_str(&format!(
+                "{:>5}  {}{:>12.0}{}  {:>8}  {:>7.1}%  {}{:>10.0}{}{}\n",
+                days[i], color, stats.total_pnl, RESET,
+                stats.trade_count, win_rate,
+                color, avg_pnl, RESET, marker
+            ));
+        }
+
+        output.push_str(&format!("{}\n", "─".repeat(55)));
+        output.push_str(&format!("{}★ = Best day  ✗ = Worst day{}\n", DIM, RESET));
+
+        output
+    }
+}
 
 /// Monthly P&L data for a specific month
 #[derive(Debug, Clone, Default)]
@@ -189,20 +282,23 @@ impl MonthlyPnLMatrix {
         const RESET: &str = "\x1b[0m";
         const BOLD: &str = "\x1b[1m";
 
+        // Table width: 6(year) + 2(│ ) + 12*(10+3)(months) + 12(total) + 1 = 177
+        const TABLE_WIDTH: usize = 177;
+
         let years = self.years();
         let mut output = String::new();
 
         // Header
-        output.push_str(&format!("\n{}{}{}\n", BOLD, "=".repeat(120), RESET));
+        output.push_str(&format!("\n{}{}{}\n", BOLD, "═".repeat(TABLE_WIDTH), RESET));
         output.push_str(&format!("{}MONTHLY P&L MATRIX (₹){}\n", BOLD, RESET));
-        output.push_str(&format!("{}{}{}\n", BOLD, "=".repeat(120), RESET));
+        output.push_str(&format!("{}{}{}\n", BOLD, "═".repeat(TABLE_WIDTH), RESET));
 
         // Column headers
         output.push_str(&format!(
             "{}{:>6} │ {:>10} │ {:>10} │ {:>10} │ {:>10} │ {:>10} │ {:>10} │ {:>10} │ {:>10} │ {:>10} │ {:>10} │ {:>10} │ {:>10} │ {:>12}{}\n",
             BOLD, "Year", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Total", RESET
         ));
-        output.push_str(&format!("{}\n", "-".repeat(120)));
+        output.push_str(&format!("{}\n", "─".repeat(TABLE_WIDTH)));
 
         // Data rows (one per year)
         for year in years {
@@ -225,13 +321,12 @@ impl MonthlyPnLMatrix {
             output.push_str(&format!(" {}{:>12.2}{}\n", color, year_total, RESET));
         }
 
-        output.push_str(&format!("{}\n", "=".repeat(120)));
+        output.push_str(&format!("{}\n", "═".repeat(TABLE_WIDTH)));
 
         // Summary statistics
         let total = self.total_pnl();
         let color = if total > 0.0 { GREEN } else { RED };
-        output.push_str(&format!("{}Total P&L: ₹{:.2}{}\n", BOLD, total, RESET));
-        output.push_str(&format!("{color}         : ₹{total:.2}{RESET}\n"));
+        output.push_str(&format!("{}Total P&L:{} {}₹{:.2}{}\n", BOLD, RESET, color, total, RESET));
 
         // Count profitable vs losing months
         let profitable_months = self.data.values().filter(|pnl| pnl.net_pnl > 0.0).count();
@@ -244,11 +339,9 @@ impl MonthlyPnLMatrix {
         };
 
         output.push_str(&format!(
-            "{}Monthly Win Rate: {:.1}% ({} profitable / {} losing / {} total months){}\n",
-            BOLD, monthly_win_rate, profitable_months, losing_months, total_months, RESET
+            "{}Monthly Win Rate:{} {:.1}% ({} profitable / {} losing)\n",
+            BOLD, RESET, monthly_win_rate, profitable_months, losing_months
         ));
-
-        output.push_str(&format!("{}\n", "=".repeat(120)));
 
         output
     }
@@ -256,6 +349,107 @@ impl MonthlyPnLMatrix {
     /// Format a P&L value for a cell (right-aligned, 10 chars)
     fn format_pnl_cell(&self, value: f64) -> String {
         format!("{:>10.2}", value)
+    }
+
+    /// Render a compact yearly summary (more professional)
+    pub fn render_yearly_summary(&self, initial_capital: f64) -> String {
+        if self.data.is_empty() {
+            return "No trades to display.\n".to_string();
+        }
+
+        const GREEN: &str = "\x1b[32m";
+        const RED: &str = "\x1b[31m";
+        const RESET: &str = "\x1b[0m";
+        const BOLD: &str = "\x1b[1m";
+        const DIM: &str = "\x1b[2m";
+
+        let years = self.years();
+        let mut output = String::new();
+        let mut cumulative_pnl = 0.0;
+
+        // Yearly Performance Table
+        output.push_str(&format!("\n{}YEARLY PERFORMANCE{}\n", BOLD, RESET));
+        output.push_str(&format!("{}\n", "─".repeat(90)));
+        output.push_str(&format!(
+            "{}{:>6}  {:>12}  {:>8}  {:>8}  {:>8}  {:>12}  {:>12}{}\n",
+            DIM, "Year", "P&L", "Return", "Trades", "Win %", "Best Mo", "Worst Mo", RESET
+        ));
+        output.push_str(&format!("{}\n", "─".repeat(90)));
+
+        for year in &years {
+            let year_pnl = self.yearly_total(*year);
+            cumulative_pnl += year_pnl;
+            let year_capital = initial_capital + cumulative_pnl - year_pnl;
+            let year_return = if year_capital > 0.0 { (year_pnl / year_capital) * 100.0 } else { 0.0 };
+
+            // Get trades and win rate for year
+            let year_data: Vec<_> = self.data.iter()
+                .filter(|(ym, _)| ym.year == *year)
+                .collect();
+            let trades: usize = year_data.iter().map(|(_, pnl)| pnl.trade_count).sum();
+            let wins: usize = year_data.iter().map(|(_, pnl)| pnl.winning_trades).sum();
+            let win_rate = if trades > 0 { (wins as f64 / trades as f64) * 100.0 } else { 0.0 };
+
+            // Best and worst months
+            let best_month = year_data.iter()
+                .max_by(|a, b| a.1.net_pnl.partial_cmp(&b.1.net_pnl).unwrap())
+                .map(|(ym, pnl)| (ym.month, pnl.net_pnl));
+            let worst_month = year_data.iter()
+                .min_by(|a, b| a.1.net_pnl.partial_cmp(&b.1.net_pnl).unwrap())
+                .map(|(ym, pnl)| (ym.month, pnl.net_pnl));
+
+            let color = if year_pnl >= 0.0 { GREEN } else { RED };
+            let months = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+            // Format best/worst with fixed width (no color in width calc)
+            let best_str = best_month
+                .map(|(m, v)| format!("{}{:>12}{}", GREEN, format!("{} {:+.0}", months[m as usize], v), RESET))
+                .unwrap_or_else(|| format!("{:>12}", "-"));
+            let worst_str = worst_month
+                .map(|(m, v)| format!("{}{:>12}{}", RED, format!("{} {:+.0}", months[m as usize], v), RESET))
+                .unwrap_or_else(|| format!("{:>12}", "-"));
+
+            output.push_str(&format!(
+                "{:>6}  {}{:>12.0}{}  {}{:>7.1}%{}  {:>8}  {:>7.1}%  {}  {}\n",
+                year, color, year_pnl, RESET, color, year_return, RESET, trades, win_rate, best_str, worst_str
+            ));
+        }
+
+        output.push_str(&format!("{}\n", "─".repeat(90)));
+
+        // Summary row
+        let total_pnl = self.total_pnl();
+        let total_return = (total_pnl / initial_capital) * 100.0;
+        let total_trades: usize = self.data.values().map(|p| p.trade_count).sum();
+        let total_wins: usize = self.data.values().map(|p| p.winning_trades).sum();
+        let overall_win_rate = if total_trades > 0 { (total_wins as f64 / total_trades as f64) * 100.0 } else { 0.0 };
+
+        let color = if total_pnl >= 0.0 { GREEN } else { RED };
+        output.push_str(&format!(
+            "{}{:>6}  {}{:>12.0}{}  {}{:>7.1}%{}  {:>8}  {:>7.1}%{}\n",
+            BOLD, "TOTAL", color, total_pnl, RESET, color, total_return, RESET, total_trades, overall_win_rate, RESET
+        ));
+
+        // CAGR calculation
+        let num_years = years.len() as f64;
+        if num_years > 0.0 && total_return > -100.0 {
+            let cagr = ((1.0 + total_return / 100.0).powf(1.0 / num_years) - 1.0) * 100.0;
+            output.push_str(&format!("{}CAGR: {:+.1}%{}\n", DIM, cagr, RESET));
+        }
+
+        output.push_str(&format!("{}\n", "─".repeat(90)));
+
+        // Monthly consistency
+        let profitable_months = self.data.values().filter(|pnl| pnl.net_pnl > 0.0).count();
+        let losing_months = self.data.len() - profitable_months;
+        let monthly_wr = if !self.data.is_empty() { (profitable_months as f64 / self.data.len() as f64) * 100.0 } else { 0.0 };
+
+        output.push_str(&format!(
+            "{}Monthly: {:.0}% consistency ({} green / {} red){}\n",
+            DIM, monthly_wr, profitable_months, losing_months, RESET
+        ));
+
+        output
     }
 }
 
