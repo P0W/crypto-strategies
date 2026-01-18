@@ -17,12 +17,14 @@ flowchart TB
         Backtester
         Optimizer
         RiskManager
+        GridGenerator["Grid Generator"]
     end
 
     subgraph OMS["Order Management System"]
         OrderBook
         ExecutionEngine
         PositionManager
+        OrderSizer
     end
 
     subgraph Strategies["Strategy Layer"]
@@ -32,6 +34,18 @@ flowchart TB
         MomentumScalper["momentum_scalper"]
         QuickFlip["quick_flip"]
         RangeBreakout["range_breakout"]
+    end
+
+    subgraph Data["Data Layer"]
+        DataLoader["Data Loader"]
+        MultiTimeframe["Multi-Timeframe"]
+        Indicators["Indicators"]
+    end
+
+    subgraph Analysis["Analysis"]
+        MonthlyPnL["Monthly P&L"]
+        DayOfWeek["Day of Week"]
+        Streaks["Win/Loss Streaks"]
     end
 
     subgraph Persistence["Persistence"]
@@ -52,9 +66,15 @@ flowchart TB
     download --> Binance
 
     Optimizer -->|parallel backtests| Backtester
+    Optimizer --> GridGenerator
     Backtester --> RiskManager
     Backtester --> OMS
     Backtester --> StrategyTrait
+    Backtester --> DataLoader
+    Backtester --> Analysis
+
+    DataLoader --> MultiTimeframe
+    DataLoader --> Indicators
 
     StrategyTrait -.->|implements| VolatilityRegime
     StrategyTrait -.->|implements| RegimeGrid
@@ -63,6 +83,7 @@ flowchart TB
     StrategyTrait -.->|implements| RangeBreakout
 
     live --> StateManager
+    live --> MultiTimeframe
     StateManager --> SQLite
     StateManager --> JSON
     live --> CoinDCX
@@ -187,35 +208,38 @@ classDiagram
     class Strategy {
         <<trait>>
         +name() str
-        +clone_boxed() Box
-        +generate_orders(ctx) Vec
-        +calculate_stop_loss(candles, entry_price) f64
-        +calculate_take_profit(candles, entry_price) f64
-        +update_trailing_stop(position, price, candles) Option
-        +required_timeframes() Vec
+        +clone_boxed() Box~dyn Strategy~
+        +generate_orders(ctx) Vec~OrderRequest~
+        +calculate_stop_loss(candles, entry_price, side) f64
+        +calculate_take_profit(candles, entry_price, side) f64
+        +update_trailing_stop(position, price, candles) Option~f64~
+        +required_timeframes() Vec~str~
         +get_regime_score(candles) f64
         +on_bar(ctx)
         +on_order_filled(fill, position)
+        +on_order_cancelled(order)
         +on_trade_closed(trade)
         +init()
     }
 
     class StrategyContext {
-        +symbol: String
-        +candles: Vec
-        +position: Option
-        +pending_orders: Vec
-        +cash: f64
-        +portfolio_value: f64
+        +symbol: Symbol
+        +candles: Vec~Candle~
+        +mtf_candles: Option~MultiTimeframeCandles~
+        +current_position: Option~Position~
+        +open_orders: Vec~Order~
+        +cash_available: f64
+        +equity: f64
+        +peak_equity: f64
     }
 
     class OrderRequest {
         +symbol: String
         +side: OrderSide
         +order_type: OrderType
-        +quantity: Money
-        +limit_price: Option
-        +stop_price: Option
+        +quantity: f64
+        +limit_price: Option~f64~
+        +stop_price: Option~f64~
     }
 
     Strategy ..> StrategyContext : uses
@@ -413,10 +437,11 @@ flowchart LR
 
 | Component | Key Types |
 |-----------|-----------|
-| **OMS** | `Order`, `OrderRequest`, `Fill`, `Position`, `OrderBook`, `ExecutionEngine`, `PositionManager` |
-| **Strategy** | `Strategy` (trait), `StrategyContext`, `Candle`, `Signal` |
-| **Risk** | `RiskManager`, `RiskConfig` |
+| **OMS** | `Order`, `OrderRequest`, `Fill`, `Position`, `OrderBook`, `ExecutionEngine`, `PositionManager`, `OrderSizer` |
+| **Strategy** | `Strategy` (trait), `StrategyContext`, `Candle`, `MultiTimeframeCandles` |
+| **Risk** | `RiskManager`, `TradingConfig` |
 | **Backtest** | `Backtester`, `BacktestResult`, `PerformanceMetrics`, `Trade` |
-| **Optimizer** | `OptimizationResult`, `GridConfig` |
+| **Optimizer** | `Optimizer`, `OptimizationResult`, `GridConfig` |
 | **State** | `SqliteStateManager`, `PortfolioCheckpoint` |
-| **Types** | `Money` (decimal wrapper), `Symbol`, `Timeframe` |
+| **Types** | `Money` (decimal wrapper), `Symbol`, `Timeframe`, `Side` |
+| **Analysis** | `MonthlyPnL`, `DayOfWeekStats`, `StreakAnalysis` |

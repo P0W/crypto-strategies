@@ -16,22 +16,49 @@ This is a **Rust-only repository** with high-performance backtesting and live tr
 
 ```
 crypto-strategies/
-├── src/                  # Rust source code
-│   ├── commands/         # CLI commands (backtest, optimize, live, download)
-│   ├── oms/              # Order Management System
-│   ├── strategies/       # Trading strategies
-│   ├── binance/          # Binance API (data only)
-│   ├── coindcx/          # CoinDCX API (trading)
-│   ├── zerodha/          # Zerodha Kite API (equity)
-│   └── common/           # Shared utilities
-├── tests/                # Integration tests
-├── configs/              # Shared configuration files (JSON)
-├── data/                 # Shared OHLCV data (CSV)
-├── results/              # Backtest results
-├── logs/                 # Trading logs
-├── .env                  # API credentials
-├── Cargo.toml            # Rust dependencies
-└── README.md             # Project overview
+├── src/                     # Rust source code
+│   ├── main.rs              # CLI entry point
+│   ├── lib.rs               # Library exports
+│   ├── backtest.rs          # Event-driven backtesting engine
+│   ├── optimizer.rs         # Parallel parameter grid search
+│   ├── risk.rs              # Position sizing, drawdown control, portfolio heat
+│   ├── indicators.rs        # Technical indicators (ATR, EMA, RSI, ADX, etc.)
+│   ├── config.rs            # Configuration parsing and validation
+│   ├── data.rs              # OHLCV data loading and alignment
+│   ├── grid.rs              # Grid parameter generation for optimization
+│   ├── multi_timeframe.rs   # Multi-timeframe data handling
+│   ├── state_manager.rs     # SQLite state persistence and crash recovery
+│   ├── types.rs             # Core domain types (Candle, Position, Trade, etc.)
+│   ├── commands/            # CLI command handlers (backtest, optimize, live, download)
+│   ├── strategies/          # Trading strategy implementations
+│   │   ├── volatility_regime/   # ATR-based regime classification
+│   │   ├── momentum_scalper/    # EMA crossover with momentum filter
+│   │   ├── range_breakout/      # N-bar high/low breakout
+│   │   ├── quick_flip/          # Range breakout with candle confirmation
+│   │   └── regime_grid/         # Grid trading with volatility adaptation
+│   ├── oms/                 # Order Management System
+│   │   ├── orderbook.rs         # Order storage and matching
+│   │   ├── execution.rs         # Fill simulation with slippage
+│   │   ├── position_manager.rs  # FIFO position accounting
+│   │   ├── order_sizer.rs       # Risk-based position sizing
+│   │   └── types.rs             # Order, Fill, Position types
+│   ├── analysis/            # Trade analysis utilities
+│   │   ├── monthly.rs           # Monthly P&L breakdown
+│   │   ├── day_of_week.rs       # Day-of-week performance
+│   │   └── streaks.rs           # Win/loss streak analysis
+│   ├── common/              # Shared utilities (circuit_breaker, rate_limiter)
+│   ├── coindcx/             # CoinDCX exchange client (crypto)
+│   ├── zerodha/             # Zerodha Kite client (equity)
+│   └── binance/             # Binance client (data only)
+├── tests/                   # Integration tests
+├── configs/                 # Strategy configuration files (JSON)
+├── data/                    # Historical OHLCV data (CSV)
+├── docs/                    # Documentation (ARCHITECTURE.md, CREATING_STRATEGIES.md)
+├── results/                 # Backtest results output
+├── logs/                    # Trading and backtest logs
+├── .env                     # API credentials
+├── Cargo.toml               # Rust dependencies
+└── README.md                # Project overview
 ```
 
 ## Build & Run Commands
@@ -126,19 +153,24 @@ ZERODHA_ACCESS_TOKEN=your_access_token
 ### Key Architectural Patterns
 
 **Type-Driven Design** (`src/types.rs`)
-- Core domain model: `Candle` → `Signal` → `Position` → `Trade` → `PerformanceMetrics`
+- Core domain model: `Candle` → `OrderRequest` → `Order` → `Fill` → `Position` → `Trade` → `PerformanceMetrics`
 - All types are serializable for persistence
 - Strong type safety prevents data corruption
 
 **Strategy Trait + Factory Pattern**
 ```rust
 pub trait Strategy: Send + Sync {
-    fn generate_signal(&self, symbol: &Symbol, candles: &[Candle], position: Option<&Position>) -> Signal;
-    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64) -> f64;
-    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64) -> f64;
+    fn name(&self) -> &'static str;
+    fn clone_boxed(&self) -> Box<dyn Strategy>;
+    fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest>;
+    fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64;
+    fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64;
     fn update_trailing_stop(&self, position: &Position, current_price: f64, candles: &[Candle]) -> Option<f64>;
-    fn notify_order(&mut self, order: &Order);
-    fn notify_trade(&mut self, trade: &Trade);
+    fn required_timeframes(&self) -> Vec<&'static str> { vec![] }
+    fn get_regime_score(&self, candles: &[Candle]) -> f64 { 1.0 }
+    fn on_order_filled(&mut self, fill: &Fill, position: &Position);
+    fn on_trade_closed(&mut self, trade: &Trade);
+    fn on_bar(&mut self, ctx: &StrategyContext);
     fn init(&mut self);
 }
 ```
@@ -239,10 +271,10 @@ This is a Rust-only repository optimized for:
 ### When Working on Strategies
 
 1. All strategies must implement the `Strategy` trait
-2. Strategies receive slices of candles (newest last) - use `.last()` for current bar
-3. Signal generation should be stateless - all state in candles/position
-4. Use `notify_order()` and `notify_trade()` hooks for logging/adaptation
-5. Stop/target calculations use historical candles + entry price
+2. Strategies receive `StrategyContext` with candles (newest last) - use `.last()` for current bar
+3. Order generation should be stateless - all state in candles/position
+4. Use `on_order_filled()`, `on_trade_closed()`, and `on_bar()` hooks for logging/adaptation
+5. Stop/target calculations use historical candles + entry price + side (Buy/Sell)
 
 ### When Working on Risk Management
 
@@ -363,27 +395,34 @@ The GitHub Actions workflow (`.github/workflows/regression-tests.yml`) runs thes
 ```
 src/main.rs (CLI dispatch, logging)
   ├─→ commands/backtest.rs
-  │     ├─→ config.rs
-  │     ├─→ data.rs
+  │     ├─→ config.rs (JSON parsing)
+  │     ├─→ data.rs (OHLCV loading)
   │     ├─→ backtest.rs
   │     │     ├─→ strategies/* (via Strategy trait)
-  │     │     ├─→ risk.rs
+  │     │     ├─→ oms/* (Order Management System)
+  │     │     ├─→ risk.rs (position sizing)
   │     │     ├─→ indicators.rs
   │     │     └─→ types.rs
-  │     └─→ strategies/volatility_regime/*
+  │     └─→ analysis/* (monthly, day_of_week, streaks)
   │
   ├─→ commands/optimize.rs
   │     ├─→ optimizer.rs
-  │     │     └─→ backtest.rs (via parallel iter)
-  │     └─→ strategies/volatility_regime/grid_params.rs
+  │     │     └─→ backtest.rs (via Rayon parallel iter)
+  │     └─→ grid.rs (parameter grid generation)
   │
-  └─→ commands/live.rs
-        ├─→ coindcx/client.rs (CoinDCX API client)
-        ├─→ state_manager.rs (SQLite persistence)
-        └─→ risk.rs
+  ├─→ commands/live.rs
+  │     ├─→ coindcx/client.rs (CoinDCX API)
+  │     ├─→ zerodha/client.rs (Zerodha API)
+  │     ├─→ state_manager.rs (SQLite persistence)
+  │     ├─→ multi_timeframe.rs (MTF data handling)
+  │     └─→ risk.rs
+  │
+  └─→ commands/download.rs
+        └─→ binance/client.rs (data fetching)
 
 Shared Core:
-  types.rs (domain model)
-  config.rs (JSON parsing)
-  indicators.rs (ATR, EMA, ADX, etc.)
+  types.rs (Candle, Position, Trade, Money, etc.)
+  config.rs (Config, TradingConfig, ExchangeConfig, TaxConfig)
+  indicators.rs (ATR, EMA, RSI, ADX, Bollinger, etc.)
+  oms/types.rs (Order, OrderRequest, Fill, OrderBook)
 ```

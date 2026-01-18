@@ -277,16 +277,50 @@ cargo run -- backtest --config configs/my_strategy_config.json --start 2024-01-0
 
 Import from `crate::indicators`:
 
+### Moving Averages
+
 | Indicator | Function | Description |
 |-----------|----------|-------------|
-| ATR | `atr(&high, &low, &close, period)` | Average True Range |
-| EMA | `ema(&close, period)` | Exponential Moving Average |
 | SMA | `sma(&close, period)` | Simple Moving Average |
-| RSI | `rsi(&close, period)` | Relative Strength Index |
-| ADX | `adx(&high, &low, &close, period)` | Average Directional Index |
-| MACD | `macd(&close, fast, slow, signal)` | MACD histogram |
-| Bollinger | `bollinger(&close, period, std_dev)` | Bollinger Bands |
-| Stochastic | `stochastic(&high, &low, &close, k, d)` | Stochastic oscillator |
+| EMA | `ema(&close, period)` | Exponential Moving Average |
+| WMA | `wma(&close, period)` | Weighted Moving Average |
+| HMA | `hma(&close, period)` | Hull Moving Average |
+
+### Volatility
+
+| Indicator | Function | Description |
+|-----------|----------|-------------|
+| True Range | `true_range(&high, &low, &close)` | Single-bar true range |
+| ATR | `atr(&high, &low, &close, period)` | Average True Range |
+| ATR % | `atr_percent(&high, &low, &close, period)` | ATR as percentage of price |
+| Bollinger | `bollinger_bands(&close, period, num_std)` | Returns `BandOutput { upper, middle, lower }` |
+| Keltner | `keltner_channels(&high, &low, &close, period, mult)` | Returns `BandOutput { upper, middle, lower }` |
+
+### Momentum
+
+| Indicator | Function | Description |
+|-----------|----------|-------------|
+| RSI | `rsi(&close, period)` | Relative Strength Index (0-100) |
+| Stochastic | `stochastic(&high, &low, &close, k_period, d_period)` | Full stochastic |
+| Fast Stoch | `fast_stochastic(&high, &low, &close, period)` | Fast stochastic %K |
+| MACD | `macd(&close, fast, slow, signal)` | Returns `MacdOutput { macd, signal, histogram }` |
+| Williams %R | `williams_r(&high, &low, &close, period)` | Williams %R (-100 to 0) |
+| CCI | `cci(&high, &low, &close, period)` | Commodity Channel Index |
+
+### Trend
+
+| Indicator | Function | Description |
+|-----------|----------|-------------|
+| DMI | `dmi(&high, &low, &close, period)` | Returns `DmiOutput { plus_di, minus_di, adx }` |
+| ADX | `adx(&high, &low, &close, period)` | Average Directional Index only |
+
+### Volume
+
+| Indicator | Function | Description |
+|-----------|----------|-------------|
+| VWAP | `vwap(&high, &low, &close, &volume)` | Volume Weighted Average Price |
+| OBV | `obv(&close, &volume)` | On-Balance Volume |
+| MFI | `mfi(&high, &low, &close, &volume, period)` | Money Flow Index |
 
 ## Strategy Trait Methods
 

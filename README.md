@@ -91,11 +91,11 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 
 | Strategy | Description |
 |----------|-------------|
-| `volatility_regime` | ATR-based regime classification with trend confirmation |
-| `momentum_scalper` | EMA crossover with momentum filters |
-| `range_breakout` | N-bar high/low breakout |
-| `quick_flip` | Range breakout with strong candle confirmation |
-| `regime_grid` | Grid trading with volatility regime adaptation |
+| `volatility_regime` | Classifies market into compression/expansion/extreme using ATR ratios. Enters during the quiet, exits before the chaos. |
+| `momentum_scalper` | EMA crossover with ADX momentum filter. Catches trends early, exits when momentum fades. |
+| `range_breakout` | N-bar high/low breakout with ATR-based stops. Simple and systematic. |
+| `quick_flip` | Range breakout with strong candle confirmation. Waits for conviction before entering. |
+| `regime_grid` | Grid trading that adapts spacing based on volatility regime. |
 
 ## Backtest Results
 
@@ -264,21 +264,47 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 
 ```
 ├── src/
-│   ├── main.rs           # CLI entry point
-│   ├── backtest.rs       # Backtesting engine
-│   ├── optimizer.rs      # Parameter optimization
-│   ├── risk.rs           # Position sizing & drawdown control
-│   ├── indicators.rs     # Technical indicators (ATR, EMA, RSI, etc.)
-│   ├── commands/         # CLI command handlers
-│   ├── strategies/       # Trading strategies
-│   ├── oms/              # Order Management System
-│   ├── coindcx/          # CoinDCX exchange client
-│   ├── zerodha/          # Zerodha Kite client
-│   └── binance/          # Binance data client
-├── configs/              # Strategy configuration files
-├── data/                 # Historical OHLCV data (CSV)
-├── tests/                # Integration tests
-└── docs/                 # Documentation
+│   ├── main.rs              # CLI entry point
+│   ├── lib.rs               # Library exports
+│   ├── backtest.rs          # Event-driven backtesting engine
+│   ├── optimizer.rs         # Parallel parameter grid search
+│   ├── risk.rs              # Position sizing, drawdown control, portfolio heat
+│   ├── indicators.rs        # Technical indicators (ATR, EMA, RSI, ADX, etc.)
+│   ├── config.rs            # Configuration parsing and validation
+│   ├── data.rs              # OHLCV data loading and alignment
+│   ├── grid.rs              # Grid parameter generation for optimization
+│   ├── multi_timeframe.rs   # Multi-timeframe data handling
+│   ├── state_manager.rs     # SQLite state persistence and crash recovery
+│   ├── types.rs             # Core domain types (Candle, Position, Trade, etc.)
+│   ├── commands/            # CLI command handlers (backtest, optimize, live, download)
+│   ├── strategies/          # Trading strategy implementations
+│   │   ├── volatility_regime/   # ATR-based regime classification
+│   │   ├── momentum_scalper/    # EMA crossover with momentum filter
+│   │   ├── range_breakout/      # N-bar high/low breakout
+│   │   ├── quick_flip/          # Range breakout with candle confirmation
+│   │   └── regime_grid/         # Grid trading with volatility adaptation
+│   ├── oms/                 # Order Management System
+│   │   ├── orderbook.rs         # Order storage and matching
+│   │   ├── execution.rs         # Fill simulation with slippage
+│   │   ├── position_manager.rs  # FIFO position accounting
+│   │   ├── order_sizer.rs       # Risk-based position sizing
+│   │   └── types.rs             # Order, Fill, Position types
+│   ├── analysis/            # Trade analysis utilities
+│   │   ├── monthly.rs           # Monthly P&L breakdown
+│   │   ├── day_of_week.rs       # Day-of-week performance
+│   │   └── streaks.rs           # Win/loss streak analysis
+│   ├── common/              # Shared utilities
+│   │   ├── circuit_breaker.rs   # Fault tolerance pattern
+│   │   └── rate_limiter.rs      # API rate limiting
+│   ├── coindcx/             # CoinDCX exchange client (crypto)
+│   ├── zerodha/             # Zerodha Kite client (equity)
+│   └── binance/             # Binance client (data only)
+├── configs/                 # Strategy configuration files (JSON)
+├── data/                    # Historical OHLCV data (CSV)
+├── tests/                   # Integration tests
+├── docs/                    # Documentation
+├── logs/                    # Trading and backtest logs
+└── results/                 # Backtest results output
 ```
 
 ## Configuration
@@ -312,7 +338,9 @@ See `configs/sample_config.json` for a complete example.
 
 ## Documentation
 
+- [Architecture](docs/ARCHITECTURE.md) - System design with mermaid diagrams
 - [Creating Strategies](docs/CREATING_STRATEGIES.md) - Step-by-step guide to building custom strategies
+- [Live Trading Review](docs/LIVE_TRADING_REVIEW.md) - Production deployment notes
 - [CLAUDE.md](CLAUDE.md) - AI assistant guidance for development
 
 ## License
