@@ -20,7 +20,9 @@ use std::time::{Duration, Instant};
 use tokio::time::interval;
 use tracing::{debug, error, info, warn};
 
-use crypto_strategies::coindcx::{ClientConfig, CoinDCXClient};
+use crypto_strategies::coindcx::{
+    ClientConfig, CoinDCXClient, OrderRequest as CoinDCXOrderRequest, OrderSide as CoinDCXOrderSide,
+};
 use crypto_strategies::multi_timeframe::{MultiTimeframeCandles, MultiTimeframeData};
 use crypto_strategies::oms::{ExecutionEngine, Fill, OrderBook, PositionManager, StrategyContext};
 use crypto_strategies::risk::RiskManager;
@@ -103,6 +105,16 @@ impl PerformanceMetrics {
     }
 }
 
+/// Info about an order pending on the exchange
+#[derive(Debug, Clone)]
+struct PendingExchangeOrder {
+    symbol: Symbol,
+    side: Side,
+    quantity: f64,
+    limit_price: Option<f64>,
+    submitted_at: Instant,
+}
+
 /// Live trader state with OMS integration
 struct LiveTrader {
     config: Config,
@@ -125,6 +137,14 @@ struct LiveTrader {
     paper_mode: bool,
     cycle_count: u32,
     paper_cash: f64,
+
+    // Live trading state (exchange integration)
+    /// Pending orders on exchange: exchange_order_id -> order info
+    pending_exchange_orders: HashMap<String, PendingExchangeOrder>,
+    /// Cached balances from exchange: currency -> available balance
+    exchange_balances: HashMap<String, f64>,
+    /// Last time balances were synced
+    last_balance_sync: Option<Instant>,
 
     // Stop/Target tracking (matches backtest.rs pattern)
     // Format: (stop_price, target_price) - cached at entry time
@@ -232,6 +252,9 @@ impl LiveTrader {
             paper_mode,
             cycle_count: 0,
             paper_cash: 0.0,
+            pending_exchange_orders: HashMap::new(),
+            exchange_balances: HashMap::new(),
+            last_balance_sync: None,
             entry_levels: HashMap::new(),
             trailing_stops: HashMap::new(),
             metrics: PerformanceMetrics::default(),
@@ -465,6 +488,21 @@ impl LiveTrader {
             bootstrap_start.elapsed().as_millis()
         );
 
+        // Live mode: sync balances and reconcile positions on startup
+        if !self.paper_mode {
+            info!("════════════════════════════════════════════════════════");
+            info!("🔗 Connecting to exchange for live trading...");
+            self.sync_balances()
+                .await
+                .context("Failed to sync balances on startup")?;
+            info!("│  ✓ INR Balance: ₹{:.2}", self.paper_cash);
+
+            self.reconcile_positions()
+                .await
+                .context("Failed to reconcile positions on startup")?;
+            info!("════════════════════════════════════════════════════════");
+        }
+
         // Main event loop
         let poll_secs = self.parse_tf_seconds(&self.primary_timeframe);
         info!("⏱️  Polling interval: {} seconds", poll_secs);
@@ -530,6 +568,23 @@ impl LiveTrader {
     }
 
     async fn process_cycle(&mut self) -> Result<()> {
+        // Live mode: poll for fills from exchange
+        if !self.paper_mode {
+            if let Err(e) = self.poll_pending_orders().await {
+                warn!("│  ⚠️  Order polling failed: {}", e);
+            }
+
+            // Periodic balance sync (every 5 minutes)
+            let should_sync = self
+                .last_balance_sync
+                .is_none_or(|t| t.elapsed() > Duration::from_secs(300));
+            if should_sync {
+                if let Err(e) = self.sync_balances().await {
+                    warn!("│  ⚠️  Balance sync failed: {}", e);
+                }
+            }
+        }
+
         for sym in &self.config.trading.symbols.clone() {
             let symbol = Symbol::new(sym);
 
@@ -866,7 +921,10 @@ impl LiveTrader {
         }
 
         // Step 4: Validate and place orders
+        // Collect live orders separately to avoid borrow checker issues
         let mut placed_count = 0;
+        let mut live_orders: Vec<crypto_strategies::oms::Order> = Vec::new();
+
         for req in requests {
             if self.risk_manager.should_halt_trading() {
                 warn!("│  ⛔ Trading halted by risk manager - skipping order");
@@ -882,10 +940,10 @@ impl LiveTrader {
                 continue;
             }
 
-            let order_start = Instant::now();
             let order = req.to_order();
 
             if self.paper_mode {
+                let order_start = Instant::now();
                 orderbook.add_order(order.clone());
                 let order_latency_us = order_start.elapsed().as_micros() as u64;
                 self.metrics.record_order(order_latency_us);
@@ -911,12 +969,37 @@ impl LiveTrader {
                 }
                 info!("│    └─ Order ID: {}", order.id);
             } else {
-                warn!("│  ⚠️  Live trading not implemented - use paper mode");
+                // Collect for deferred exchange submission
+                live_orders.push(order);
             }
         }
 
         if placed_count > 0 {
-            debug!("│  ✓ Placed {} order(s)", placed_count);
+            debug!("│  ✓ Placed {} paper order(s)", placed_count);
+        }
+
+        // Send live orders to exchange (after orderbook borrow ends)
+        let mut live_placed = 0;
+        for order in live_orders {
+            let order_start = Instant::now();
+            match self.send_order_to_exchange(&order).await {
+                Ok(exchange_id) => {
+                    let order_latency_us = order_start.elapsed().as_micros() as u64;
+                    self.metrics.record_order(order_latency_us);
+                    live_placed += 1;
+                    info!(
+                        "│  📋 LIVE ORDER #{} [{}μs latency] exchange_id={}",
+                        self.metrics.total_orders_placed, order_latency_us, exchange_id
+                    );
+                }
+                Err(e) => {
+                    error!("│  ❌ Failed to place order on exchange: {}", e);
+                }
+            }
+        }
+
+        if live_placed > 0 {
+            debug!("│  ✓ Placed {} live order(s) on exchange", live_placed);
         }
 
         Ok(())
@@ -928,6 +1011,330 @@ impl LiveTrader {
             total += pos.unrealized_pnl.to_f64();
         }
         total
+    }
+
+    /// Send order to CoinDCX exchange
+    /// Converts internal Order to CoinDCX format and places it
+    /// Tracks order in pending_exchange_orders for fill detection
+    async fn send_order_to_exchange(
+        &mut self,
+        order: &crypto_strategies::oms::Order,
+    ) -> Result<String> {
+        let market = order.symbol.as_str();
+        let quantity = order.quantity.to_f64();
+        let side = match order.side {
+            Side::Buy => CoinDCXOrderSide::Buy,
+            Side::Sell => CoinDCXOrderSide::Sell,
+        };
+
+        // Create CoinDCX order request
+        let order_req = match order.limit_price {
+            Some(price) => CoinDCXOrderRequest::limit(side, market, quantity, price.to_f64()),
+            None => CoinDCXOrderRequest::market(side, market, quantity),
+        }
+        .with_client_order_id(format!("strat_{}", order.id));
+
+        info!(
+            "│  📤 Sending to exchange: {} {} {:.8} {}",
+            if order.side == Side::Buy {
+                "BUY"
+            } else {
+                "SELL"
+            },
+            market,
+            quantity,
+            order
+                .limit_price
+                .map_or("@ MARKET".to_string(), |p| format!("@ {:.2}", p))
+        );
+
+        // Place order on exchange
+        let response = self
+            .exchange
+            .place_order(&order_req)
+            .await
+            .context("Failed to place order on CoinDCX")?;
+
+        // Extract exchange order ID
+        let exchange_order_id = response
+            .orders
+            .first()
+            .map(|o| o.id.clone())
+            .ok_or_else(|| anyhow::anyhow!("No order ID in exchange response"))?;
+
+        info!("│  ✅ Exchange accepted: order_id={}", exchange_order_id);
+
+        // Track pending order for fill detection
+        self.pending_exchange_orders.insert(
+            exchange_order_id.clone(),
+            PendingExchangeOrder {
+                symbol: order.symbol.clone(),
+                side: order.side,
+                quantity,
+                limit_price: order.limit_price.map(|p| p.to_f64()),
+                submitted_at: Instant::now(),
+            },
+        );
+
+        Ok(exchange_order_id)
+    }
+
+    /// Sync balances from exchange
+    /// Updates paper_cash with actual INR balance in live mode
+    async fn sync_balances(&mut self) -> Result<()> {
+        let start = Instant::now();
+        debug!("💰 Syncing balances from exchange...");
+
+        let balances = self
+            .exchange
+            .get_balances()
+            .await
+            .context("Failed to fetch balances from exchange")?;
+
+        self.exchange_balances.clear();
+        let mut inr_balance = 0.0;
+
+        for balance in &balances {
+            if balance.balance > 0.0 || balance.locked_balance > 0.0 {
+                self.exchange_balances
+                    .insert(balance.currency.clone(), balance.balance);
+
+                if balance.currency == "INR" {
+                    inr_balance = balance.balance;
+                }
+
+                debug!(
+                    "│  {}: available={:.8}, locked={:.8}",
+                    balance.currency, balance.balance, balance.locked_balance
+                );
+            }
+        }
+
+        // In live mode, use actual INR balance
+        if !self.paper_mode {
+            self.paper_cash = inr_balance;
+        }
+
+        self.last_balance_sync = Some(Instant::now());
+        debug!(
+            "│  ✓ Balance sync complete ({} μs), INR={:.2}",
+            start.elapsed().as_micros(),
+            inr_balance
+        );
+
+        Ok(())
+    }
+
+    /// Poll pending orders on exchange and detect fills
+    /// Returns number of fills detected
+    async fn poll_pending_orders(&mut self) -> Result<usize> {
+        if self.pending_exchange_orders.is_empty() {
+            return Ok(0);
+        }
+
+        let start = Instant::now();
+        let mut fills_detected = 0;
+        let mut completed_orders: Vec<String> = Vec::new();
+
+        // Check each pending order
+        for (exchange_id, pending) in &self.pending_exchange_orders {
+            match self.exchange.get_order_status(exchange_id).await {
+                Ok(status) => {
+                    let status_str = status.status.to_lowercase();
+
+                    if status_str == "filled" {
+                        // Order fully filled
+                        let fill_price = status.avg_price.unwrap_or(0.0);
+                        let filled_qty = status.total_quantity.unwrap_or(pending.quantity);
+
+                        info!(
+                            "│  💰 FILL detected: {} {} {:.8} @ {:.2}",
+                            if pending.side == Side::Buy {
+                                "BUY"
+                            } else {
+                                "SELL"
+                            },
+                            pending.symbol,
+                            filled_qty,
+                            fill_price
+                        );
+
+                        // Create fill and add to position manager
+                        let fill = Fill::from_f64(
+                            0, // Order ID (internal)
+                            fill_price,
+                            filled_qty,
+                            Utc::now(),
+                            self.config.exchange.taker_fee * fill_price * filled_qty,
+                            false, // taker
+                        );
+
+                        self.position_manager
+                            .add_fill(fill, pending.symbol.clone(), pending.side);
+                        self.metrics.record_fill();
+                        fills_detected += 1;
+                        completed_orders.push(exchange_id.clone());
+
+                        // Update risk manager based on P&L
+                        if let Some(pos) = self.position_manager.get_position(&pending.symbol) {
+                            if pos.quantity.is_zero() {
+                                // Position closed - record win/loss
+                                let pnl = pos.realized_pnl.to_f64();
+                                if pnl > 0.0 {
+                                    self.risk_manager.record_win();
+                                } else {
+                                    self.risk_manager.record_loss();
+                                }
+                            }
+                        }
+                    } else if status_str == "partially_filled" {
+                        // Partial fill - log but keep tracking
+                        let remaining = status.remaining_quantity.unwrap_or(0.0);
+                        let age_secs = pending.submitted_at.elapsed().as_secs();
+                        debug!(
+                            "│  ⏳ Partial fill: {} remaining={:.8} (age: {}s)",
+                            exchange_id, remaining, age_secs
+                        );
+                    } else if status_str == "open" || status_str == "init" {
+                        // Still pending - check for timeout (warn if > 5 min)
+                        let age_secs = pending.submitted_at.elapsed().as_secs();
+                        if age_secs > 300 {
+                            warn!(
+                                "│  ⚠️  Order {} pending for {}s: {} {} {:.8} @ {}",
+                                exchange_id,
+                                age_secs,
+                                if pending.side == Side::Buy {
+                                    "BUY"
+                                } else {
+                                    "SELL"
+                                },
+                                pending.symbol,
+                                pending.quantity,
+                                pending
+                                    .limit_price
+                                    .map_or("MARKET".to_string(), |p| format!("{:.2}", p))
+                            );
+                        }
+                    } else if status_str == "cancelled" || status_str == "rejected" {
+                        // Order cancelled/rejected
+                        warn!("│  ⚠️  Order {} was {}", exchange_id, status_str);
+                        completed_orders.push(exchange_id.clone());
+                    }
+                    // "open" or "init" - still pending, do nothing
+                }
+                Err(e) => {
+                    warn!("│  ⚠️  Failed to get status for {}: {}", exchange_id, e);
+                }
+            }
+        }
+
+        // Remove completed orders
+        for id in completed_orders {
+            self.pending_exchange_orders.remove(&id);
+        }
+
+        if fills_detected > 0 {
+            debug!(
+                "│  ✓ Order polling: {} fills detected ({} μs)",
+                fills_detected,
+                start.elapsed().as_micros()
+            );
+            // Refresh balances after fills
+            let _ = self.sync_balances().await;
+        }
+
+        Ok(fills_detected)
+    }
+
+    /// Reconcile local positions with exchange on startup
+    /// Warns about discrepancies but doesn't auto-fix (safety first)
+    async fn reconcile_positions(&mut self) -> Result<()> {
+        if self.paper_mode {
+            return Ok(()); // Skip in paper mode
+        }
+
+        info!("🔍 Reconciling positions with exchange...");
+
+        // Sync balances first
+        self.sync_balances().await?;
+
+        // Check each symbol we trade
+        for sym in &self.config.trading.symbols.clone() {
+            let symbol = Symbol::new(sym);
+
+            // Extract base currency (e.g., "BTC" from "BTCINR")
+            let base_currency = if sym.ends_with("INR") {
+                &sym[..sym.len() - 3]
+            } else if sym.ends_with("USDT") {
+                &sym[..sym.len() - 4]
+            } else {
+                sym.as_str()
+            };
+
+            // Check exchange balance
+            let exchange_qty = self
+                .exchange_balances
+                .get(base_currency)
+                .copied()
+                .unwrap_or(0.0);
+
+            // Check local position
+            let local_qty = self
+                .position_manager
+                .get_position(&symbol)
+                .map(|p| p.quantity.to_f64())
+                .unwrap_or(0.0);
+
+            // Compare
+            let diff = (exchange_qty - local_qty).abs();
+            if diff > 0.00000001 {
+                // Tolerance for float comparison
+                warn!(
+                    "│  ⚠️  Position mismatch for {}: exchange={:.8}, local={:.8}",
+                    symbol, exchange_qty, local_qty
+                );
+
+                if exchange_qty > 0.0 && local_qty == 0.0 {
+                    warn!("│     → Exchange has position, local doesn't - may need manual sync");
+                } else if local_qty > 0.0 && exchange_qty == 0.0 {
+                    warn!("│     → Local has position, exchange doesn't - clearing local state");
+                    self.position_manager.close_position(&symbol);
+                    self.entry_levels.remove(&symbol);
+                    self.trailing_stops.remove(&symbol);
+                }
+            } else if exchange_qty > 0.0 {
+                info!("│  ✓ {} position matches: {:.8}", symbol, exchange_qty);
+            }
+        }
+
+        // Check for active orders on exchange
+        for sym in &self.config.trading.symbols.clone() {
+            match self.exchange.get_active_orders(sym).await {
+                Ok(orders) if !orders.is_empty() => {
+                    info!(
+                        "│  📋 {} active orders on exchange for {}",
+                        orders.len(),
+                        sym
+                    );
+                    for order in orders {
+                        info!(
+                            "│     └─ {} {} qty={:?} @ {:?}",
+                            order.side.as_deref().unwrap_or("?"),
+                            order.id,
+                            order.total_quantity,
+                            order.price_per_unit
+                        );
+                    }
+                }
+                Ok(_) => {} // No active orders
+                Err(e) => {
+                    warn!("│  ⚠️  Failed to check active orders for {}: {}", sym, e);
+                }
+            }
+        }
+
+        info!("│  ✓ Position reconciliation complete");
+        Ok(())
     }
 
     fn log_portfolio_status(&self) {
