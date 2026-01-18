@@ -103,13 +103,15 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 
 ### Performance Summary
 
-| Strategy | Symbols | Date Range | Return | Sharpe | Max DD | Win Rate | Trades | Expectancy |
-|----------|---------|------------|--------|--------|--------|----------|--------|------------|
-| **quick_flip** | BTC,ETH,SOL,BNB,XRP | 2020-10 to 2026-01 | 685.9% | 1.37 | 15.8% | 66.2% | 204 | ₹3,359 |
-| **momentum_scalper** | BTC,ETH,SOL,BNB,XRP | 2020-10 to 2026-01 | 680.6% | 0.96 | 29.6% | 53.1% | 375 | ₹1,813 |
-| **range_breakout** | BTC,ETH,SOL,BNB,XRP | 2020-10 to 2026-01 | 356.5% | 0.98 | 18.7% | 56.0% | 168 | ₹2,120 |
-| **volatility_regime** | BNB,BTC,SOL | 2020-10 to 2026-01 | 208.4% | 0.95 | 21.8% | 57.1% | 70 | ₹2,977 |
-| **regime_grid** | ETH,SOL | 2020-10 to 2026-01 | 64.0% | 0.34 | 72.2% | 66.7% | 36 | ₹723 |
+<!-- PERF_TABLE_START -->
+| Strategy | Symbols | Return | Sharpe | Max DD | Win Rate | Trades | Expectancy |
+|----------|---------|--------|--------|--------|----------|--------|------------|
+| **quick_flip** | BTC,ETH,SOL,BNB,XRP | 685.9% | 1.37 | 15.8% | 66.2% | 204 | ₹3,359 |
+| **momentum_scalper** | BTC,ETH,SOL,BNB,XRP | 680.6% | 0.96 | 29.6% | 53.1% | 375 | ₹1,813 |
+| **range_breakout** | BTC,ETH,SOL,BNB,XRP | 356.5% | 0.98 | 18.7% | 56.0% | 168 | ₹2,120 |
+| **volatility_regime** | BNB,BTC,SOL | 208.4% | 0.95 | 21.8% | 57.1% | 70 | ₹2,977 |
+| **regime_grid** | ETH,SOL | 64.0% | 0.34 | 72.2% | 66.7% | 36 | ₹723 |
+<!-- PERF_TABLE_END -->
 
 ### Strategy Configurations
 

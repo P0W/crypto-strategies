@@ -126,7 +126,7 @@ jobs:
           
           # Summary table
           echo "---" >> $GITHUB_STEP_SUMMARY
-          echo "## 📋 Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 📋 Test Summary" >> $GITHUB_STEP_SUMMARY
           echo "| Strategy | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
           for strategy in $STRATEGIES; do
@@ -138,28 +138,111 @@ jobs:
               echo "| $strategy | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
             fi
           done
+
+          # Performance metrics table from _optimization
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 📈 Performance Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "| Strategy | Return | Sharpe | Max DD | Win Rate | Trades |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|--------|--------|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          for strategy in $STRATEGIES; do
+            config="configs/${strategy}_config.json"
+            if jq -e '.grid._optimization[0]' "$config" > /dev/null 2>&1; then
+              opt=$(jq '.grid._optimization[0]' "$config")
+              ret=$(echo "$opt" | jq -r '.total_return')
+              sharpe=$(echo "$opt" | jq -r '.sharpe_ratio')
+              maxdd=$(echo "$opt" | jq -r '.max_drawdown')
+              winrate=$(echo "$opt" | jq -r '.win_rate')
+              trades=$(echo "$opt" | jq -r '.total_trades')
+              echo "| ${strategy} | ${ret}% | ${sharpe} | ${maxdd}% | ${winrate}% | ${trades} |" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
           
           # Set outputs
           echo "failed=$FAILED" >> $GITHUB_OUTPUT
           echo "better=$BETTER" >> $GITHUB_OUTPUT
 
-      - name: 📝 Commit better configs
-        if: steps.regression.outputs.better != '' && github.event_name == 'push'
+      - name: 📊 Update README performance table
+        if: github.event_name == 'push'
+        run: |
+          # Generate performance table from config _optimization sections
+          # Sort by total_return descending
+          TABLE=$(cat << 'HEADER'
+          | Strategy | Symbols | Return | Sharpe | Max DD | Win Rate | Trades | Expectancy |
+          |----------|---------|--------|--------|--------|----------|--------|------------|
+          HEADER
+          )
+
+          # Extract metrics from each config and sort by return
+          for config in configs/*_config.json; do
+            strategy=$(basename "$config" _config.json)
+
+            # Check if _optimization exists and has data
+            if jq -e '.grid._optimization[0]' "$config" > /dev/null 2>&1; then
+              opt=$(jq '.grid._optimization[0]' "$config")
+              symbols=$(echo "$opt" | jq -r '.symbols | map(gsub("INR$";"")) | join(",")')
+              ret=$(echo "$opt" | jq -r '.total_return')
+              sharpe=$(echo "$opt" | jq -r '.sharpe_ratio')
+              maxdd=$(echo "$opt" | jq -r '.max_drawdown')
+              winrate=$(echo "$opt" | jq -r '.win_rate')
+              trades=$(echo "$opt" | jq -r '.total_trades')
+              expect=$(echo "$opt" | jq -r '.expectancy | floor')
+
+              echo "${ret}|**${strategy}**|${symbols}|${ret}%|${sharpe}|${maxdd}%|${winrate}%|${trades}|₹${expect}" >> /tmp/perf_rows.txt
+            fi
+          done
+
+          # Sort by return (first field) descending and format
+          if [ -f /tmp/perf_rows.txt ]; then
+            ROWS=$(sort -t'|' -k1 -nr /tmp/perf_rows.txt | cut -d'|' -f2- | sed 's/^/| /;s/$/|/')
+            TABLE="${TABLE}
+          ${ROWS}"
+          fi
+
+          # Replace section in README between markers
+          awk '
+            /<!-- PERF_TABLE_START -->/ { print; skip=1; next }
+            /<!-- PERF_TABLE_END -->/ { skip=0 }
+            !skip { print }
+          ' README.md > /tmp/readme_stripped.md
+
+          awk -v table="$TABLE" '
+            /<!-- PERF_TABLE_START -->/ { print; print table; next }
+            { print }
+          ' /tmp/readme_stripped.md > README.md
+
+          echo "README.md updated with latest performance metrics"
+
+      - name: 📝 Commit updated configs and README
+        if: github.event_name == 'push'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
+
+          # Stage any changed configs
           BETTER="${{ steps.regression.outputs.better }}"
           for strategy in $BETTER; do
             git add "configs/${strategy}_config.json"
           done
-          
-          git commit -m "chore: auto-update optimized configs
 
-          Updated strategies:$BETTER
-          
+          # Stage README if changed
+          git add README.md
+
+          # Only commit if there are changes
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            COMMIT_MSG="chore: auto-update optimization results"
+            if [ -n "$BETTER" ]; then
+              COMMIT_MSG="chore: auto-update configs and performance metrics
+
+          Updated strategies:$BETTER"
+            fi
+
+            git commit -m "$COMMIT_MSG
+
           Triggered by: ${{ github.sha }}"
-          git push
+            git push
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
