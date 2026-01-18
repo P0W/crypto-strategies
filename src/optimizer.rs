@@ -278,7 +278,10 @@ mod tests {
 
         let cloned = result.clone();
         assert_eq!(cloned.sharpe_ratio, result.sharpe_ratio);
-        assert_eq!(cloned.params.get("atr_period"), result.params.get("atr_period"));
+        assert_eq!(
+            cloned.params.get("atr_period"),
+            result.params.get("atr_period")
+        );
     }
 
     // ==================== Optimizer Tests ====================
@@ -486,9 +489,30 @@ mod tests {
         }
 
         // Check lengths
-        assert_eq!(mtf_data.get(&Symbol::new("BTCINR")).unwrap().primary().len(), 10);
-        assert_eq!(mtf_data.get(&Symbol::new("ETHINR")).unwrap().primary().len(), 15);
-        assert_eq!(mtf_data.get(&Symbol::new("SOLINR")).unwrap().primary().len(), 20);
+        assert_eq!(
+            mtf_data
+                .get(&Symbol::new("BTCINR"))
+                .unwrap()
+                .primary()
+                .len(),
+            10
+        );
+        assert_eq!(
+            mtf_data
+                .get(&Symbol::new("ETHINR"))
+                .unwrap()
+                .primary()
+                .len(),
+            15
+        );
+        assert_eq!(
+            mtf_data
+                .get(&Symbol::new("SOLINR"))
+                .unwrap()
+                .primary()
+                .len(),
+            20
+        );
     }
 
     #[test]
