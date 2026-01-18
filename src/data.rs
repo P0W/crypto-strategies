@@ -1467,29 +1467,328 @@ impl ValidationResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{Datelike, Duration, TimeZone, Timelike};
+    use tempfile::TempDir;
+
+    fn create_test_candle(datetime: DateTime<Utc>, close: f64) -> Candle {
+        Candle {
+            datetime,
+            open: close - 5.0,
+            high: close + 5.0,
+            low: close - 10.0,
+            close,
+            volume: 1000.0,
+        }
+    }
+
+    // ==================== DataSource Tests ====================
 
     #[test]
-    fn test_candle_cache() {
+    fn test_data_source_from_str() {
+        assert_eq!(
+            "binance".parse::<DataSource>().unwrap(),
+            DataSource::Binance
+        );
+        assert_eq!(
+            "BINANCE".parse::<DataSource>().unwrap(),
+            DataSource::Binance
+        );
+        assert_eq!(
+            "coindcx".parse::<DataSource>().unwrap(),
+            DataSource::CoinDCX
+        );
+        assert_eq!(
+            "CoinDCX".parse::<DataSource>().unwrap(),
+            DataSource::CoinDCX
+        );
+    }
+
+    #[test]
+    fn test_data_source_from_str_invalid() {
+        assert!("invalid".parse::<DataSource>().is_err());
+        assert!("".parse::<DataSource>().is_err());
+    }
+
+    #[test]
+    fn test_data_source_display() {
+        assert_eq!(format!("{}", DataSource::Binance), "binance");
+        assert_eq!(format!("{}", DataSource::CoinDCX), "coindcx");
+    }
+
+    #[test]
+    fn test_data_source_default() {
+        assert_eq!(DataSource::default(), DataSource::Binance);
+    }
+
+    // ==================== validate_symbol_names Tests ====================
+
+    #[test]
+    fn test_validate_symbol_names_valid() {
+        let symbols = vec![
+            Symbol::new("BTCINR"),
+            Symbol::new("ETHINR"),
+            Symbol::new("SOLINR"),
+        ];
+        assert!(validate_symbol_names(&symbols).is_none());
+    }
+
+    #[test]
+    fn test_validate_symbol_names_invalid() {
+        let symbols = vec![Symbol::new("BTC"), Symbol::new("ETH")];
+        let result = validate_symbol_names(&symbols);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("BTC"));
+    }
+
+    #[test]
+    fn test_validate_symbol_names_mixed() {
+        let symbols = vec![Symbol::new("BTCINR"), Symbol::new("ETH")];
+        let result = validate_symbol_names(&symbols);
+        assert!(result.is_some());
+        let err_msg = result.unwrap();
+        // Check that ETH is listed as invalid but BTCINR is not in the invalid list
+        // Note: The message contains BTCINR as an example, so we check the debug format
+        assert!(err_msg.contains(r#""ETH""#)); // ETH should be in the invalid list
+        // The actual invalid symbols list is formatted as ["ETH"], not containing BTCINR
+        assert!(err_msg.starts_with("Invalid symbol names: [\"ETH\"]"));
+    }
+
+    #[test]
+    fn test_validate_symbol_names_empty() {
+        let symbols: Vec<Symbol> = vec![];
+        assert!(validate_symbol_names(&symbols).is_none());
+    }
+
+    // ==================== parse_date Tests ====================
+
+    #[test]
+    fn test_parse_date_yyyy_mm_dd() {
+        let result = parse_date("2024-01-15").unwrap();
+        assert_eq!(result.year(), 2024);
+        assert_eq!(result.month(), 1);
+        assert_eq!(result.day(), 15);
+        assert_eq!(result.hour(), 0);
+        assert_eq!(result.minute(), 0);
+    }
+
+    #[test]
+    fn test_parse_date_full_datetime() {
+        let result = parse_date("2024-01-15 14:30:00").unwrap();
+        assert_eq!(result.year(), 2024);
+        assert_eq!(result.month(), 1);
+        assert_eq!(result.day(), 15);
+        assert_eq!(result.hour(), 14);
+        assert_eq!(result.minute(), 30);
+    }
+
+    #[test]
+    fn test_parse_date_iso8601() {
+        let result = parse_date("2024-01-15T14:30:00Z").unwrap();
+        assert_eq!(result.year(), 2024);
+        assert_eq!(result.hour(), 14);
+    }
+
+    #[test]
+    fn test_parse_date_invalid() {
+        assert!(parse_date("invalid").is_err());
+        assert!(parse_date("2024/01/15").is_err());
+        assert!(parse_date("15-01-2024").is_err());
+    }
+
+    // ==================== filter_candles_by_date Tests ====================
+
+    #[test]
+    fn test_filter_candles_by_date_no_filter() {
+        let base_time = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let candles: Vec<Candle> = (0..5)
+            .map(|i| create_test_candle(base_time + Duration::days(i), 100.0 + i as f64))
+            .collect();
+
+        let filtered = filter_candles_by_date(candles.clone(), None, None);
+        assert_eq!(filtered.len(), 5);
+    }
+
+    #[test]
+    fn test_filter_candles_by_date_start_only() {
+        let base_time = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let candles: Vec<Candle> = (0..10)
+            .map(|i| create_test_candle(base_time + Duration::days(i), 100.0 + i as f64))
+            .collect();
+
+        let start = base_time + Duration::days(5);
+        let filtered = filter_candles_by_date(candles, Some(start), None);
+
+        assert_eq!(filtered.len(), 5);
+        assert!(filtered.iter().all(|c| c.datetime >= start));
+    }
+
+    #[test]
+    fn test_filter_candles_by_date_end_only() {
+        let base_time = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let candles: Vec<Candle> = (0..10)
+            .map(|i| create_test_candle(base_time + Duration::days(i), 100.0 + i as f64))
+            .collect();
+
+        let end = base_time + Duration::days(4);
+        let filtered = filter_candles_by_date(candles, None, Some(end));
+
+        assert_eq!(filtered.len(), 5);
+        assert!(filtered.iter().all(|c| c.datetime <= end));
+    }
+
+    #[test]
+    fn test_filter_candles_by_date_both() {
+        let base_time = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+        let candles: Vec<Candle> = (0..10)
+            .map(|i| create_test_candle(base_time + Duration::days(i), 100.0 + i as f64))
+            .collect();
+
+        let start = base_time + Duration::days(2);
+        let end = base_time + Duration::days(6);
+        let filtered = filter_candles_by_date(candles, Some(start), Some(end));
+
+        assert_eq!(filtered.len(), 5);
+        assert!(filtered.iter().all(|c| c.datetime >= start && c.datetime <= end));
+    }
+
+    // ==================== CandleCache Tests ====================
+
+    #[test]
+    fn test_candle_cache_new() {
+        let cache = CandleCache::new(100, 60);
+        let symbol = Symbol::new("BTCINR");
+
+        assert!(cache.get(&symbol).is_none());
+        assert!(cache.needs_refresh(&symbol));
+    }
+
+    #[test]
+    fn test_candle_cache_append() {
         let mut cache = CandleCache::new(100, 60);
         let symbol = Symbol::new("BTCINR");
 
-        let candle = Candle {
-            datetime: Utc::now(),
-            open: 100.0,
-            high: 105.0,
-            low: 95.0,
-            close: 102.0,
-            volume: 1000.0,
-        };
-
-        cache.append(&symbol, candle.clone());
+        let candle = create_test_candle(Utc::now(), 100.0);
+        cache.append(&symbol, candle);
 
         assert!(cache.get(&symbol).is_some());
         assert_eq!(cache.get(&symbol).unwrap().len(), 1);
     }
 
     #[test]
-    fn test_validate_candles() {
+    fn test_candle_cache_update() {
+        let mut cache = CandleCache::new(100, 60);
+        let symbol = Symbol::new("BTCINR");
+
+        let base_time = Utc::now();
+        let candles: Vec<Candle> = (0..5)
+            .map(|i| create_test_candle(base_time + Duration::hours(i), 100.0 + i as f64))
+            .collect();
+
+        cache.update(symbol.clone(), candles);
+
+        assert_eq!(cache.get(&symbol).unwrap().len(), 5);
+    }
+
+    #[test]
+    fn test_candle_cache_update_truncates() {
+        let mut cache = CandleCache::new(3, 60); // Max 3 candles
+        let symbol = Symbol::new("BTCINR");
+
+        let base_time = Utc::now();
+        let candles: Vec<Candle> = (0..10)
+            .map(|i| create_test_candle(base_time + Duration::hours(i), 100.0 + i as f64))
+            .collect();
+
+        cache.update(symbol.clone(), candles);
+
+        // Should only keep last 3
+        assert_eq!(cache.get(&symbol).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_candle_cache_append_same_datetime() {
+        let mut cache = CandleCache::new(100, 60);
+        let symbol = Symbol::new("BTCINR");
+
+        let now = Utc::now();
+        let candle1 = create_test_candle(now, 100.0);
+        let candle2 = create_test_candle(now, 105.0); // Same datetime, different price
+
+        cache.append(&symbol, candle1);
+        cache.append(&symbol, candle2);
+
+        // Should replace, not add
+        let candles = cache.get(&symbol).unwrap();
+        assert_eq!(candles.len(), 1);
+        assert_eq!(candles[0].close, 105.0);
+    }
+
+    #[test]
+    fn test_candle_cache_append_different_datetime() {
+        let mut cache = CandleCache::new(100, 60);
+        let symbol = Symbol::new("BTCINR");
+
+        let base_time = Utc::now();
+        let candle1 = create_test_candle(base_time, 100.0);
+        let candle2 = create_test_candle(base_time + Duration::hours(1), 105.0);
+
+        cache.append(&symbol, candle1);
+        cache.append(&symbol, candle2);
+
+        assert_eq!(cache.get(&symbol).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn test_candle_cache_append_truncates() {
+        let mut cache = CandleCache::new(3, 60); // Max 3 candles
+        let symbol = Symbol::new("BTCINR");
+
+        let base_time = Utc::now();
+        for i in 0..5 {
+            let candle = create_test_candle(base_time + Duration::hours(i), 100.0 + i as f64);
+            cache.append(&symbol, candle);
+        }
+
+        // Should only keep last 3
+        assert_eq!(cache.get(&symbol).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_candle_cache_clear() {
+        let mut cache = CandleCache::new(100, 60);
+        let symbol = Symbol::new("BTCINR");
+
+        let candle = create_test_candle(Utc::now(), 100.0);
+        cache.append(&symbol, candle);
+
+        assert!(cache.get(&symbol).is_some());
+
+        cache.clear();
+
+        assert!(cache.get(&symbol).is_none());
+    }
+
+    #[test]
+    fn test_candle_cache_needs_refresh() {
+        let mut cache = CandleCache::new(100, 1); // 1 second TTL
+        let symbol = Symbol::new("BTCINR");
+
+        // Non-existent symbol needs refresh
+        assert!(cache.needs_refresh(&symbol));
+
+        let candle = create_test_candle(Utc::now(), 100.0);
+        cache.append(&symbol, candle);
+
+        // Just added, should not need refresh
+        assert!(!cache.needs_refresh(&symbol));
+
+        // Note: Testing actual TTL expiry would require sleeping, which we avoid in unit tests
+    }
+
+    // ==================== validate_candles Tests ====================
+
+    #[test]
+    fn test_validate_candles_valid() {
         let candles = vec![Candle {
             datetime: Utc::now(),
             open: 100.0,
@@ -1501,12 +1800,238 @@ mod tests {
 
         let result = validate_candles(&candles);
         assert!(result.is_valid());
+        assert!(result.errors.is_empty());
+        assert!(result.warnings.is_empty());
     }
+
+    #[test]
+    fn test_validate_candles_empty() {
+        let candles: Vec<Candle> = vec![];
+        let result = validate_candles(&candles);
+
+        assert!(!result.is_valid());
+        assert!(result.errors.iter().any(|e| e.contains("No candles")));
+    }
+
+    #[test]
+    fn test_validate_candles_high_less_than_low() {
+        let candles = vec![Candle {
+            datetime: Utc::now(),
+            open: 100.0,
+            high: 90.0, // Invalid: high < low
+            low: 95.0,
+            close: 92.0,
+            volume: 1000.0,
+        }];
+
+        let result = validate_candles(&candles);
+        assert!(!result.is_valid());
+        assert!(result.errors.iter().any(|e| e.contains("high") && e.contains("low")));
+    }
+
+    #[test]
+    fn test_validate_candles_invalid_close() {
+        let candles = vec![Candle {
+            datetime: Utc::now(),
+            open: 100.0,
+            high: 105.0,
+            low: 95.0,
+            close: 0.0, // Invalid: close <= 0
+            volume: 1000.0,
+        }];
+
+        let result = validate_candles(&candles);
+        assert!(!result.is_valid());
+        assert!(result.errors.iter().any(|e| e.contains("close")));
+    }
+
+    #[test]
+    fn test_validate_candles_negative_volume() {
+        let candles = vec![Candle {
+            datetime: Utc::now(),
+            open: 100.0,
+            high: 105.0,
+            low: 95.0,
+            close: 102.0,
+            volume: -1000.0, // Invalid: negative volume
+        }];
+
+        let result = validate_candles(&candles);
+        assert!(!result.is_valid());
+        assert!(result.errors.iter().any(|e| e.contains("volume")));
+    }
+
+    #[test]
+    fn test_validate_candles_not_chronological() {
+        let base_time = Utc::now();
+        let candles = vec![
+            Candle {
+                datetime: base_time + Duration::hours(1),
+                open: 100.0,
+                high: 105.0,
+                low: 95.0,
+                close: 102.0,
+                volume: 1000.0,
+            },
+            Candle {
+                datetime: base_time, // Earlier than previous
+                open: 100.0,
+                high: 105.0,
+                low: 95.0,
+                close: 102.0,
+                volume: 1000.0,
+            },
+        ];
+
+        let result = validate_candles(&candles);
+        assert!(result.is_valid()); // Only a warning, not an error
+        assert!(result.warnings.iter().any(|w| w.contains("chronological")));
+    }
+
+    // ==================== ValidationResult Tests ====================
+
+    #[test]
+    fn test_validation_result_is_valid() {
+        let valid = ValidationResult {
+            errors: vec![],
+            warnings: vec!["some warning".to_string()],
+        };
+        assert!(valid.is_valid());
+
+        let invalid = ValidationResult {
+            errors: vec!["some error".to_string()],
+            warnings: vec![],
+        };
+        assert!(!invalid.is_valid());
+    }
+
+    // ==================== CoinDCXDataFetcher Tests ====================
 
     #[test]
     fn test_to_pair() {
         assert_eq!(CoinDCXDataFetcher::to_pair("BTCINR"), "I-BTC_INR");
         assert_eq!(CoinDCXDataFetcher::to_pair("BTC"), "I-BTC_INR");
         assert_eq!(CoinDCXDataFetcher::to_pair("ETHINR"), "I-ETH_INR");
+        assert_eq!(CoinDCXDataFetcher::to_pair("SOL"), "I-SOL_INR");
+    }
+
+    #[test]
+    fn test_coindcx_fetcher_new() {
+        let temp_dir = TempDir::new().unwrap();
+        let _fetcher = CoinDCXDataFetcher::new(temp_dir.path());
+
+        assert!(temp_dir.path().exists());
+    }
+
+    // ==================== BinanceDataFetcher Tests ====================
+
+    #[test]
+    fn test_binance_fetcher_to_pair() {
+        let temp_dir = TempDir::new().unwrap();
+        let fetcher = BinanceDataFetcher::new(temp_dir.path());
+
+        // BinanceDataFetcher delegates to BinanceClient::to_binance_pair
+        // which converts INR symbols to USDT
+        assert_eq!(fetcher.to_pair("BTCINR"), "BTCUSDT");
+        assert_eq!(fetcher.to_pair("BTC"), "BTCUSDT");
+    }
+
+    #[test]
+    fn test_binance_fetcher_new() {
+        let temp_dir = TempDir::new().unwrap();
+        let _fetcher = BinanceDataFetcher::new(temp_dir.path());
+
+        assert!(temp_dir.path().exists());
+    }
+
+    // ==================== CSV Loading Tests ====================
+
+    #[test]
+    fn test_load_csv_valid() {
+        let temp_dir = TempDir::new().unwrap();
+        let csv_path = temp_dir.path().join("test.csv");
+
+        let csv_content = "datetime,open,high,low,close,volume
+2024-01-01 00:00:00,100.0,105.0,95.0,102.0,1000.0
+2024-01-02 00:00:00,102.0,108.0,100.0,106.0,1500.0";
+
+        std::fs::write(&csv_path, csv_content).unwrap();
+
+        let candles = load_csv(&csv_path).unwrap();
+
+        assert_eq!(candles.len(), 2);
+        assert_eq!(candles[0].close, 102.0);
+        assert_eq!(candles[1].close, 106.0);
+    }
+
+    #[test]
+    fn test_load_csv_missing_file() {
+        let result = load_csv("nonexistent.csv");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_csv_with_timezone() {
+        let temp_dir = TempDir::new().unwrap();
+        let csv_path = temp_dir.path().join("test.csv");
+
+        // ISO 8601 format with timezone
+        let csv_content = "datetime,open,high,low,close,volume
+2024-01-01T00:00:00Z,100.0,105.0,95.0,102.0,1000.0";
+
+        std::fs::write(&csv_path, csv_content).unwrap();
+
+        let candles = load_csv(&csv_path).unwrap();
+        assert_eq!(candles.len(), 1);
+    }
+
+    // ==================== find_missing_data Tests ====================
+
+    #[test]
+    fn test_find_missing_data() {
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path();
+
+        // Create one file
+        std::fs::write(data_dir.join("BTCINR_1d.csv"), "datetime,open,high,low,close,volume").unwrap();
+
+        let symbols = vec![Symbol::new("BTCINR"), Symbol::new("ETHINR")];
+        let timeframes = vec!["1d".to_string()];
+
+        let missing = find_missing_data(data_dir, &symbols, &timeframes);
+
+        // ETHINR_1d.csv is missing
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].0.as_str(), "ETHINR");
+        assert_eq!(missing[0].1, "1d");
+    }
+
+    #[test]
+    fn test_find_missing_data_none_missing() {
+        let temp_dir = TempDir::new().unwrap();
+        let data_dir = temp_dir.path();
+
+        // Create all files
+        std::fs::write(data_dir.join("BTCINR_1d.csv"), "datetime,open,high,low,close,volume").unwrap();
+        std::fs::write(data_dir.join("ETHINR_1d.csv"), "datetime,open,high,low,close,volume").unwrap();
+
+        let symbols = vec![Symbol::new("BTCINR"), Symbol::new("ETHINR")];
+        let timeframes = vec!["1d".to_string()];
+
+        let missing = find_missing_data(data_dir, &symbols, &timeframes);
+        assert!(missing.is_empty());
+    }
+
+    // ==================== INTERVALS constant Tests ====================
+
+    #[test]
+    fn test_intervals_contains_common_timeframes() {
+        assert!(INTERVALS.contains(&"1m"));
+        assert!(INTERVALS.contains(&"5m"));
+        assert!(INTERVALS.contains(&"15m"));
+        assert!(INTERVALS.contains(&"1h"));
+        assert!(INTERVALS.contains(&"4h"));
+        assert!(INTERVALS.contains(&"1d"));
+        assert!(INTERVALS.contains(&"1w"));
     }
 }

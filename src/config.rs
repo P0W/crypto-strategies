@@ -209,3 +209,247 @@ impl Default for BacktestConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    // ==================== Config Tests ====================
+
+    #[test]
+    fn test_config_from_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("test_config.json");
+
+        let config_json = r#"{
+            "exchange": {
+                "maker_fee": 0.001,
+                "taker_fee": 0.001,
+                "assumed_slippage": 0.001,
+                "rate_limit": 10
+            },
+            "trading": {
+                "symbols": ["BTCINR"],
+                "initial_capital": 50000.0,
+                "risk_per_trade": 0.1,
+                "max_positions": 3,
+                "max_portfolio_heat": 0.25,
+                "max_position_pct": 0.15,
+                "max_drawdown": 0.2,
+                "drawdown_warning": 0.1,
+                "drawdown_critical": 0.15,
+                "drawdown_warning_multiplier": 0.5,
+                "drawdown_critical_multiplier": 0.25,
+                "consecutive_loss_limit": 3,
+                "consecutive_loss_multiplier": 0.75
+            },
+            "strategy": {
+                "name": "test_strategy",
+                "timeframe": "1h"
+            },
+            "tax": {
+                "tax_rate": 0.3,
+                "tds_rate": 0.01,
+                "loss_offset_allowed": false
+            },
+            "backtest": {
+                "data_dir": "./data",
+                "results_dir": "./results",
+                "commission": 0.001
+            }
+        }"#;
+
+        std::fs::write(&config_path, config_json).unwrap();
+
+        let config = Config::from_file(&config_path).unwrap();
+
+        assert_eq!(config.strategy_name(), "test_strategy");
+        assert_eq!(config.timeframe(), "1h");
+        assert_eq!(config.trading.initial_capital, 50000.0);
+        assert_eq!(config.trading.symbols, vec!["BTCINR"]);
+        assert_eq!(config.exchange.maker_fee, 0.001);
+        assert_eq!(config.tax.tax_rate, 0.3);
+    }
+
+    #[test]
+    fn test_config_with_grid() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("grid_config.json");
+
+        let config_json = r#"{
+            "exchange": {
+                "maker_fee": 0.001,
+                "taker_fee": 0.001,
+                "assumed_slippage": 0.001,
+                "rate_limit": 10
+            },
+            "trading": {
+                "symbols": ["BTCINR"],
+                "initial_capital": 100000.0,
+                "risk_per_trade": 0.15,
+                "max_positions": 5,
+                "max_portfolio_heat": 0.3,
+                "max_position_pct": 0.2,
+                "max_drawdown": 0.2,
+                "drawdown_warning": 0.1,
+                "drawdown_critical": 0.15,
+                "drawdown_warning_multiplier": 0.5,
+                "drawdown_critical_multiplier": 0.25,
+                "consecutive_loss_limit": 3,
+                "consecutive_loss_multiplier": 0.75
+            },
+            "strategy": {
+                "name": "volatility_regime",
+                "timeframe": "1d"
+            },
+            "tax": {
+                "tax_rate": 0.3,
+                "tds_rate": 0.01,
+                "loss_offset_allowed": false
+            },
+            "backtest": {
+                "data_dir": "./data",
+                "results_dir": "./results",
+                "commission": 0.001
+            },
+            "grid": {
+                "atr_period": [10, 14, 20],
+                "stop_atr": [1.5, 2.0]
+            }
+        }"#;
+
+        std::fs::write(&config_path, config_json).unwrap();
+
+        let config = Config::from_file(&config_path).unwrap();
+
+        assert!(config.grid.is_some());
+        let grid = config.grid.as_ref().unwrap();
+        assert!(grid.contains_key("atr_period"));
+        assert_eq!(grid["atr_period"].len(), 3);
+        assert!(grid.contains_key("stop_atr"));
+        assert_eq!(grid["stop_atr"].len(), 2);
+    }
+
+    #[test]
+    fn test_config_missing_file() {
+        let result = Config::from_file("nonexistent_file.json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_invalid_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("invalid.json");
+
+        std::fs::write(&config_path, "{ invalid json }").unwrap();
+
+        let result = Config::from_file(&config_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_set_timeframe() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.json");
+
+        let config_json = r#"{
+            "exchange": {"maker_fee": 0.001, "taker_fee": 0.001, "assumed_slippage": 0.001, "rate_limit": 10},
+            "trading": {"symbols": ["BTCINR"], "initial_capital": 100000.0, "risk_per_trade": 0.15, "max_positions": 5, "max_portfolio_heat": 0.3, "max_position_pct": 0.2, "max_drawdown": 0.2, "drawdown_warning": 0.1, "drawdown_critical": 0.15, "drawdown_warning_multiplier": 0.5, "drawdown_critical_multiplier": 0.25, "consecutive_loss_limit": 3, "consecutive_loss_multiplier": 0.75},
+            "strategy": {"name": "test", "timeframe": "1d"},
+            "tax": {"tax_rate": 0.3, "tds_rate": 0.01, "loss_offset_allowed": false},
+            "backtest": {"data_dir": "./data", "results_dir": "./results", "commission": 0.001}
+        }"#;
+
+        std::fs::write(&config_path, config_json).unwrap();
+
+        let mut config = Config::from_file(&config_path).unwrap();
+        assert_eq!(config.timeframe(), "1d");
+
+        config.set_timeframe("4h");
+        assert_eq!(config.timeframe(), "4h");
+
+        config.set_timeframe("15m");
+        assert_eq!(config.timeframe(), "15m");
+    }
+
+    // ==================== ExchangeConfig Tests ====================
+
+    #[test]
+    fn test_exchange_config_default() {
+        let config = ExchangeConfig::default();
+
+        assert!(config.api_key.is_none());
+        assert!(config.api_secret.is_none());
+        assert_eq!(config.maker_fee, 0.001);
+        assert_eq!(config.taker_fee, 0.001);
+        assert_eq!(config.assumed_slippage, 0.001);
+        assert_eq!(config.rate_limit, 10);
+    }
+
+    // ==================== TradingConfig Tests ====================
+
+    #[test]
+    fn test_trading_config_default() {
+        let config = TradingConfig::default();
+
+        assert_eq!(config.symbols.len(), 5);
+        assert!(config.symbols.contains(&"BTCINR".to_string()));
+        assert_eq!(config.initial_capital, 100_000.0);
+        assert_eq!(config.risk_per_trade, 0.15);
+        assert_eq!(config.max_positions, 5);
+        assert_eq!(config.max_portfolio_heat, 0.30);
+        assert_eq!(config.max_drawdown, 0.20);
+        assert_eq!(config.consecutive_loss_limit, 3);
+    }
+
+    #[test]
+    fn test_trading_config_symbols() {
+        let config = TradingConfig {
+            symbols: vec!["BTCINR".to_string(), "ETHINR".to_string()],
+            ..TradingConfig::default()
+        };
+
+        let symbols = config.symbols();
+        assert_eq!(symbols.len(), 2);
+        assert_eq!(symbols[0].as_str(), "BTCINR");
+        assert_eq!(symbols[1].as_str(), "ETHINR");
+    }
+
+    // ==================== TaxConfig Tests ====================
+
+    #[test]
+    fn test_tax_config_default() {
+        let config = TaxConfig::default();
+
+        assert_eq!(config.tax_rate, 0.30);
+        assert_eq!(config.tds_rate, 0.01);
+        assert!(!config.loss_offset_allowed);
+    }
+
+    // ==================== BacktestConfig Tests ====================
+
+    #[test]
+    fn test_backtest_config_default() {
+        let config = BacktestConfig::default();
+
+        assert_eq!(config.data_dir, "data");
+        assert_eq!(config.results_dir, "results");
+        assert_eq!(config.commission, 0.001);
+        assert!(!config.use_t1_execution);
+    }
+
+    #[test]
+    fn test_backtest_config_t1_execution() {
+        // Default should be false
+        let config = BacktestConfig::default();
+        assert!(!config.use_t1_execution);
+
+        // Explicit true
+        let config = BacktestConfig {
+            use_t1_execution: true,
+            ..BacktestConfig::default()
+        };
+        assert!(config.use_t1_execution);
+    }
+}
