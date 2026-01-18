@@ -138,6 +138,8 @@ struct PendingExchangeOrder {
     quantity: f64,
     limit_price: Option<f64>,
     submitted_at: Instant,
+    /// Cumulative filled quantity (for partial fill tracking)
+    filled_quantity: f64,
 }
 
 /// Live trader state with OMS integration
@@ -503,7 +505,13 @@ impl LiveTrader {
 
         // Bootstrap all symbols
         let bootstrap_start = Instant::now();
-        let symbols: Vec<Symbol> = self.config.trading.symbols.iter().map(Symbol::new).collect();
+        let symbols: Vec<Symbol> = self
+            .config
+            .trading
+            .symbols
+            .iter()
+            .map(Symbol::new)
+            .collect();
         for symbol in &symbols {
             self.bootstrap_candles(symbol).await?;
             self.orderbooks.insert(symbol.clone(), OrderBook::new());
@@ -585,6 +593,23 @@ impl LiveTrader {
         info!("════════════════════════════════════════════════════════");
         info!("🛑 SHUTDOWN SIGNAL RECEIVED");
         info!("════════════════════════════════════════════════════════");
+
+        // Cancel pending orders on exchange to avoid orphan fills
+        if !self.paper_mode && !self.pending_exchange_orders.is_empty() {
+            info!(
+                "│  Cancelling {} pending order(s) on exchange...",
+                self.pending_exchange_orders.len()
+            );
+            let order_ids: Vec<String> = self.pending_exchange_orders.keys().cloned().collect();
+            for exchange_id in order_ids {
+                match self.exchange.cancel_order(&exchange_id).await {
+                    Ok(()) => info!("│  ✓ Cancelled order {}", exchange_id),
+                    Err(e) => warn!("│  ⚠️  Failed to cancel {}: {}", exchange_id, e),
+                }
+            }
+            self.pending_exchange_orders.clear();
+        }
+
         self.save_checkpoint()?;
         self.metrics.log_summary();
         info!("✓ Live trading stopped gracefully");
@@ -609,7 +634,13 @@ impl LiveTrader {
             }
         }
 
-        let symbols: Vec<Symbol> = self.config.trading.symbols.iter().map(Symbol::new).collect();
+        let symbols: Vec<Symbol> = self
+            .config
+            .trading
+            .symbols
+            .iter()
+            .map(Symbol::new)
+            .collect();
         for symbol in &symbols {
             let update_start = Instant::now();
             if let Err(e) = self.update_candles(symbol).await {
@@ -1110,6 +1141,7 @@ impl LiveTrader {
                 quantity,
                 limit_price: order.limit_price.map(|p| p.to_f64()),
                 submitted_at: Instant::now(),
+                filled_quantity: 0.0,
             },
         );
 
@@ -1147,9 +1179,32 @@ impl LiveTrader {
             }
         }
 
-        // In live mode, use actual INR balance
+        // In live mode, use actual INR balance with sanity check
         if !self.paper_mode {
-            self.paper_cash = inr_balance;
+            // Sanity check: warn on large discrepancy, reject zero if we had balance
+            if self.paper_cash > 0.0 {
+                let diff_pct = ((inr_balance - self.paper_cash) / self.paper_cash).abs();
+                if diff_pct > 0.5 {
+                    warn!(
+                        "│  ⚠️  Large balance change: {:.2} -> {:.2} ({:+.1}%)",
+                        self.paper_cash,
+                        inr_balance,
+                        (inr_balance - self.paper_cash) / self.paper_cash * 100.0
+                    );
+                }
+                // Reject zero balance if we had money (likely API error)
+                if inr_balance == 0.0 {
+                    warn!(
+                        "│  ⚠️  Exchange returned 0 balance, keeping local: {:.2}",
+                        self.paper_cash
+                    );
+                } else {
+                    self.paper_cash = inr_balance;
+                }
+            } else {
+                // No previous balance, accept whatever exchange says
+                self.paper_cash = inr_balance;
+            }
         }
 
         self.last_balance_sync = Some(Instant::now());
@@ -1172,37 +1227,46 @@ impl LiveTrader {
         let start = Instant::now();
         let mut fills_detected = 0;
         let mut completed_orders: Vec<String> = Vec::new();
+        let mut partial_fill_updates: Vec<(String, f64)> = Vec::new(); // (order_id, new_filled_qty)
 
         // Check each pending order
         for (exchange_id, pending) in &self.pending_exchange_orders {
             match self.exchange.get_order_status(exchange_id).await {
                 Ok(status) => {
                     let status_str = status.status.to_lowercase();
+                    let total_filled = status.total_quantity.unwrap_or(0.0)
+                        - status.remaining_quantity.unwrap_or(0.0);
+                    let fill_price = status.avg_price.unwrap_or(0.0);
 
-                    if status_str == "filled" {
-                        // Order fully filled
-                        let fill_price = status.avg_price.unwrap_or(0.0);
-                        let filled_qty = status.total_quantity.unwrap_or(pending.quantity);
+                    // Calculate newly filled quantity since last check
+                    let newly_filled = total_filled - pending.filled_quantity;
 
+                    if newly_filled > POSITION_QTY_TOLERANCE {
+                        // We have new fills to process
                         info!(
-                            "│  💰 FILL detected: {} {} {:.8} @ {:.2}",
+                            "│  💰 FILL detected: {} {} {:.8} @ {:.2}{}",
                             if pending.side == Side::Buy {
                                 "BUY"
                             } else {
                                 "SELL"
                             },
                             pending.symbol,
-                            filled_qty,
-                            fill_price
+                            newly_filled,
+                            fill_price,
+                            if status_str == "partially_filled" {
+                                " (partial)"
+                            } else {
+                                ""
+                            }
                         );
 
-                        // Create fill and add to position manager
+                        // Create fill for the NEW quantity only
                         let fill = Fill::from_f64(
                             0, // Order ID (internal)
                             fill_price,
-                            filled_qty,
+                            newly_filled,
                             Utc::now(),
-                            self.config.exchange.taker_fee * fill_price * filled_qty,
+                            self.config.exchange.taker_fee * fill_price * newly_filled,
                             false, // taker
                         );
 
@@ -1210,6 +1274,13 @@ impl LiveTrader {
                             .add_fill(fill, pending.symbol.clone(), pending.side);
                         self.metrics.record_fill();
                         fills_detected += 1;
+
+                        // Track the update for later
+                        partial_fill_updates.push((exchange_id.clone(), total_filled));
+                    }
+
+                    if status_str == "filled" {
+                        // Order complete - remove from tracking
                         completed_orders.push(exchange_id.clone());
 
                         // Update risk manager based on P&L
@@ -1224,14 +1295,6 @@ impl LiveTrader {
                                 }
                             }
                         }
-                    } else if status_str == "partially_filled" {
-                        // Partial fill - log but keep tracking
-                        let remaining = status.remaining_quantity.unwrap_or(0.0);
-                        let age_secs = pending.submitted_at.elapsed().as_secs();
-                        debug!(
-                            "│  ⏳ Partial fill: {} remaining={:.8} (age: {}s)",
-                            exchange_id, remaining, age_secs
-                        );
                     } else if status_str == "open" || status_str == "init" {
                         // Still pending - check for timeout
                         let age_secs = pending.submitted_at.elapsed().as_secs();
@@ -1270,6 +1333,13 @@ impl LiveTrader {
             self.pending_exchange_orders.remove(&id);
         }
 
+        // Update filled quantities for partial fills
+        for (order_id, new_filled_qty) in partial_fill_updates {
+            if let Some(pending) = self.pending_exchange_orders.get_mut(&order_id) {
+                pending.filled_quantity = new_filled_qty;
+            }
+        }
+
         if fills_detected > 0 {
             debug!(
                 "│  ✓ Order polling: {} fills detected ({} μs)",
@@ -1296,20 +1366,25 @@ impl LiveTrader {
         self.sync_balances().await?;
 
         // Check each symbol we trade
-        let symbols_with_base: Vec<(Symbol, String)> = self.config.trading.symbols.iter().map(|sym| {
-            let symbol = Symbol::new(sym);
-            let base_currency = if sym.ends_with("INR") {
-                sym[..sym.len() - 3].to_string()
-            } else if sym.ends_with("USDT") {
-                sym[..sym.len() - 4].to_string()
-            } else {
-                sym.clone()
-            };
-            (symbol, base_currency)
-        }).collect();
+        let symbols_with_base: Vec<(Symbol, String)> = self
+            .config
+            .trading
+            .symbols
+            .iter()
+            .map(|sym| {
+                let symbol = Symbol::new(sym);
+                let base_currency = if sym.ends_with("INR") {
+                    sym[..sym.len() - 3].to_string()
+                } else if sym.ends_with("USDT") {
+                    sym[..sym.len() - 4].to_string()
+                } else {
+                    sym.clone()
+                };
+                (symbol, base_currency)
+            })
+            .collect();
 
         for (symbol, base_currency) in &symbols_with_base {
-
             // Check exchange balance
             let exchange_qty = self
                 .exchange_balances
