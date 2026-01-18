@@ -85,7 +85,7 @@ jobs:
       run: |
         # Define configs to run explicitly - use non-regime configs for speed
         configs=(
-          "configs/momentum_scalper_config.json"
+          "configs/volatility_regime_config.json"
           "configs/quick_flip_config.json"
           "configs/range_breakout_config.json"
         )
@@ -106,7 +106,7 @@ jobs:
 
         # Run regime configs with minimal grid to get coverage without taking too long
         echo "Running minimal optimization for regime configs"
-        cargo run -- optimize --config "configs/volatility_regime_config.json" --top 1 --no-update || true
+        cargo run -- optimize --config "configs/momentum_scalper_config.json" --top 1 --no-update || true
         cargo run -- optimize --config "configs/regime_grid_config.json" --top 1 --no-update || true
 
     - name: Debug - Show profraw files
