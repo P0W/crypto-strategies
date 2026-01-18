@@ -98,23 +98,23 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 | `regime_grid` | Grid trading with volatility regime adaptation |
 
 ## Backtest Results
- 
-**Note**: Results based on available data for each strategy (May 2025 - Jan 2026). Initial Capital: ₹100,000 | Timeframe: 1d
- 
+
+**Note**: Results from grid search optimization using full available data. Initial Capital: ₹100,000 | Timeframe: 1d
+
 ### Performance Summary
- 
+
 | Strategy | Symbols | Date Range | Return | Sharpe | Max DD | Win Rate | Trades | Expectancy |
 |----------|---------|------------|--------|--------|--------|----------|--------|------------|
-| **regime_grid** | ETH,SOL | 2025-07-29 to 2026-01-08 | 108.1% | 2.53 | 12.6% | 82.8% | 64 | ₹1,367 |
-| **momentum_scalper** | BTC,ETH,SOL,BNB,XRP | 2025-05-12 to 2025-10-10 | 38.0% | 1.06 | 13.6% | 47.1% | 70 | ₹543 |
-| **quick_flip** | BTC,ETH,SOL,BNB,XRP | 2025-05-15 to 2025-10-07 | 26.0% | 1.63 | 5.8% | 63.6% | 22 | ₹1,182 |
-| **range_breakout** | BTC,ETH,SOL,BNB,XRP | 2025-05-15 to 2025-10-10 | 24.8% | 1.50 | 7.4% | 83.3% | 18 | ₹1,375 |
-| **volatility_regime** | BNB,BTC,SOL | 2025-05-30 to 2025-10-10 | 6.4% | 0.28 | 13.6% | 45.5% | 11 | ₹580 |
+| **quick_flip** | BTC,ETH,SOL,BNB,XRP | 2020-10 to 2026-01 | 685.9% | 1.37 | 15.8% | 66.2% | 204 | ₹3,359 |
+| **momentum_scalper** | BTC,ETH,SOL,BNB,XRP | 2020-10 to 2026-01 | 680.6% | 0.96 | 29.6% | 53.1% | 375 | ₹1,813 |
+| **range_breakout** | BTC,ETH,SOL,BNB,XRP | 2020-10 to 2026-01 | 356.5% | 0.98 | 18.7% | 56.0% | 168 | ₹2,120 |
+| **volatility_regime** | BNB,BTC,SOL | 2020-10 to 2026-01 | 208.4% | 0.95 | 21.8% | 57.1% | 70 | ₹2,977 |
+| **regime_grid** | ETH,SOL | 2020-10 to 2026-01 | 64.0% | 0.34 | 72.2% | 66.7% | 36 | ₹723 |
 
 ### Strategy Configurations
 
 <details>
-<summary><b>quick_flip</b> - Best risk-adjusted returns (Sharpe 1.63)</summary>
+<summary><b>quick_flip</b> - Best risk-adjusted returns (Sharpe 1.37, Calmar 2.92)</summary>
 
 ```json
 {
@@ -123,31 +123,31 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
         "initial_capital": 100000,
         "risk_per_trade": 0.15,
         "max_positions": 5,
-        "max_drawdown": 0.25
+        "max_drawdown": 0.2
     },
     "strategy": {
         "name": "quick_flip",
         "timeframe": "1d",
-        "breakout_bars": 10,
-        "atr_period": 7,
-        "atr_multiplier": 1.5,
-        "min_body_pct": 0.6,
-        "profit_target_atr": 2.0,
-        "max_hold_bars": 5
+        "range_bars": 20,
+        "atr_period": 14,
+        "body_ratio": 0,
+        "stop_atr": 1.5,
+        "target_atr": 6,
+        "cooldown": 3
     }
 }
 ```
 </details>
 
 <details>
-<summary><b>momentum_scalper</b> - High trade frequency (70 trades)</summary>
+<summary><b>momentum_scalper</b> - High trade frequency (375 trades)</summary>
 
 ```json
 {
     "trading": {
         "symbols": ["BTCINR", "ETHINR", "SOLINR", "BNBINR", "XRPINR"],
         "initial_capital": 100000,
-        "risk_per_trade": 0.15,
+        "risk_per_trade": 0.1,
         "max_positions": 5,
         "max_drawdown": 0.25
     },
@@ -155,19 +155,20 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
         "name": "momentum_scalper",
         "timeframe": "1d",
         "ema_fast": 8,
-        "ema_slow": 21,
-        "atr_period": 14,
-        "atr_multiplier": 1.5,
-        "min_momentum": 0.02,
-        "profit_target_atr": 2.0,
-        "max_hold_bars": 10
+        "ema_slow": 55,
+        "atr_period": 10,
+        "adx_threshold": 20,
+        "stop_atr_multiple": 1.5,
+        "target_atr_multiple": 4,
+        "max_hold_bars": 50,
+        "trailing_atr_multiple": 1.0
     }
 }
 ```
 </details>
 
 <details>
-<summary><b>range_breakout</b> - Highest win rate (83.33%)</summary>
+<summary><b>range_breakout</b> - Balanced performance (Sharpe 0.98, Calmar 1.72)</summary>
 
 ```json
 {
@@ -176,24 +177,25 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
         "initial_capital": 100000,
         "risk_per_trade": 0.15,
         "max_positions": 5,
-        "max_drawdown": 0.25
+        "max_drawdown": 0.2
     },
     "strategy": {
         "name": "range_breakout",
         "timeframe": "1d",
-        "breakout_bars": 20,
+        "lookback": 30,
         "atr_period": 14,
-        "atr_multiplier": 2.0,
-        "volume_factor": 1.5,
-        "profit_target_atr": 3.0,
-        "max_hold_bars": 15
+        "stop_atr": 2,
+        "target_atr": 5,
+        "trailing_atr": 1.5,
+        "use_trailing": true,
+        "cooldown": 3
     }
 }
 ```
 </details>
 
 <details>
-<summary><b>volatility_regime</b> - ATR-based regime trading (Sharpe 0.55)</summary>
+<summary><b>volatility_regime</b> - ATR-based regime trading (Sharpe 0.95, Calmar 1.06)</summary>
 
 ```json
 {
@@ -202,24 +204,27 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
         "initial_capital": 100000,
         "risk_per_trade": 0.15,
         "max_positions": 5,
-        "max_drawdown": 0.20
+        "max_drawdown": 0.2
     },
     "strategy": {
         "name": "volatility_regime",
         "timeframe": "1d",
         "atr_period": 14,
-        "regime_lookback": 20,
-        "ema_fast": 8,
-        "ema_slow": 21,
-        "high_vol_threshold": 1.5,
-        "low_vol_threshold": 0.7
+        "volatility_lookback": 20,
+        "ema_fast": 13,
+        "ema_slow": 34,
+        "adx_threshold": 20,
+        "compression_threshold": 0.6,
+        "expansion_threshold": 1.5,
+        "stop_atr_multiple": 3,
+        "target_atr_multiple": 6
     }
 }
 ```
 </details>
 
 <details>
-<summary><b>regime_grid</b> - Best overall (Sharpe 2.78, Return 150.4%)</summary>
+<summary><b>regime_grid</b> - Grid trading with regime adaptation (Sharpe 0.34)</summary>
 
 ```json
 {
@@ -228,23 +233,23 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
         "initial_capital": 100000,
         "risk_per_trade": 0.15,
         "max_positions": 5,
-        "max_drawdown": 0.20
+        "max_drawdown": 0.2
     },
     "strategy": {
         "name": "regime_grid",
         "timeframe": "1d",
         "adx_period": 14,
-        "adx_sideways_threshold": 30,
+        "adx_sideways_threshold": 20,
         "ema_band_pct": 0.05,
-        "max_capital_usage_pct": 0.20,
-        "max_drawdown_pct": 0.10,
-        "max_grids": 7,
+        "max_capital_usage_pct": 0.1,
+        "max_drawdown_pct": 0.1,
+        "max_grids": 3,
         "rsi_bear_threshold": 30,
-        "rsi_bull_min": 45,
+        "rsi_bull_min": 50,
         "rsi_bull_max": 70,
-        "sell_target_pct": 0.03,
-        "stop_atr_multiple": 2.0,
-        "trailing_activation_pct": 0.025
+        "sell_target_pct": 0.05,
+        "stop_atr_multiple": 1,
+        "trailing_activation_pct": 0.015
     }
 }
 ```
