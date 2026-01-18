@@ -106,11 +106,12 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 <!-- PERF_TABLE_START -->
 | Strategy | Symbols | Return | Sharpe | Max DD | Win Rate | Trades | Expectancy |
 |----------|---------|--------|--------|--------|----------|--------|------------|
-| **quick_flip** | BTC,ETH,SOL,BNB,XRP | 685.9% | 1.37 | 15.8% | 66.2% | 204 | ₹3,359 |
-| **momentum_scalper** | BTC,ETH,SOL,BNB,XRP | 680.6% | 0.96 | 29.6% | 53.1% | 375 | ₹1,813 |
-| **range_breakout** | BTC,ETH,SOL,BNB,XRP | 356.5% | 0.98 | 18.7% | 56.0% | 168 | ₹2,120 |
-| **volatility_regime** | BNB,BTC,SOL | 208.4% | 0.95 | 21.8% | 57.1% | 70 | ₹2,977 |
-| **regime_grid** | ETH,SOL | 64.0% | 0.34 | 72.2% | 66.7% | 36 | ₹723 |
+| **quick_flip**|BTC,ETH,SOL,BNB,XRP|685.9%|1.37|15.8%|66.2%|204|₹3359|
+| **momentum_scalper**|BTC,ETH,SOL,BNB,XRP|680.6%|0.96|29.6%|53.1%|375|₹1813|
+| **range_breakout**|BTC,ETH,SOL,BNB,XRP|356.5%|0.98|18.7%|56.0%|168|₹2120|
+| **volatility_regime**|BNB,BTC,SOL|208.4%|0.95|21.8%|57.1%|70|₹2976|
+| **regime_grid**|ETH,SOL|64.0%|0.34|72.2%|66.7%|36|₹722|
+| **volatility_regime_4h**|BTC,ETH,SOL|25.4%|0.11|22.0%|43.4%|281|₹110|
 <!-- PERF_TABLE_END -->
 
 ### Strategy Configurations
