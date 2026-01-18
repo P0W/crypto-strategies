@@ -412,6 +412,7 @@ dependencies = [
  "sha2",
  "statrs",
  "ta",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",

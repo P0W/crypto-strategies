@@ -660,3 +660,608 @@ pub fn create_state_manager<P: AsRef<Path>>(
 
     SqliteStateManager::new(db_path, json_path, true)
 }
+
+// =============================================================================
+// Unit Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Helper to create a test state manager with a temporary directory
+    fn create_test_manager() -> (SqliteStateManager, TempDir) {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test.db");
+        let json_path = temp_dir.path().join("test.json");
+        let manager =
+            SqliteStateManager::new(&db_path, &json_path, false).expect("Failed to create manager");
+        (manager, temp_dir)
+    }
+
+    /// Helper to create a test position
+    fn create_test_position(symbol: &str) -> Position {
+        Position {
+            symbol: symbol.to_string(),
+            side: "buy".to_string(),
+            quantity: 1.5,
+            entry_price: 50000.0,
+            entry_time: Some("2024-01-15T10:30:00Z".to_string()),
+            stop_loss: 48000.0,
+            take_profit: 55000.0,
+            status: "open".to_string(),
+            order_id: Some("order_123".to_string()),
+            pnl: 0.0,
+            exit_price: 0.0,
+            exit_time: None,
+            metadata: HashMap::new(),
+        }
+    }
+
+    /// Helper to create a test checkpoint
+    fn create_test_checkpoint(cycle: i32) -> Checkpoint {
+        Checkpoint {
+            timestamp: Utc::now().to_rfc3339(),
+            cycle_count: cycle,
+            portfolio_value: 10500.0,
+            cash: 5000.0,
+            positions_value: 5500.0,
+            open_positions: 2,
+            last_processed_symbols: vec!["BTCUSDT".to_string(), "ETHUSDT".to_string()],
+            drawdown_pct: 5.0,
+            consecutive_losses: 1,
+            paper_mode: true,
+            config_hash: "abc123".to_string(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    /// Helper to create a test trade record
+    fn create_test_trade(symbol: &str) -> TradeRecord {
+        TradeRecord {
+            id: None,
+            symbol: symbol.to_string(),
+            side: "buy".to_string(),
+            quantity: 0.5,
+            entry_price: 50000.0,
+            exit_price: 52000.0,
+            entry_time: "2024-01-15T10:00:00Z".to_string(),
+            exit_time: "2024-01-15T14:00:00Z".to_string(),
+            gross_pnl: 1000.0,
+            fees: 10.0,
+            tax: 297.0,
+            net_pnl: 693.0,
+            pnl_pct: 4.0,
+            status: "closed".to_string(),
+            exit_reason: "target".to_string(),
+            strategy_signal: "flat".to_string(),
+            market_state_entry: "normal".to_string(),
+            market_state_exit: "normal".to_string(),
+            atr_at_entry: 1500.0,
+            stop_loss: 48000.0,
+            take_profit: 55000.0,
+            risk_reward_actual: 2.5,
+            metadata: HashMap::new(),
+        }
+    }
+
+    /// Helper to create a test pending order
+    fn create_test_pending_order(order_id: &str, symbol: &str) -> PendingOrder {
+        PendingOrder {
+            order_id: order_id.to_string(),
+            symbol: symbol.to_string(),
+            side: "buy".to_string(),
+            order_type: "limit".to_string(),
+            quantity: 1.0,
+            limit_price: Some(49000.0),
+            stop_price: None,
+            client_id: Some("client_456".to_string()),
+        }
+    }
+
+    // =========================================================================
+    // Position Tests
+    // =========================================================================
+
+    #[test]
+    fn test_position_is_open() {
+        let mut pos = create_test_position("BTCUSDT");
+
+        pos.status = "open".to_string();
+        assert!(pos.is_open());
+
+        pos.status = "pending".to_string();
+        assert!(pos.is_open());
+
+        pos.status = "closing".to_string();
+        assert!(pos.is_open());
+
+        pos.status = "closed".to_string();
+        assert!(!pos.is_open());
+    }
+
+    #[test]
+    fn test_save_and_load_position() {
+        let (manager, _temp) = create_test_manager();
+        let pos = create_test_position("BTCUSDT");
+
+        // Save position
+        manager
+            .save_position(&pos)
+            .expect("Failed to save position");
+
+        // Load all positions
+        let positions = manager
+            .load_positions(None)
+            .expect("Failed to load positions");
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].symbol, "BTCUSDT");
+        assert_eq!(positions[0].quantity, 1.5);
+        assert_eq!(positions[0].entry_price, 50000.0);
+    }
+
+    #[test]
+    fn test_load_positions_with_filter() {
+        let (manager, _temp) = create_test_manager();
+
+        // Save open position
+        let mut pos1 = create_test_position("BTCUSDT");
+        pos1.status = "open".to_string();
+        manager.save_position(&pos1).unwrap();
+
+        // Save closed position
+        let mut pos2 = create_test_position("ETHUSDT");
+        pos2.status = "closed".to_string();
+        manager.save_position(&pos2).unwrap();
+
+        // Filter by open
+        let open = manager.load_positions(Some("open")).unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].symbol, "BTCUSDT");
+
+        // Filter by closed
+        let closed = manager.load_positions(Some("closed")).unwrap();
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].symbol, "ETHUSDT");
+
+        // No filter
+        let all = manager.load_positions(None).unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_get_position() {
+        let (manager, _temp) = create_test_manager();
+        let pos = create_test_position("BTCUSDT");
+        manager.save_position(&pos).unwrap();
+
+        // Get existing position
+        let loaded = manager.get_position("BTCUSDT").unwrap();
+        assert!(loaded.is_some());
+        assert_eq!(loaded.unwrap().entry_price, 50000.0);
+
+        // Get non-existent position
+        let missing = manager.get_position("XYZUSDT").unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn test_position_update() {
+        let (manager, _temp) = create_test_manager();
+
+        // Save initial position
+        let mut pos = create_test_position("BTCUSDT");
+        manager.save_position(&pos).unwrap();
+
+        // Update position
+        pos.pnl = 500.0;
+        pos.status = "closing".to_string();
+        manager.save_position(&pos).unwrap();
+
+        // Verify update
+        let loaded = manager.get_position("BTCUSDT").unwrap().unwrap();
+        assert_eq!(loaded.pnl, 500.0);
+        assert_eq!(loaded.status, "closing");
+    }
+
+    #[test]
+    fn test_position_with_metadata() {
+        let (manager, _temp) = create_test_manager();
+
+        let mut pos = create_test_position("BTCUSDT");
+        pos.metadata
+            .insert("trailing_stop".to_string(), serde_json::json!(49500.0));
+        pos.metadata
+            .insert("regime".to_string(), serde_json::json!("compression"));
+
+        manager.save_position(&pos).unwrap();
+
+        let loaded = manager.get_position("BTCUSDT").unwrap().unwrap();
+        assert_eq!(loaded.metadata.get("trailing_stop").unwrap(), &49500.0);
+        assert_eq!(loaded.metadata.get("regime").unwrap(), "compression");
+    }
+
+    // =========================================================================
+    // Checkpoint Tests
+    // =========================================================================
+
+    #[test]
+    fn test_save_and_load_checkpoint() {
+        let (manager, _temp) = create_test_manager();
+        let ckpt = create_test_checkpoint(42);
+
+        manager
+            .save_checkpoint(&ckpt)
+            .expect("Failed to save checkpoint");
+
+        let loaded = manager
+            .load_checkpoint()
+            .expect("Failed to load checkpoint");
+        assert!(loaded.is_some());
+
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.cycle_count, 42);
+        assert_eq!(loaded.portfolio_value, 10500.0);
+        assert_eq!(loaded.cash, 5000.0);
+        assert_eq!(loaded.open_positions, 2);
+        assert!(loaded.paper_mode);
+        assert_eq!(loaded.config_hash, "abc123");
+    }
+
+    #[test]
+    fn test_load_latest_checkpoint() {
+        let (manager, _temp) = create_test_manager();
+
+        // Save multiple checkpoints
+        for i in 1..=5 {
+            let ckpt = create_test_checkpoint(i);
+            manager.save_checkpoint(&ckpt).unwrap();
+        }
+
+        // Should load the latest (cycle 5)
+        let loaded = manager.load_checkpoint().unwrap().unwrap();
+        assert_eq!(loaded.cycle_count, 5);
+    }
+
+    #[test]
+    fn test_load_checkpoint_empty() {
+        let (manager, _temp) = create_test_manager();
+
+        // No checkpoints saved
+        let loaded = manager.load_checkpoint().unwrap();
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn test_checkpoint_with_symbols() {
+        let (manager, _temp) = create_test_manager();
+
+        let mut ckpt = create_test_checkpoint(1);
+        ckpt.last_processed_symbols = vec![
+            "BTCUSDT".to_string(),
+            "ETHUSDT".to_string(),
+            "SOLUSDT".to_string(),
+        ];
+
+        manager.save_checkpoint(&ckpt).unwrap();
+
+        let loaded = manager.load_checkpoint().unwrap().unwrap();
+        assert_eq!(loaded.last_processed_symbols.len(), 3);
+        assert!(loaded
+            .last_processed_symbols
+            .contains(&"SOLUSDT".to_string()));
+    }
+
+    // =========================================================================
+    // Trade Record Tests
+    // =========================================================================
+
+    #[test]
+    fn test_record_trade() {
+        let (manager, _temp) = create_test_manager();
+        let trade = create_test_trade("BTCUSDT");
+
+        manager
+            .record_trade(&trade)
+            .expect("Failed to record trade");
+
+        // Verify by checking the database directly
+        let conn = manager.conn.lock().unwrap();
+        let count: i32 = conn
+            .query_row("SELECT COUNT(*) FROM trades", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_record_multiple_trades() {
+        let (manager, _temp) = create_test_manager();
+
+        for i in 0..5 {
+            let mut trade = create_test_trade(&format!("SYMBOL{}", i));
+            trade.net_pnl = if i % 2 == 0 { 100.0 } else { -50.0 };
+            manager.record_trade(&trade).unwrap();
+        }
+
+        let conn = manager.conn.lock().unwrap();
+        let count: i32 = conn
+            .query_row("SELECT COUNT(*) FROM trades", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 5);
+    }
+
+    // =========================================================================
+    // Pending Order Tests
+    // =========================================================================
+
+    #[test]
+    fn test_save_and_load_pending_order() {
+        let (manager, _temp) = create_test_manager();
+        let order = create_test_pending_order("ord_001", "BTCUSDT");
+
+        manager
+            .save_pending_order(&order)
+            .expect("Failed to save order");
+
+        let orders = manager
+            .load_pending_orders()
+            .expect("Failed to load orders");
+        assert_eq!(orders.len(), 1);
+        assert_eq!(orders[0].order_id, "ord_001");
+        assert_eq!(orders[0].symbol, "BTCUSDT");
+        assert_eq!(orders[0].limit_price, Some(49000.0));
+    }
+
+    #[test]
+    fn test_multiple_pending_orders() {
+        let (manager, _temp) = create_test_manager();
+
+        manager
+            .save_pending_order(&create_test_pending_order("ord_001", "BTCUSDT"))
+            .unwrap();
+        manager
+            .save_pending_order(&create_test_pending_order("ord_002", "ETHUSDT"))
+            .unwrap();
+        manager
+            .save_pending_order(&create_test_pending_order("ord_003", "SOLUSDT"))
+            .unwrap();
+
+        let orders = manager.load_pending_orders().unwrap();
+        assert_eq!(orders.len(), 3);
+    }
+
+    #[test]
+    fn test_update_pending_order() {
+        let (manager, _temp) = create_test_manager();
+
+        let mut order = create_test_pending_order("ord_001", "BTCUSDT");
+        manager.save_pending_order(&order).unwrap();
+
+        // Update the order (same ID)
+        order.quantity = 2.5;
+        order.limit_price = Some(48000.0);
+        manager.save_pending_order(&order).unwrap();
+
+        let orders = manager.load_pending_orders().unwrap();
+        assert_eq!(orders.len(), 1);
+        assert_eq!(orders[0].quantity, 2.5);
+        assert_eq!(orders[0].limit_price, Some(48000.0));
+    }
+
+    #[test]
+    fn test_remove_pending_order() {
+        let (manager, _temp) = create_test_manager();
+
+        manager
+            .save_pending_order(&create_test_pending_order("ord_001", "BTCUSDT"))
+            .unwrap();
+        manager
+            .save_pending_order(&create_test_pending_order("ord_002", "ETHUSDT"))
+            .unwrap();
+
+        // Remove one order
+        manager.remove_pending_order("ord_001").unwrap();
+
+        let orders = manager.load_pending_orders().unwrap();
+        assert_eq!(orders.len(), 1);
+        assert_eq!(orders[0].order_id, "ord_002");
+    }
+
+    #[test]
+    fn test_clear_pending_orders() {
+        let (manager, _temp) = create_test_manager();
+
+        for i in 0..5 {
+            manager
+                .save_pending_order(&create_test_pending_order(&format!("ord_{}", i), "BTCUSDT"))
+                .unwrap();
+        }
+
+        assert_eq!(manager.load_pending_orders().unwrap().len(), 5);
+
+        manager.clear_pending_orders().unwrap();
+
+        assert_eq!(manager.load_pending_orders().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_pending_order_with_stop_price() {
+        let (manager, _temp) = create_test_manager();
+
+        let order = PendingOrder {
+            order_id: "stop_001".to_string(),
+            symbol: "BTCUSDT".to_string(),
+            side: "sell".to_string(),
+            order_type: "stop".to_string(),
+            quantity: 1.0,
+            limit_price: None,
+            stop_price: Some(47000.0),
+            client_id: None,
+        };
+
+        manager.save_pending_order(&order).unwrap();
+
+        let loaded = manager.load_pending_orders().unwrap();
+        assert_eq!(loaded[0].stop_price, Some(47000.0));
+        assert_eq!(loaded[0].limit_price, None);
+    }
+
+    // =========================================================================
+    // JSON Export Tests
+    // =========================================================================
+
+    #[test]
+    fn test_export_json() {
+        let (manager, temp) = create_test_manager();
+
+        // Add some data
+        manager
+            .save_position(&create_test_position("BTCUSDT"))
+            .unwrap();
+        manager.save_checkpoint(&create_test_checkpoint(1)).unwrap();
+        manager
+            .save_pending_order(&create_test_pending_order("ord_001", "BTCUSDT"))
+            .unwrap();
+
+        // Export
+        manager.export_json().expect("Failed to export JSON");
+
+        // Verify file exists and contains data
+        let json_path = temp.path().join("test.json");
+        assert!(json_path.exists());
+
+        let content = std::fs::read_to_string(&json_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        assert!(parsed.get("positions").is_some());
+        assert!(parsed.get("checkpoint").is_some());
+        assert!(parsed.get("pending_orders").is_some());
+        assert!(parsed.get("exported_at").is_some());
+    }
+
+    #[test]
+    fn test_export_json_empty() {
+        let (manager, temp) = create_test_manager();
+
+        // Export with no data
+        manager.export_json().unwrap();
+
+        let json_path = temp.path().join("test.json");
+        let content = std::fs::read_to_string(&json_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+
+        assert!(parsed["positions"].as_array().unwrap().is_empty());
+        assert!(parsed["checkpoint"].is_null());
+        assert!(parsed["pending_orders"].as_array().unwrap().is_empty());
+    }
+
+    // =========================================================================
+    // Factory Function Tests
+    // =========================================================================
+
+    #[test]
+    fn test_create_state_manager() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_dir = temp_dir.path().join("state");
+
+        let manager = create_state_manager(&state_dir, "sqlite").expect("Failed to create manager");
+
+        // Verify directory structure
+        assert!(state_dir.exists());
+        assert!(state_dir.join("trading_state.db").exists());
+
+        // Verify manager works
+        manager
+            .save_position(&create_test_position("TEST"))
+            .unwrap();
+        let pos = manager.get_position("TEST").unwrap();
+        assert!(pos.is_some());
+    }
+
+    // =========================================================================
+    // Edge Cases and Error Handling
+    // =========================================================================
+
+    #[test]
+    fn test_position_with_special_characters() {
+        let (manager, _temp) = create_test_manager();
+
+        let mut pos = create_test_position("BTC/USDT:PERP");
+        pos.order_id = Some("order_with_special_chars_!@#$%".to_string());
+        manager.save_position(&pos).unwrap();
+
+        let loaded = manager.get_position("BTC/USDT:PERP").unwrap().unwrap();
+        assert_eq!(
+            loaded.order_id,
+            Some("order_with_special_chars_!@#$%".to_string())
+        );
+    }
+
+    #[test]
+    fn test_position_with_zero_values() {
+        let (manager, _temp) = create_test_manager();
+
+        let pos = Position {
+            symbol: "BTCUSDT".to_string(),
+            side: "buy".to_string(),
+            quantity: 0.0,
+            entry_price: 0.0,
+            entry_time: None,
+            stop_loss: 0.0,
+            take_profit: 0.0,
+            status: "pending".to_string(),
+            order_id: None,
+            pnl: 0.0,
+            exit_price: 0.0,
+            exit_time: None,
+            metadata: HashMap::new(),
+        };
+
+        manager.save_position(&pos).unwrap();
+        let loaded = manager.get_position("BTCUSDT").unwrap().unwrap();
+        assert_eq!(loaded.quantity, 0.0);
+        assert_eq!(loaded.entry_price, 0.0);
+    }
+
+    #[test]
+    fn test_large_metadata() {
+        let (manager, _temp) = create_test_manager();
+
+        let mut pos = create_test_position("BTCUSDT");
+        // Add many metadata entries
+        for i in 0..100 {
+            pos.metadata.insert(
+                format!("key_{}", i),
+                serde_json::json!(format!("value_{}", i)),
+            );
+        }
+
+        manager.save_position(&pos).unwrap();
+        let loaded = manager.get_position("BTCUSDT").unwrap().unwrap();
+        assert_eq!(loaded.metadata.len(), 100);
+    }
+
+    #[test]
+    fn test_concurrent_access_simulation() {
+        let (manager, _temp) = create_test_manager();
+
+        // Simulate multiple saves in quick succession
+        for i in 0..10 {
+            let pos = create_test_position(&format!("SYM{}", i));
+            manager.save_position(&pos).unwrap();
+        }
+
+        for i in 0..5 {
+            let ckpt = create_test_checkpoint(i);
+            manager.save_checkpoint(&ckpt).unwrap();
+        }
+
+        // Verify all data is intact
+        let positions = manager.load_positions(None).unwrap();
+        assert_eq!(positions.len(), 10);
+
+        let ckpt = manager.load_checkpoint().unwrap().unwrap();
+        assert_eq!(ckpt.cycle_count, 4); // Latest
+    }
+}

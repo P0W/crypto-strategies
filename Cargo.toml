@@ -67,6 +67,7 @@ base64 = "0.22"
 
 [dev-dependencies]
 approx = "0.5"
+tempfile = "3.14"
 
 [profile.release]
 opt-level = 3
