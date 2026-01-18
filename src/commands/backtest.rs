@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use crypto_strategies::trade_analysis::{DayOfWeekAnalysis, MonthlyPnLMatrix};
+use crypto_strategies::analysis::{DayOfWeekAnalysis, MonthlyPnLMatrix, StreakAnalysis};
 use crypto_strategies::multi_timeframe::MultiTimeframeData;
 use crypto_strategies::strategies;
 use crypto_strategies::{backtest::Backtester, data, Config};
@@ -163,7 +163,10 @@ pub fn run(opts: BacktestOptions) -> Result<()> {
             if candles.is_empty() {
                 None
             } else {
-                Some((candles.first().unwrap().datetime, candles.last().unwrap().datetime))
+                Some((
+                    candles.first().unwrap().datetime,
+                    candles.last().unwrap().datetime,
+                ))
             }
         })
         .unzip();
@@ -187,7 +190,23 @@ pub fn run(opts: BacktestOptions) -> Result<()> {
     println!("Post-Tax Return:    {:.2}%", result.metrics.post_tax_return);
     println!("Sharpe Ratio:       {:.2}", result.metrics.sharpe_ratio);
     println!("Calmar Ratio:       {:.2}", result.metrics.calmar_ratio);
+    println!("{}", "-".repeat(60));
+    println!("DRAWDOWN METRICS");
+    println!("{}", "-".repeat(60));
     println!("Max Drawdown:       {:.2}%", result.metrics.max_drawdown);
+    println!("Avg Drawdown:       {:.2}%", result.metrics.avg_drawdown);
+    println!(
+        "Underwater Time:    {:.1}%",
+        result.metrics.underwater_time_pct
+    );
+    println!(
+        "Max Underwater:     {} bars",
+        result.metrics.max_underwater_bars
+    );
+    println!("Recovery Factor:    {:.2}", result.metrics.recovery_factor);
+    println!("{}", "-".repeat(60));
+    println!("TRADE STATISTICS");
+    println!("{}", "-".repeat(60));
     println!("Win Rate:           {:.2}%", result.metrics.win_rate);
     println!("Profit Factor:      {:.2}", result.metrics.profit_factor);
     println!("Expectancy:         ₹{:.2}", result.metrics.expectancy);
@@ -207,12 +226,18 @@ pub fn run(opts: BacktestOptions) -> Result<()> {
     println!("{}", "=".repeat(60));
 
     // Performance breakdowns
+    let streaks = StreakAnalysis::from_trades(&result.trades);
+    print!("{}", streaks.render());
+
     let dow = DayOfWeekAnalysis::from_trades(&result.trades);
     print!("{}", dow.render());
 
     let monthly = MonthlyPnLMatrix::from_trades(&result.trades);
     print!("{}", monthly.render_colored());
-    print!("{}", monthly.render_yearly_summary(config.trading.initial_capital));
+    print!(
+        "{}",
+        monthly.render_yearly_summary(config.trading.initial_capital)
+    );
 
     info!("Backtest completed");
     Ok(())

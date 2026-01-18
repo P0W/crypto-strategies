@@ -1217,19 +1217,65 @@ impl Backtester {
             0.0
         };
 
-        // Max drawdown
+        // Max drawdown and underwater metrics
         let mut peak = initial_capital;
         let mut max_dd = 0.0;
+        let mut underwater_bars = 0usize;
+        let mut current_underwater_streak = 0usize;
+        let mut max_underwater_streak = 0usize;
+        let mut drawdown_sum = 0.0;
+        let mut drawdown_count = 0usize;
 
         for (_, equity) in equity_curve {
             if *equity > peak {
                 peak = *equity;
+                // Reset streak when new peak reached
+                if current_underwater_streak > max_underwater_streak {
+                    max_underwater_streak = current_underwater_streak;
+                }
+                current_underwater_streak = 0;
             }
             let dd = (peak - equity) / peak;
             if dd > max_dd {
                 max_dd = dd;
             }
+
+            // Track underwater time
+            if dd > 0.0 {
+                underwater_bars += 1;
+                current_underwater_streak += 1;
+                drawdown_sum += dd * 100.0;
+                drawdown_count += 1;
+            }
         }
+        // Check final streak
+        if current_underwater_streak > max_underwater_streak {
+            max_underwater_streak = current_underwater_streak;
+        }
+
+        // Calculate underwater metrics
+        let underwater_time_pct = if !equity_curve.is_empty() {
+            (underwater_bars as f64 / equity_curve.len() as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        let avg_drawdown = if drawdown_count > 0 {
+            drawdown_sum / drawdown_count as f64
+        } else {
+            0.0
+        };
+
+        // Recovery factor: net profit / max drawdown (in currency terms)
+        let net_profit = final_equity - initial_capital;
+        let max_dd_currency = max_dd * peak;
+        let recovery_factor = if max_dd_currency > 0.0 {
+            net_profit / max_dd_currency
+        } else if net_profit > 0.0 {
+            f64::INFINITY
+        } else {
+            0.0
+        };
 
         // Calmar ratio
         let calmar = if max_dd > 0.0 {
@@ -1255,6 +1301,9 @@ impl Backtester {
         let tax = taxable_gains * tax_rate;
         let post_tax_return = ((final_equity - initial_capital - tax) / initial_capital) * 100.0;
 
+        // Calculate win/loss streaks
+        let (max_win_streak, max_loss_streak) = Self::calculate_streaks(trades);
+
         PerformanceMetrics::new(
             total_return,
             post_tax_return,
@@ -1273,6 +1322,38 @@ impl Backtester {
             largest_loss,
             total_commission,
             tax,
+            underwater_time_pct,
+            avg_drawdown,
+            max_underwater_streak,
+            recovery_factor,
+            max_win_streak,
+            max_loss_streak,
         )
+    }
+
+    /// Calculate maximum win and loss streaks from trades
+    fn calculate_streaks(trades: &[Trade]) -> (usize, usize) {
+        if trades.is_empty() {
+            return (0, 0);
+        }
+
+        let mut max_win_streak = 0usize;
+        let mut max_loss_streak = 0usize;
+        let mut current_win_streak = 0usize;
+        let mut current_loss_streak = 0usize;
+
+        for trade in trades {
+            if trade.net_pnl.is_positive() {
+                current_win_streak += 1;
+                max_win_streak = max_win_streak.max(current_win_streak);
+                current_loss_streak = 0;
+            } else {
+                current_loss_streak += 1;
+                max_loss_streak = max_loss_streak.max(current_loss_streak);
+                current_win_streak = 0;
+            }
+        }
+
+        (max_win_streak, max_loss_streak)
     }
 }

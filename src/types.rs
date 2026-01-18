@@ -268,6 +268,20 @@ pub struct PerformanceMetrics {
     pub largest_loss: f64,
     pub total_commission: f64,
     pub tax_amount: f64,
+    // Underwater metrics
+    /// Percentage of time spent in drawdown (below peak equity)
+    pub underwater_time_pct: f64,
+    /// Average drawdown when underwater (%)
+    pub avg_drawdown: f64,
+    /// Longest consecutive period underwater (in bars/days)
+    pub max_underwater_bars: usize,
+    /// Recovery factor: Total profit / Max drawdown
+    pub recovery_factor: f64,
+    // Streak metrics
+    /// Maximum consecutive winning trades
+    pub max_win_streak: usize,
+    /// Maximum consecutive losing trades
+    pub max_loss_streak: usize,
 }
 
 impl PerformanceMetrics {
@@ -291,6 +305,12 @@ impl PerformanceMetrics {
         largest_loss: f64,
         total_commission: f64,
         tax_amount: f64,
+        underwater_time_pct: f64,
+        avg_drawdown: f64,
+        max_underwater_bars: usize,
+        recovery_factor: f64,
+        max_win_streak: usize,
+        max_loss_streak: usize,
     ) -> Self {
         Self {
             total_return: round2(total_return),
@@ -310,6 +330,12 @@ impl PerformanceMetrics {
             largest_loss: round2(largest_loss),
             total_commission: round2(total_commission),
             tax_amount: round2(tax_amount),
+            underwater_time_pct: round2(underwater_time_pct),
+            avg_drawdown: round2(avg_drawdown),
+            max_underwater_bars,
+            recovery_factor: round2(recovery_factor),
+            max_win_streak,
+            max_loss_streak,
         }
     }
 }

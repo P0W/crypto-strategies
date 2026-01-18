@@ -53,6 +53,7 @@
 //! }
 //! ```
 
+pub mod analysis;
 pub mod backtest;
 pub mod binance;
 pub mod coindcx;
@@ -61,7 +62,6 @@ pub mod config;
 pub mod data;
 pub mod grid;
 pub mod indicators;
-pub mod trade_analysis;
 pub mod multi_timeframe;
 pub mod oms;
 pub mod optimizer;
@@ -71,8 +71,8 @@ pub mod strategies;
 pub mod types;
 pub mod zerodha;
 
+pub use analysis::{DayOfWeekAnalysis, MonthlyPnLMatrix, StreakAnalysis};
 pub use config::Config;
-pub use trade_analysis::{DayOfWeekAnalysis, MonthlyPnLMatrix};
 pub use multi_timeframe::{
     MultiSymbolMultiTimeframeData, MultiTimeframeCandles, MultiTimeframeData,
 };

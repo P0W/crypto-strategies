@@ -51,7 +51,6 @@ jobs:
           "configs/momentum_scalper_config.json"
           "configs/quick_flip_config.json"
           "configs/range_breakout_config.json"
-          "configs/regime_grid_config.json"
           "configs/volatility_regime_config.json"
           "configs/volatility_regime_4h_config.json"
         )
