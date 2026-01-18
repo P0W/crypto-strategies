@@ -858,23 +858,20 @@ impl Backtester {
                         entry_order.quantity = Money::from_f64(quantity);
                         entry_order.remaining_quantity = Money::from_f64(quantity);
 
-                        // CRITICAL: Cache stop/target at SIGNAL time (now), not at ENTRY time (T+1)
-                        // Main branch stores these in PendingOrder at signal time
-                        // Using current_slice here matches main branch behavior
-                        // NOTE: Only pre-cache if T+1 execution is enabled, otherwise let the
-                        // lazy calculation handle it at position creation time
+                        // CRITICAL: Cache stop/target at SIGNAL time for portfolio heat calculation
+                        // This is needed for risk_amount calculation when position is created
+                        let stop = self.strategy.calculate_stop_loss(
+                            current_slice,
+                            price,
+                            entry_order.side,
+                        );
+                        let target = self.strategy.calculate_take_profit(
+                            current_slice,
+                            price,
+                            entry_order.side,
+                        );
+                        entry_levels.insert(symbol.clone(), (stop, target));
                         if self.config.backtest.use_t1_execution {
-                            let stop = self.strategy.calculate_stop_loss(
-                                current_slice,
-                                price,
-                                entry_order.side,
-                            );
-                            let target = self.strategy.calculate_take_profit(
-                                current_slice,
-                                price,
-                                entry_order.side,
-                            );
-                            entry_levels.insert(symbol.clone(), (stop, target));
                             tracing::debug!(
                                 "{} {} ENTRY LEVELS PRE-CACHED at signal: stop={:.4} target={:.4}",
                                 candle.datetime.format("%Y-%m-%d"),

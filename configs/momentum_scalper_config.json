@@ -14,11 +14,11 @@
   "grid": {
     "_optimization": [
       {
-        "calmar_ratio": 2.85,
-        "expectancy": 542.9,
-        "max_drawdown": 13.6,
-        "optimized_at": "2026-01-09 15:38:20",
-        "sharpe_ratio": 1.06,
+        "calmar_ratio": 1.55,
+        "expectancy": 1813.23,
+        "max_drawdown": 29.6,
+        "optimized_at": "2026-01-18 16:39:23",
+        "sharpe_ratio": 0.96,
         "symbols": [
           "BTCINR",
           "ETHINR",
@@ -26,9 +26,9 @@
           "BNBINR",
           "XRPINR"
         ],
-        "total_return": 38.0,
-        "total_trades": 70,
-        "win_rate": 47.1
+        "total_return": 680.6,
+        "total_trades": 375,
+        "win_rate": 53.1
       }
     ],
     "adx_threshold": [
@@ -68,18 +68,18 @@
   },
   "strategy": {
     "adx_period": 14,
-    "adx_threshold": 0,
+    "adx_threshold": 20,
     "allow_short": false,
-    "atr_period": 14,
+    "atr_period": 10,
     "cooldown_bars": 0,
-    "ema_fast": 13,
+    "ema_fast": 8,
     "ema_slow": 55,
     "ema_trend": 50,
     "exit_on_cross": true,
     "macd_fast": 12,
     "macd_signal": 9,
     "macd_slow": 26,
-    "max_hold_bars": 30,
+    "max_hold_bars": 50,
     "name": "momentum_scalper",
     "require_volume": false,
     "stop_atr_multiple": 1.5,

@@ -44,6 +44,10 @@ enum Commands {
         #[arg(long)]
         capital: Option<f64>,
 
+        /// Symbols to trade (comma-separated). E.g., "BTCINR,ETHINR,SOLINR"
+        #[arg(long)]
+        symbols: Option<String>,
+
         /// Start date (YYYY-MM-DD)
         #[arg(long)]
         start: Option<String>,
@@ -259,19 +263,21 @@ async fn main() -> Result<()> {
             config,
             strategy,
             capital,
+            symbols,
             start,
             end,
             no_risk_limits,
             use_t1_execution,
-        } => commands::backtest::run(
-            config,
-            strategy,
-            capital,
-            start,
-            end,
+        } => commands::backtest::run(commands::backtest::BacktestOptions {
+            config_path: config,
+            strategy_override: strategy,
+            capital_override: capital,
+            symbols_override: symbols,
+            start_override: start,
+            end_override: end,
             no_risk_limits,
             use_t1_execution,
-        ),
+        }),
 
         Commands::Optimize {
             config,

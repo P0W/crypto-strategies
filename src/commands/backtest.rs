@@ -8,15 +8,30 @@ use crypto_strategies::strategies;
 use crypto_strategies::{backtest::Backtester, data, Config};
 use tracing::{debug, info};
 
-pub fn run(
-    config_path: String,
-    strategy_override: Option<String>,
-    capital_override: Option<f64>,
-    start_override: Option<String>,
-    end_override: Option<String>,
-    no_risk_limits: bool,
-    use_t1_execution: bool,
-) -> Result<()> {
+/// Options for running a backtest
+#[derive(Default)]
+pub struct BacktestOptions {
+    pub config_path: String,
+    pub strategy_override: Option<String>,
+    pub capital_override: Option<f64>,
+    pub symbols_override: Option<String>,
+    pub start_override: Option<String>,
+    pub end_override: Option<String>,
+    pub no_risk_limits: bool,
+    pub use_t1_execution: bool,
+}
+
+pub fn run(opts: BacktestOptions) -> Result<()> {
+    let BacktestOptions {
+        config_path,
+        strategy_override,
+        capital_override,
+        symbols_override,
+        start_override,
+        end_override,
+        no_risk_limits,
+        use_t1_execution,
+    } = opts;
     info!("Starting backtest");
 
     // Load configuration
@@ -34,6 +49,16 @@ pub fn run(
     if let Some(capital) = capital_override {
         info!("Overriding initial capital to: ₹{:.2}", capital);
         config.trading.initial_capital = capital;
+    }
+
+    if let Some(ref symbols_str) = symbols_override {
+        let symbols: Vec<String> = symbols_str
+            .split(',')
+            .map(|s| s.trim().to_uppercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        info!("Overriding symbols to: {:?}", symbols);
+        config.trading.symbols = symbols;
     }
 
     if no_risk_limits {

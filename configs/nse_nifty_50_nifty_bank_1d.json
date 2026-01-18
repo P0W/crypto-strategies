@@ -21,7 +21,7 @@
         "expectancy": 2140.3,
         "max_drawdown": 2.3,
         "optimized_at": "2026-01-03 07:45:28",
-        "sharpe_ratio": 0.16,
+        "sharpe_ratio": 0.06,
         "symbols": [
           "NIFTY_50",
           "NIFTY_BANK"

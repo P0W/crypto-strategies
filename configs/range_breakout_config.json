@@ -13,11 +13,11 @@
   "grid": {
     "_optimization": [
       {
-        "calmar_ratio": 3.39,
-        "expectancy": 1375.03,
-        "max_drawdown": 7.4,
-        "optimized_at": "2026-01-09 15:38:31",
-        "sharpe_ratio": 1.5,
+        "calmar_ratio": 1.72,
+        "expectancy": 2120.05,
+        "max_drawdown": 18.7,
+        "optimized_at": "2026-01-18 16:38:43",
+        "sharpe_ratio": 0.98,
         "symbols": [
           "BTCINR",
           "ETHINR",
@@ -25,9 +25,9 @@
           "BNBINR",
           "XRPINR"
         ],
-        "total_return": 24.8,
-        "total_trades": 18,
-        "win_rate": 83.3
+        "total_return": 356.5,
+        "total_trades": 168,
+        "win_rate": 56.0
       }
     ],
     "lookback": [

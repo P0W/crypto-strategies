@@ -2,9 +2,7 @@
   "backtest": {
     "commission": 0.001,
     "data_dir": "./data",
-    "end_date": "2025-12-31",
-    "results_dir": "./results",
-    "start_date": "2022-01-02"
+    "results_dir": "./results"
   },
   "exchange": {
     "assumed_slippage": 0.001,
@@ -15,19 +13,19 @@
   "grid": {
     "_optimization": [
       {
-        "calmar_ratio": 0.86,
-        "expectancy": 1154.98,
-        "max_drawdown": 13.6,
-        "optimized_at": "2026-01-03 07:56:56",
-        "sharpe_ratio": 0.55,
+        "calmar_ratio": 1.06,
+        "expectancy": 2976.97,
+        "max_drawdown": 21.8,
+        "optimized_at": "2026-01-18 16:38:31",
+        "sharpe_ratio": 0.95,
         "symbols": [
           "BNBINR",
           "BTCINR",
           "SOLINR"
         ],
-        "total_return": 55.36,
-        "total_trades": 49,
-        "win_rate": 44.9
+        "total_return": 208.4,
+        "total_trades": 70,
+        "win_rate": 57.1
       }
     ],
     "adx_threshold": [
@@ -58,16 +56,16 @@
     ]
   },
   "strategy": {
-    "name": "volatility_regime",
     "adx_period": 14,
     "adx_threshold": 20,
     "atr_period": 14,
     "breakout_atr_multiple": 1.5,
     "compression_threshold": 0.6,
-    "ema_fast": 8,
-    "ema_slow": 21,
+    "ema_fast": 13,
+    "ema_slow": 34,
     "expansion_threshold": 1.5,
     "extreme_threshold": 2.5,
+    "name": "volatility_regime",
     "stop_atr_multiple": 3,
     "target_atr_multiple": 6,
     "timeframe": "1d",
@@ -92,11 +90,11 @@
     "max_portfolio_heat": 0.3,
     "max_position_pct": 0.2,
     "max_positions": 5,
-        "symbols": [
-          "BNBINR",
-          "BTCINR",
-          "SOLINR"
-        ],
-    "risk_per_trade": 0.15
+    "risk_per_trade": 0.15,
+    "symbols": [
+      "BNBINR",
+      "BTCINR",
+      "SOLINR"
+    ]
   }
 }
