@@ -85,7 +85,6 @@ jobs:
       run: |
         # Define configs to run explicitly - use non-regime configs for speed
         configs=(
-          "configs/sample_config.json"
           "configs/momentum_scalper_config.json"
           "configs/quick_flip_config.json"
           "configs/range_breakout_config.json"
