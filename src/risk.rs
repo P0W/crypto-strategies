@@ -340,6 +340,12 @@ impl RiskManager {
         !self.should_halt_trading() && position_count < self.max_positions
     }
 
+    /// Get max positions limit
+    #[inline]
+    pub fn max_positions(&self) -> usize {
+        self.max_positions
+    }
+
     /// Calculate position size using an iterator (avoids Vec allocation)
     pub fn calculate_position_size_with_regime_iter<'a, I>(
         &self,

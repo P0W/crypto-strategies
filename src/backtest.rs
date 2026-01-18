@@ -17,10 +17,13 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
 use crate::multi_timeframe::MultiTimeframeCandles;
-use crate::oms::{ExecutionEngine, Order, OrderBook, Position, PositionManager, StrategyContext};
+use crate::oms::{
+    size_order, ExecutionEngine, Order, OrderBook, Position, PositionManager, SizedOrder,
+    StrategyContext,
+};
 use crate::risk::RiskManager;
 use crate::Strategy;
-use crate::{Config, Money, PerformanceMetrics, Side, Symbol, Trade};
+use crate::{Config, PerformanceMetrics, Side, Symbol, Trade};
 
 /// Backtest result container
 #[derive(Debug, Default)]
@@ -805,86 +808,56 @@ impl Backtester {
                     );
                 }
 
-                // Process each order request
+                // Process each order request using shared size_order function
+                // This ensures backtest and live use identical position sizing logic
+                let has_position = position_data.is_some();
+
                 for order_req in order_requests {
-                    let order = order_req.into_order();
-                    let is_entry_order = position_data.is_none();
+                    // Collect position data fresh for each order to avoid borrow conflicts
+                    let position_count = position_manager.open_position_count();
+                    let all_positions: Vec<&Position> = position_manager
+                        .get_all_positions()
+                        .map(|(_, p)| p)
+                        .collect();
 
-                    // CRITICAL FIX: Exit orders must be allowed even when trading is halted
-                    // Otherwise positions can't close and drawdown stays above threshold
-                    if is_entry_order && self.risk_manager.should_halt_trading() {
-                        tracing::debug!("Risk manager halted trading - skipping ENTRY order");
-                        continue;
-                    }
-
-                    // For entry orders: calculate quantity via risk manager
-                    // For exit/grid orders: use strategy's specified quantity
-                    let mut final_order = if is_entry_order {
-                        // Validate with risk manager
-                        let position_count = position_manager.open_position_count();
-
-                        if !self.risk_manager.can_open_position_count(position_count) {
-                            tracing::debug!(
-                                "Max positions reached ({}) - skipping order",
-                                position_count
-                            );
-                            continue;
+                    // Use size_order to apply risk management and position sizing
+                    let mut final_order = match size_order(
+                        &order_req,
+                        current_slice,
+                        has_position,
+                        position_count,
+                        &all_positions,
+                        &self.risk_manager,
+                        self.strategy.as_ref(),
+                    ) {
+                        SizedOrder::Entry {
+                            order,
+                            stop_price,
+                            target_price,
+                        } => {
+                            // Cache stop/target at SIGNAL time for portfolio heat calculation
+                            entry_levels.insert(symbol.clone(), (stop_price, target_price));
+                            if self.config.backtest.use_t1_execution {
+                                tracing::debug!(
+                                    "{} {} ENTRY LEVELS PRE-CACHED at signal: stop={:.4} target={:.4}",
+                                    candle.datetime.format("%Y-%m-%d"),
+                                    symbol,
+                                    stop_price,
+                                    target_price
+                                );
+                            }
+                            order
                         }
-
-                        // Calculate position size based on risk
-                        let regime_score = self.strategy.get_regime_score(current_slice);
-
-                        // Get all current positions for portfolio heat calculation
-                        let all_positions: Vec<&crate::oms::types::Position> = position_manager
-                            .get_all_positions()
-                            .map(|(_, p)| p)
-                            .collect();
-
-                        let quantity = self.risk_manager.calculate_position_size_with_regime(
-                            price,
-                            self.strategy
-                                .calculate_stop_loss(current_slice, price, order.side),
-                            &all_positions,
-                            regime_score,
-                        );
-
-                        if quantity <= 0.0 {
-                            tracing::debug!("Risk manager returned zero quantity - skipping order");
-                            continue;
-                        }
-
-                        // Create order with risk-calculated quantity
-                        let mut entry_order = order;
-                        entry_order.quantity = Money::from_f64(quantity);
-                        entry_order.remaining_quantity = Money::from_f64(quantity);
-
-                        // CRITICAL: Cache stop/target at SIGNAL time for portfolio heat calculation
-                        // This is needed for risk_amount calculation when position is created
-                        let stop = self.strategy.calculate_stop_loss(
-                            current_slice,
-                            price,
-                            entry_order.side,
-                        );
-                        let target = self.strategy.calculate_take_profit(
-                            current_slice,
-                            price,
-                            entry_order.side,
-                        );
-                        entry_levels.insert(symbol.clone(), (stop, target));
-                        if self.config.backtest.use_t1_execution {
+                        SizedOrder::Exit(order) => order,
+                        SizedOrder::Rejected(reason) => {
                             tracing::debug!(
-                                "{} {} ENTRY LEVELS PRE-CACHED at signal: stop={:.4} target={:.4}",
+                                "{} {} Order rejected: {:?}",
                                 candle.datetime.format("%Y-%m-%d"),
                                 symbol,
-                                stop,
-                                target
+                                reason
                             );
+                            continue;
                         }
-
-                        entry_order
-                    } else {
-                        // Exit or grid order - use strategy's quantity as-is
-                        order
                     };
 
                     // For T+1 mode: Queue market ENTRY orders for next bar's OPEN execution
@@ -910,11 +883,7 @@ impl Backtester {
                                     "SELL"
                                 },
                                 symbol,
-                                if is_entry_order {
-                                    " (ENTRY)"
-                                } else {
-                                    " (EXIT)"
-                                }
+                                if !has_position { " (ENTRY)" } else { " (EXIT)" }
                             );
                         }
                         continue;
@@ -1047,7 +1016,7 @@ impl Backtester {
                                 symbol,
                                 final_order.limit_price.map(|p| p.to_f64()).unwrap_or(price),
                                 final_order.quantity.to_f64(),
-                                if is_entry_order {
+                                if !has_position {
                                     "(ENTRY)"
                                 } else {
                                     "(EXIT/GRID)"

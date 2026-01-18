@@ -24,7 +24,9 @@ use crypto_strategies::coindcx::{
     ClientConfig, CoinDCXClient, OrderRequest as CoinDCXOrderRequest, OrderSide as CoinDCXOrderSide,
 };
 use crypto_strategies::multi_timeframe::{MultiTimeframeCandles, MultiTimeframeData};
-use crypto_strategies::oms::{ExecutionEngine, Fill, OrderBook, PositionManager, StrategyContext};
+use crypto_strategies::oms::{
+    size_order, ExecutionEngine, Fill, OrderBook, PositionManager, SizedOrder, StrategyContext,
+};
 use crypto_strategies::risk::RiskManager;
 use crypto_strategies::state_manager::{
     create_state_manager, Checkpoint, PendingOrder, Position as StatePosition, SqliteStateManager,
@@ -460,16 +462,17 @@ impl LiveTrader {
             }
 
             // Safe access - we checked is_empty above
-            let first_ts = candles.first().map(|c| c.datetime);
-            let last_ts = candles.last().map(|c| c.datetime);
+            // Note: CoinDCX returns candles newest-first, so last() is oldest
+            let newest_ts = candles.first().map(|c| c.datetime);
+            let oldest_ts = candles.last().map(|c| c.datetime);
 
-            if let (Some(first), Some(last)) = (first_ts, last_ts) {
+            if let (Some(oldest), Some(newest)) = (oldest_ts, newest_ts) {
                 info!(
                     "  ✓ {} candles: {} bars ({} to {}) [{} μs]",
                     tf,
                     candles.len(),
-                    first.format("%Y-%m-%d %H:%M"),
-                    last.format("%Y-%m-%d %H:%M"),
+                    oldest.format("%Y-%m-%d %H:%M"),
+                    newest.format("%Y-%m-%d %H:%M"),
                     tf_start.elapsed().as_micros()
                 );
             }
@@ -541,8 +544,27 @@ impl LiveTrader {
         info!("⏱️  Polling interval: {} seconds", poll_secs);
         let mut ticker = interval(Duration::from_secs(poll_secs));
 
+        // Create a short interval for shutdown checks during long waits
+        let mut shutdown_check = interval(Duration::from_secs(1));
+
         while !shutdown.load(Ordering::Relaxed) {
-            ticker.tick().await;
+            // Use select! to allow shutdown to interrupt long tick waits
+            tokio::select! {
+                biased;  // Prefer shutdown check over ticker
+                _ = shutdown_check.tick() => {
+                    if shutdown.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    continue;  // Not time for a cycle yet, keep waiting
+                }
+                _ = ticker.tick() => {}
+            }
+
+            // Check shutdown again after waking
+            if shutdown.load(Ordering::Relaxed) {
+                break;
+            }
+
             let cycle_start = Instant::now();
 
             self.cycle_count += 1;
@@ -986,25 +1008,62 @@ impl LiveTrader {
             );
         }
 
-        // Step 4: Validate and place orders
+        // Step 4: Validate and place orders using shared size_order function
+        // This ensures live trading uses IDENTICAL position sizing logic as backtest
+        // Strategies return OrderRequest with quantity=1.0 as a "unit signal"
+        // The shared size_order function calculates actual position size based on:
+        //   - Available capital
+        //   - Risk per trade (stop distance)
+        //   - Portfolio heat (existing positions)
+        //   - Regime score (market conditions)
+        //   - Current drawdown
         let mut placed_count = 0;
 
         for req in requests {
-            if self.risk_manager.should_halt_trading() {
-                warn!("│  ⛔ Trading halted by risk manager - skipping order");
-                break;
-            }
+            // Collect position data fresh for each order to avoid borrow conflicts
+            let has_position = self.position_manager.get_position(&req.symbol).is_some();
+            let position_count = self.position_manager.open_position_count();
+            let all_positions: Vec<&crypto_strategies::oms::types::Position> = self
+                .position_manager
+                .get_all_positions()
+                .map(|(_, p)| p)
+                .collect();
 
-            let pos_count = self.position_manager.open_position_count();
-            if !self.risk_manager.can_open_position_count(pos_count) {
-                warn!(
-                    "│  ⛔ Max positions reached ({}) - skipping order",
-                    pos_count
-                );
-                continue;
-            }
-
-            let order = req.to_order();
+            // Use shared size_order function (same as backtest)
+            let order = match size_order(
+                &req,
+                candles,
+                has_position,
+                position_count,
+                &all_positions,
+                &self.risk_manager,
+                self.strategy.as_ref(),
+            ) {
+                SizedOrder::Entry {
+                    order,
+                    stop_price,
+                    target_price,
+                } => {
+                    // Cache entry levels at SIGNAL time for portfolio heat calculation
+                    self.entry_levels
+                        .insert(req.symbol.clone(), (stop_price, target_price));
+                    debug!(
+                        "│  📍 Entry levels cached for {}: stop={:.2}, target={:.2}",
+                        req.symbol, stop_price, target_price
+                    );
+                    info!(
+                        "│  📊 Position size: {:.6} @ {:.2}",
+                        order.quantity.to_f64(),
+                        candles.last().map(|c| c.close).unwrap_or(0.0)
+                    );
+                    order
+                }
+                SizedOrder::Exit(order) => order,
+                SizedOrder::Rejected(reason) => {
+                    debug!("│  ⚠️  Order for {} rejected: {:?}", req.symbol, reason);
+                    continue;
+                }
+            };
 
             if self.paper_mode {
                 let order_start = Instant::now();

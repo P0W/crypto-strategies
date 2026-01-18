@@ -450,7 +450,14 @@ impl Default for Money {
 
 impl fmt::Display for Money {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        // Respect precision and width specifiers by converting to f64
+        let value = self.to_f64();
+        match (f.precision(), f.width()) {
+            (Some(prec), Some(width)) => write!(f, "{:width$.prec$}", value),
+            (Some(prec), None) => write!(f, "{:.prec$}", value),
+            (None, Some(width)) => write!(f, "{:width$}", value),
+            (None, None) => write!(f, "{}", self.0),
+        }
     }
 }
 
@@ -617,5 +624,21 @@ mod money_tests {
         let json = serde_json::to_string(&money).unwrap();
         let parsed: Money = serde_json::from_str(&json).unwrap();
         assert_eq!(money, parsed);
+    }
+
+    #[test]
+    fn test_money_display_precision() {
+        let money = Money::from_f64(123.456789);
+
+        // Default display (no precision)
+        assert_eq!(format!("{}", money), "123.456789");
+
+        // With precision
+        assert_eq!(format!("{:.2}", money), "123.46");
+        assert_eq!(format!("{:.4}", money), "123.4568");
+        assert_eq!(format!("{:.0}", money), "123");
+
+        // With width and precision
+        assert_eq!(format!("{:10.2}", money), "    123.46");
     }
 }
