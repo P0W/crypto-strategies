@@ -236,7 +236,11 @@ mod tests {
         );
         grid.insert(
             "stop_atr".to_string(),
-            vec![serde_json::json!(1.5), serde_json::json!(2.0), serde_json::json!(2.5)],
+            vec![
+                serde_json::json!(1.5),
+                serde_json::json!(2.0),
+                serde_json::json!(2.5),
+            ],
         );
 
         let config = create_test_config(Some(grid));
@@ -278,7 +282,11 @@ mod tests {
         let mut grid = HashMap::new();
         grid.insert(
             "atr_period".to_string(),
-            vec![serde_json::json!(10), serde_json::json!(14), serde_json::json!(20)],
+            vec![
+                serde_json::json!(10),
+                serde_json::json!(14),
+                serde_json::json!(20),
+            ],
         );
 
         let config = create_test_config(Some(grid));
@@ -294,7 +302,11 @@ mod tests {
         );
         grid.insert(
             "stop_atr".to_string(),
-            vec![serde_json::json!(1.5), serde_json::json!(2.0), serde_json::json!(2.5)],
+            vec![
+                serde_json::json!(1.5),
+                serde_json::json!(2.0),
+                serde_json::json!(2.5),
+            ],
         );
         grid.insert(
             "target_atr".to_string(),

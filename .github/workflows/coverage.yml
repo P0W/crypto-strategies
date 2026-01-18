@@ -19,7 +19,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-Cinstrument-coverage"
-  LLVM_PROFILE_FILE: "coverage-%p-%m.profraw"
+  # Use absolute path pattern to ensure profraw files are collected in one place
+  LLVM_PROFILE_FILE: "${{ github.workspace }}/coverage/coverage-%p-%m.profraw"
 
 jobs:
   coverage:
@@ -27,7 +28,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
@@ -36,6 +37,9 @@ jobs:
     - name: Install grcov
       run: |
         curl -L https://github.com/mozilla/grcov/releases/latest/download/grcov-x86_64-unknown-linux-gnu.tar.bz2 | tar jxf -
+
+    - name: Create coverage directory
+      run: mkdir -p coverage
 
     - name: Build
       run: cargo build --verbose
@@ -50,6 +54,7 @@ jobs:
           "configs/sample_config.json"
           "configs/momentum_scalper_config.json"
           "configs/quick_flip_config.json"
+          "configs/regime_grid_config.json"
           "configs/range_breakout_config.json"
           "configs/volatility_regime_config.json"
           "configs/volatility_regime_4h_config.json"
@@ -58,19 +63,19 @@ jobs:
         # Run backtest for each config
         for config in "${configs[@]}"; do
           echo "Running backtest for $config"
-          
+
           # Standard run
           cargo run -- backtest --config "$config"
-          
+
           # Run with T+1 execution
           cargo run -- backtest --config "$config" --use-t1-execution
-          
+
           # Run with no risk limits
           cargo run -- backtest --config "$config" --no-risk-limits
-          
+
           # Run with reduced capital
           cargo run -- backtest --config "$config" --capital 50000
-          
+
           # Run with date range (using a range likely to have data if data exists)
           # We use || true to ignore errors if data is missing for these dates
           cargo run -- backtest --config "$config" --start 2024-01-01 --end 2024-03-01 || true
@@ -78,40 +83,61 @@ jobs:
 
     - name: Run Optimization
       run: |
-        # Define configs to run explicitly
+        # Define configs to run explicitly - use non-regime configs for speed
         configs=(
           "configs/sample_config.json"
           "configs/momentum_scalper_config.json"
           "configs/quick_flip_config.json"
           "configs/range_breakout_config.json"
-          "configs/regime_grid_config.json"
-          "configs/volatility_regime_config.json"
-          "configs/volatility_regime_4h_config.json"
         )
 
-        # Run optimization for non-regime configs
+        # Run optimization for each config
         for config in "${configs[@]}"; do
-          # Exclude regime strategies (too large/slow)
-          if grep -q "regime" "$config"; then
-            echo "Skipping optimization for $config (regime strategy)"
-            continue
-          fi
-          
           echo "Running optimization for $config"
-          
+
           # Basic optimization run (limit top results for speed)
           cargo run -- optimize --config "$config" --top 1 --no-update
-          
-          # Sequential run
+
+          # Sequential run (exercises optimize_sequential code path)
           cargo run -- optimize --config "$config" --top 1 --sequential --no-update
-          
+
           # With generic coins (if applicable, might fail if data missing, so we use || true)
           cargo run -- optimize --config "$config" --top 1 --coins "BTC,ETH" --no-update || true
         done
 
+        # Run regime configs with minimal grid to get coverage without taking too long
+        echo "Running minimal optimization for regime configs"
+        cargo run -- optimize --config "configs/volatility_regime_config.json" --top 1 --no-update || true
+        cargo run -- optimize --config "configs/regime_grid_config.json" --top 1 --no-update || true
+
+    - name: Debug - Show profraw files
+      run: |
+        echo "=== Profraw files in coverage directory ==="
+        ls -la coverage/ || echo "No coverage directory"
+        echo ""
+        echo "=== Count of profraw files ==="
+        find . -name "*.profraw" 2>/dev/null | wc -l
+        echo ""
+        echo "=== All profraw file locations ==="
+        find . -name "*.profraw" 2>/dev/null | head -20
+
     - name: Generate Coverage Report
       run: |
-        ./grcov . -s . --binary-path ./target/debug/ -t lcov --branch --ignore-not-existing --ignore "/*" --ignore "tests/*" -o lcov.info
+        # Find all profraw files and generate coverage
+        ./grcov coverage/ \
+          -s . \
+          --binary-path ./target/debug/ \
+          -t lcov \
+          --branch \
+          --ignore-not-existing \
+          --ignore "/*" \
+          --ignore "tests/*" \
+          --ignore "target/*" \
+          -o lcov.info
+
+        echo "=== Coverage report summary ==="
+        wc -l lcov.info
+        head -50 lcov.info
 
     - name: Upload to Codecov
       uses: codecov/codecov-action@v4

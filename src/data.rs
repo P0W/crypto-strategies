@@ -1549,7 +1549,7 @@ mod tests {
         // Check that ETH is listed as invalid but BTCINR is not in the invalid list
         // Note: The message contains BTCINR as an example, so we check the debug format
         assert!(err_msg.contains(r#""ETH""#)); // ETH should be in the invalid list
-        // The actual invalid symbols list is formatted as ["ETH"], not containing BTCINR
+                                               // The actual invalid symbols list is formatted as ["ETH"], not containing BTCINR
         assert!(err_msg.starts_with("Invalid symbol names: [\"ETH\"]"));
     }
 
@@ -1648,7 +1648,9 @@ mod tests {
         let filtered = filter_candles_by_date(candles, Some(start), Some(end));
 
         assert_eq!(filtered.len(), 5);
-        assert!(filtered.iter().all(|c| c.datetime >= start && c.datetime <= end));
+        assert!(filtered
+            .iter()
+            .all(|c| c.datetime >= start && c.datetime <= end));
     }
 
     // ==================== CandleCache Tests ====================
@@ -1826,7 +1828,10 @@ mod tests {
 
         let result = validate_candles(&candles);
         assert!(!result.is_valid());
-        assert!(result.errors.iter().any(|e| e.contains("high") && e.contains("low")));
+        assert!(result
+            .errors
+            .iter()
+            .any(|e| e.contains("high") && e.contains("low")));
     }
 
     #[test]
@@ -1993,7 +1998,11 @@ mod tests {
         let data_dir = temp_dir.path();
 
         // Create one file
-        std::fs::write(data_dir.join("BTCINR_1d.csv"), "datetime,open,high,low,close,volume").unwrap();
+        std::fs::write(
+            data_dir.join("BTCINR_1d.csv"),
+            "datetime,open,high,low,close,volume",
+        )
+        .unwrap();
 
         let symbols = vec![Symbol::new("BTCINR"), Symbol::new("ETHINR")];
         let timeframes = vec!["1d".to_string()];
@@ -2012,8 +2021,16 @@ mod tests {
         let data_dir = temp_dir.path();
 
         // Create all files
-        std::fs::write(data_dir.join("BTCINR_1d.csv"), "datetime,open,high,low,close,volume").unwrap();
-        std::fs::write(data_dir.join("ETHINR_1d.csv"), "datetime,open,high,low,close,volume").unwrap();
+        std::fs::write(
+            data_dir.join("BTCINR_1d.csv"),
+            "datetime,open,high,low,close,volume",
+        )
+        .unwrap();
+        std::fs::write(
+            data_dir.join("ETHINR_1d.csv"),
+            "datetime,open,high,low,close,volume",
+        )
+        .unwrap();
 
         let symbols = vec![Symbol::new("BTCINR"), Symbol::new("ETHINR")];
         let timeframes = vec!["1d".to_string()];

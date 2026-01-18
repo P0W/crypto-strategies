@@ -234,7 +234,15 @@ mod tests {
     use chrono::{Duration, TimeZone};
 
     fn create_test_candle(datetime: DateTime<Utc>, close: f64) -> Candle {
-        Candle::new(datetime, close - 5.0, close + 5.0, close - 10.0, close, 1000.0).unwrap()
+        Candle::new(
+            datetime,
+            close - 5.0,
+            close + 5.0,
+            close - 10.0,
+            close,
+            1000.0,
+        )
+        .unwrap()
     }
 
     fn create_test_candles(base_time: DateTime<Utc>, count: usize) -> Vec<Candle> {
