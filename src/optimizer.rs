@@ -483,7 +483,7 @@ mod tests {
         assert!(mtf_data.contains_key(&Symbol::new("SOLINR")));
 
         // Check each has correct timeframe
-        for (_, mtf) in &mtf_data {
+        for mtf in mtf_data.values() {
             assert_eq!(mtf.primary_timeframe(), "4h");
             assert!(mtf.has_timeframe("4h"));
         }
