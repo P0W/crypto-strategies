@@ -32,6 +32,31 @@ use crypto_strategies::state_manager::{
 use crypto_strategies::strategies::{self, Strategy};
 use crypto_strategies::{Config, Money, Side, Symbol, Trade};
 
+// ============================================================================
+// Configuration Constants
+// ============================================================================
+
+/// Interval between balance syncs from exchange (seconds)
+const BALANCE_SYNC_INTERVAL_SECS: u64 = 300;
+
+/// Warn if order is pending longer than this (seconds)
+const ORDER_TIMEOUT_WARNING_SECS: u64 = 300;
+
+/// Tolerance for position quantity comparison (floating point)
+const POSITION_QTY_TOLERANCE: f64 = 1e-8;
+
+/// Warn if cycle latency exceeds this (microseconds) - 5 seconds
+const HIGH_CYCLE_LATENCY_THRESHOLD_US: u64 = 5_000_000;
+
+/// Save checkpoint every N cycles
+const CHECKPOINT_INTERVAL_CYCLES: u32 = 10;
+
+/// Log performance metrics every N seconds
+const METRICS_LOG_INTERVAL_SECS: u64 = 300;
+
+/// API timeout for exchange operations (seconds)
+const EXCHANGE_API_TIMEOUT_SECS: u64 = 10;
+
 /// Performance metrics for HFT monitoring
 #[derive(Debug, Default)]
 struct PerformanceMetrics {
@@ -206,7 +231,7 @@ impl LiveTrader {
         let client_config = ClientConfig::default()
             .with_max_retries(3)
             .with_rate_limit(config.exchange.rate_limit as usize)
-            .with_timeout(Duration::from_secs(30));
+            .with_timeout(Duration::from_secs(EXCHANGE_API_TIMEOUT_SECS));
 
         let exchange = CoinDCXClient::with_config(api_key, api_secret, client_config);
         info!(
@@ -478,9 +503,9 @@ impl LiveTrader {
 
         // Bootstrap all symbols
         let bootstrap_start = Instant::now();
-        for sym in &self.config.trading.symbols.clone() {
-            let symbol = Symbol::new(sym);
-            self.bootstrap_candles(&symbol).await?;
+        let symbols: Vec<Symbol> = self.config.trading.symbols.iter().map(Symbol::new).collect();
+        for symbol in &symbols {
+            self.bootstrap_candles(symbol).await?;
             self.orderbooks.insert(symbol.clone(), OrderBook::new());
         }
         info!(
@@ -532,13 +557,12 @@ impl LiveTrader {
             );
 
             // Warn if cycle latency is high
-            if cycle_latency_us > 5_000_000 {
-                // > 5ms
+            if cycle_latency_us > HIGH_CYCLE_LATENCY_THRESHOLD_US {
                 warn!("⚠️  High cycle latency: {} ms", cycle_latency_us / 1000);
             }
 
             // Periodic checkpoint
-            if self.cycle_count.is_multiple_of(10) {
+            if self.cycle_count.is_multiple_of(CHECKPOINT_INTERVAL_CYCLES) {
                 let checkpoint_start = Instant::now();
                 if let Err(e) = self.save_checkpoint() {
                     error!("Failed to save checkpoint: {}", e);
@@ -551,7 +575,7 @@ impl LiveTrader {
             }
 
             // Log performance metrics every 5 minutes
-            if self.last_metrics_log.elapsed() > Duration::from_secs(300) {
+            if self.last_metrics_log.elapsed() > Duration::from_secs(METRICS_LOG_INTERVAL_SECS) {
                 self.metrics.log_summary();
                 self.log_portfolio_status();
                 self.last_metrics_log = Instant::now();
@@ -577,7 +601,7 @@ impl LiveTrader {
             // Periodic balance sync (every 5 minutes)
             let should_sync = self
                 .last_balance_sync
-                .is_none_or(|t| t.elapsed() > Duration::from_secs(300));
+                .is_none_or(|t| t.elapsed() > Duration::from_secs(BALANCE_SYNC_INTERVAL_SECS));
             if should_sync {
                 if let Err(e) = self.sync_balances().await {
                     warn!("│  ⚠️  Balance sync failed: {}", e);
@@ -585,11 +609,10 @@ impl LiveTrader {
             }
         }
 
-        for sym in &self.config.trading.symbols.clone() {
-            let symbol = Symbol::new(sym);
-
+        let symbols: Vec<Symbol> = self.config.trading.symbols.iter().map(Symbol::new).collect();
+        for symbol in &symbols {
             let update_start = Instant::now();
-            if let Err(e) = self.update_candles(&symbol).await {
+            if let Err(e) = self.update_candles(symbol).await {
                 warn!("│  ⚠️  Candle update failed for {}: {}", symbol, e);
                 continue;
             }
@@ -600,7 +623,7 @@ impl LiveTrader {
             );
 
             let process_start = Instant::now();
-            if let Err(e) = self.process_symbol(&symbol).await {
+            if let Err(e) = self.process_symbol(symbol).await {
                 error!("│  ❌ Symbol processing failed for {}: {}", symbol, e);
             } else {
                 debug!(
@@ -616,7 +639,7 @@ impl LiveTrader {
     async fn update_candles(&mut self, symbol: &Symbol) -> Result<()> {
         use crypto_strategies::Candle;
 
-        for tf in &self.required_timeframes.clone() {
+        for tf in &self.required_timeframes {
             if let Ok(raw_candles) = self
                 .exchange
                 .get_candles(symbol.as_str(), tf, Some(2))
@@ -677,8 +700,12 @@ impl LiveTrader {
             }
         };
 
+        // Collect orders for live exchange submission (used by both exit and entry orders)
+        let mut live_orders: Vec<crypto_strategies::oms::Order> = Vec::new();
+
         // Step 1: Check fills (microsecond precision)
         let fill_check_start = Instant::now();
+        let fills_before = self.metrics.total_fills;
         let mut orders: Vec<_> = orderbook.get_all_orders().into_iter().cloned().collect();
         let initial_order_count = orders.len();
 
@@ -735,8 +762,7 @@ impl LiveTrader {
             }
         }
 
-        let fills_detected =
-            self.metrics.total_fills - (self.metrics.total_fills - orders.len() as u64);
+        let fills_detected = self.metrics.total_fills - fills_before;
         if fills_detected > 0 {
             debug!(
                 "│  ✓ Fill detection: {} orders checked, {} filled ({} μs)",
@@ -785,10 +811,12 @@ impl LiveTrader {
                 .copied()
                 .unwrap_or(stop_price);
 
-            // Check stop/target hit
+            // Check stop/target hit using intracandle prices (not close)
+            // For longs: stop triggers if low breaches stop, target if high reaches target
+            // For shorts: stop triggers if high breaches stop, target if low reaches target
             let stopped = match pos.side {
-                Side::Buy => price <= active_stop,
-                Side::Sell => price >= active_stop,
+                Side::Buy => current_candle.low <= active_stop,
+                Side::Sell => current_candle.high >= active_stop,
             };
 
             let target_hit = match pos.side {
@@ -821,9 +849,11 @@ impl LiveTrader {
                     ),
                 };
 
-                // Add to orderbook for execution
                 let order = exit_order.to_order();
                 let exit_side = order.side;
+
+                // Add to orderbook for paper mode fill simulation
+                // In live mode, we'll also send to exchange below
                 orderbook.add_order(order.clone());
 
                 info!(
@@ -835,6 +865,11 @@ impl LiveTrader {
                     },
                     symbol
                 );
+
+                // Collect for live exchange submission (processed after orderbook borrow ends)
+                if !self.paper_mode {
+                    live_orders.push(order);
+                }
 
                 // Clear cached levels for this position
                 self.entry_levels.remove(symbol);
@@ -921,9 +956,7 @@ impl LiveTrader {
         }
 
         // Step 4: Validate and place orders
-        // Collect live orders separately to avoid borrow checker issues
         let mut placed_count = 0;
-        let mut live_orders: Vec<crypto_strategies::oms::Order> = Vec::new();
 
         for req in requests {
             if self.risk_manager.should_halt_trading() {
@@ -1032,7 +1065,11 @@ impl LiveTrader {
             Some(price) => CoinDCXOrderRequest::limit(side, market, quantity, price.to_f64()),
             None => CoinDCXOrderRequest::market(side, market, quantity),
         }
-        .with_client_order_id(format!("strat_{}", order.id));
+        .with_client_order_id(format!(
+            "strat_{}_{}",
+            Utc::now().timestamp_millis(),
+            order.id
+        ));
 
         info!(
             "│  📤 Sending to exchange: {} {} {:.8} {}",
@@ -1196,9 +1233,9 @@ impl LiveTrader {
                             exchange_id, remaining, age_secs
                         );
                     } else if status_str == "open" || status_str == "init" {
-                        // Still pending - check for timeout (warn if > 5 min)
+                        // Still pending - check for timeout
                         let age_secs = pending.submitted_at.elapsed().as_secs();
-                        if age_secs > 300 {
+                        if age_secs > ORDER_TIMEOUT_WARNING_SECS {
                             warn!(
                                 "│  ⚠️  Order {} pending for {}s: {} {} {:.8} @ {}",
                                 exchange_id,
@@ -1259,17 +1296,19 @@ impl LiveTrader {
         self.sync_balances().await?;
 
         // Check each symbol we trade
-        for sym in &self.config.trading.symbols.clone() {
+        let symbols_with_base: Vec<(Symbol, String)> = self.config.trading.symbols.iter().map(|sym| {
             let symbol = Symbol::new(sym);
-
-            // Extract base currency (e.g., "BTC" from "BTCINR")
             let base_currency = if sym.ends_with("INR") {
-                &sym[..sym.len() - 3]
+                sym[..sym.len() - 3].to_string()
             } else if sym.ends_with("USDT") {
-                &sym[..sym.len() - 4]
+                sym[..sym.len() - 4].to_string()
             } else {
-                sym.as_str()
+                sym.clone()
             };
+            (symbol, base_currency)
+        }).collect();
+
+        for (symbol, base_currency) in &symbols_with_base {
 
             // Check exchange balance
             let exchange_qty = self
@@ -1281,14 +1320,13 @@ impl LiveTrader {
             // Check local position
             let local_qty = self
                 .position_manager
-                .get_position(&symbol)
+                .get_position(symbol)
                 .map(|p| p.quantity.to_f64())
                 .unwrap_or(0.0);
 
-            // Compare
+            // Compare with tolerance for float comparison
             let diff = (exchange_qty - local_qty).abs();
-            if diff > 0.00000001 {
-                // Tolerance for float comparison
+            if diff > POSITION_QTY_TOLERANCE {
                 warn!(
                     "│  ⚠️  Position mismatch for {}: exchange={:.8}, local={:.8}",
                     symbol, exchange_qty, local_qty
@@ -1298,9 +1336,9 @@ impl LiveTrader {
                     warn!("│     → Exchange has position, local doesn't - may need manual sync");
                 } else if local_qty > 0.0 && exchange_qty == 0.0 {
                     warn!("│     → Local has position, exchange doesn't - clearing local state");
-                    self.position_manager.close_position(&symbol);
-                    self.entry_levels.remove(&symbol);
-                    self.trailing_stops.remove(&symbol);
+                    self.position_manager.close_position(symbol);
+                    self.entry_levels.remove(symbol);
+                    self.trailing_stops.remove(symbol);
                 }
             } else if exchange_qty > 0.0 {
                 info!("│  ✓ {} position matches: {:.8}", symbol, exchange_qty);
@@ -1308,7 +1346,7 @@ impl LiveTrader {
         }
 
         // Check for active orders on exchange
-        for sym in &self.config.trading.symbols.clone() {
+        for sym in &self.config.trading.symbols {
             match self.exchange.get_active_orders(sym).await {
                 Ok(orders) if !orders.is_empty() => {
                     info!(
