@@ -25,6 +25,12 @@ pub struct StreakAnalysis {
 }
 
 impl StreakAnalysis {
+    /// Returns (max_win_streak, max_loss_streak) for PerformanceMetrics
+    #[inline]
+    pub fn max_streaks(&self) -> (usize, usize) {
+        (self.max_win_streak, self.max_loss_streak)
+    }
+
     /// Create streak analysis from a list of trades
     pub fn from_trades(trades: &[Trade]) -> Self {
         if trades.is_empty() {

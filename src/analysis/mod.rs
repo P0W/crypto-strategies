@@ -25,3 +25,13 @@ mod streaks;
 pub use day_of_week::DayOfWeekAnalysis;
 pub use monthly::{MonthlyPnL, MonthlyPnLMatrix, YearMonth};
 pub use streaks::StreakAnalysis;
+
+/// Calculate win rate as percentage (0-100)
+#[inline]
+pub fn win_rate(winners: usize, total: usize) -> f64 {
+    if total > 0 {
+        (winners as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    }
+}

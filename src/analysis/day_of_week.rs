@@ -60,13 +60,7 @@ impl DayOfWeekAnalysis {
     pub fn get_win_rate(&self, day_idx: usize) -> f64 {
         self.data
             .get(day_idx)
-            .map(|d| {
-                if d.trade_count > 0 {
-                    (d.wins as f64 / d.trade_count as f64) * 100.0
-                } else {
-                    0.0
-                }
-            })
+            .map(|d| super::win_rate(d.wins, d.trade_count))
             .unwrap_or(0.0)
     }
 
@@ -121,7 +115,7 @@ impl DayOfWeekAnalysis {
                 continue;
             }
 
-            let win_rate = (stats.wins as f64 / stats.trade_count as f64) * 100.0;
+            let win_rate = super::win_rate(stats.wins, stats.trade_count);
             let avg_pnl = stats.total_pnl / stats.trade_count as f64;
             let color = if stats.total_pnl >= 0.0 { GREEN } else { RED };
 

@@ -16,6 +16,7 @@
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
+use crate::analysis::{win_rate, StreakAnalysis};
 use crate::multi_timeframe::MultiTimeframeCandles;
 use crate::oms::{
     size_order, ExecutionEngine, Order, OrderBook, Position, PositionManager, SizedOrder,
@@ -1121,11 +1122,7 @@ impl Backtester {
         let winners: Vec<&Trade> = trades.iter().filter(|t| t.net_pnl.is_positive()).collect();
         let losers: Vec<&Trade> = trades.iter().filter(|t| !t.net_pnl.is_positive()).collect();
 
-        let win_rate = if !trades.is_empty() {
-            (winners.len() as f64 / trades.len() as f64) * 100.0
-        } else {
-            0.0
-        };
+        let win_rate = win_rate(winners.len(), trades.len());
 
         let total_wins: f64 = winners.iter().map(|t| t.net_pnl.to_f64()).sum();
         let total_losses: f64 = losers.iter().map(|t| t.net_pnl.abs().to_f64()).sum();
@@ -1271,7 +1268,7 @@ impl Backtester {
         let post_tax_return = ((final_equity - initial_capital - tax) / initial_capital) * 100.0;
 
         // Calculate win/loss streaks
-        let (max_win_streak, max_loss_streak) = Self::calculate_streaks(trades);
+        let (max_win_streak, max_loss_streak) = StreakAnalysis::from_trades(trades).max_streaks();
 
         PerformanceMetrics::new(
             total_return,
@@ -1298,31 +1295,5 @@ impl Backtester {
             max_win_streak,
             max_loss_streak,
         )
-    }
-
-    /// Calculate maximum win and loss streaks from trades
-    fn calculate_streaks(trades: &[Trade]) -> (usize, usize) {
-        if trades.is_empty() {
-            return (0, 0);
-        }
-
-        let mut max_win_streak = 0usize;
-        let mut max_loss_streak = 0usize;
-        let mut current_win_streak = 0usize;
-        let mut current_loss_streak = 0usize;
-
-        for trade in trades {
-            if trade.net_pnl.is_positive() {
-                current_win_streak += 1;
-                max_win_streak = max_win_streak.max(current_win_streak);
-                current_loss_streak = 0;
-            } else {
-                current_loss_streak += 1;
-                max_loss_streak = max_loss_streak.max(current_loss_streak);
-                current_win_streak = 0;
-            }
-        }
-
-        (max_win_streak, max_loss_streak)
     }
 }

@@ -38,11 +38,7 @@ impl MonthlyPnL {
             self.losing_trades += 1;
         }
 
-        self.win_rate = if self.trade_count > 0 {
-            (self.winning_trades as f64 / self.trade_count as f64) * 100.0
-        } else {
-            0.0
-        };
+        self.win_rate = super::win_rate(self.winning_trades, self.trade_count);
     }
 }
 
