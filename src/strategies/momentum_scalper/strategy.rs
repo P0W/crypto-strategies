@@ -14,9 +14,11 @@
 //! 4. Exit on EMA cross back (fast below slow)
 //! 5. Max hold bars exceeded
 
-use crate::indicators::{adx, atr, ema, macd};
+use crate::indicators::{adx, ema, macd};
 use crate::oms::{Fill, OrderRequest, StrategyContext};
-use crate::strategies::Strategy;
+use crate::strategies::{
+    atr_stop_loss, atr_take_profit, current_atr_or_default, OhlcVectors, Strategy,
+};
 use crate::{Candle, Position, Side, Symbol, Trade};
 use std::collections::HashMap;
 
@@ -36,20 +38,18 @@ struct Indicators {
 
 impl Indicators {
     fn new(candles: &[Candle], config: &MomentumScalperConfig) -> Self {
-        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
-        let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
-        let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
+        let ohlc = OhlcVectors::from_candles(candles);
 
         // Batch EMA calculations
-        let ema_fast = ema(&close, config.ema_fast);
-        let ema_slow_vals = ema(&close, config.ema_slow);
+        let ema_fast = ema(&ohlc.close, config.ema_fast);
+        let ema_slow_vals = ema(&ohlc.close, config.ema_slow);
 
         // Batch ADX calculation
-        let adx_values = adx(&high, &low, &close, config.adx_period);
+        let adx_values = adx(&ohlc.high, &ohlc.low, &ohlc.close, config.adx_period);
 
         // Batch MACD calculation
         let (macd_line, signal_line, histogram) = macd(
-            &close,
+            &ohlc.close,
             config.macd_fast,
             config.macd_slow,
             config.macd_signal,
@@ -71,14 +71,6 @@ impl Indicators {
             macd_curr: macd_line.last().and_then(|&x| x).unwrap_or(0.0),
             signal_curr: signal_line.last().and_then(|&x| x).unwrap_or(0.0),
         }
-    }
-
-    /// Calculate ATR only (for stop/target/trailing methods)
-    fn atr_only(candles: &[Candle], atr_period: usize) -> Option<f64> {
-        let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
-        let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
-        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
-        atr(&high, &low, &close, atr_period).last().and_then(|&x| x)
     }
 }
 
@@ -290,25 +282,13 @@ impl Strategy for MomentumScalperStrategy {
     }
 
     fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
-        let current_atr =
-            Indicators::atr_only(candles, self.config.atr_period).unwrap_or(entry_price * 0.01);
-        let stop_distance = self.config.stop_atr_multiple * current_atr;
-
-        match side {
-            Side::Buy => entry_price - stop_distance,
-            Side::Sell => entry_price + stop_distance,
-        }
+        let atr = current_atr_or_default(candles, self.config.atr_period, entry_price, 0.01);
+        atr_stop_loss(entry_price, atr, self.config.stop_atr_multiple, side)
     }
 
     fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
-        let current_atr =
-            Indicators::atr_only(candles, self.config.atr_period).unwrap_or(entry_price * 0.01);
-        let target_distance = self.config.target_atr_multiple * current_atr;
-
-        match side {
-            Side::Buy => entry_price + target_distance,
-            Side::Sell => entry_price - target_distance,
-        }
+        let atr = current_atr_or_default(candles, self.config.atr_period, entry_price, 0.01);
+        atr_take_profit(entry_price, atr, self.config.target_atr_multiple, side)
     }
 
     fn update_trailing_stop(
@@ -317,18 +297,17 @@ impl Strategy for MomentumScalperStrategy {
         current_price: f64,
         candles: &[Candle],
     ) -> Option<f64> {
-        let current_atr =
-            Indicators::atr_only(candles, self.config.atr_period).unwrap_or(current_price * 0.01);
+        let atr = current_atr_or_default(candles, self.config.atr_period, current_price, 0.01);
 
         let entry_price = position.average_entry_price.to_f64();
-        let profit_atr = if current_atr > 0.0 {
-            (current_price - entry_price) / current_atr
+        let profit_atr = if atr > 0.0 {
+            (current_price - entry_price) / atr
         } else {
             0.0
         };
 
         if profit_atr >= self.config.trailing_activation {
-            let new_stop = current_price - self.config.trailing_atr_multiple * current_atr;
+            let new_stop = current_price - self.config.trailing_atr_multiple * atr;
             Some(new_stop)
         } else {
             None

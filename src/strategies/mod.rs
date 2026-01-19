@@ -10,11 +10,17 @@
 //! - range_breakout: Range breakout strategy
 //! - regime_grid: Grid trading with regime detection
 
+pub mod common;
 pub mod momentum_scalper;
 pub mod quick_flip;
 pub mod range_breakout;
 pub mod regime_grid;
 pub mod volatility_regime;
+
+pub use common::{
+    atr_stop_loss, atr_take_profit, current_atr, current_atr_or_default, CooldownManager,
+    OhlcVectors,
+};
 
 use crate::oms::{Fill, Order, OrderRequest, Position, StrategyContext};
 use crate::{Candle, Config, Side, Trade};

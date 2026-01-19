@@ -320,7 +320,7 @@ async fn main() -> Result<()> {
             source,
         } => {
             let data_source = source.parse().unwrap_or_else(|e| {
-                eprintln!("Warning: {}, using binance", e);
+                tracing::warn!("{}, using binance", e);
                 crypto_strategies::data::DataSource::Binance
             });
             commands::download::run(symbols, timeframes, days, output, data_source)

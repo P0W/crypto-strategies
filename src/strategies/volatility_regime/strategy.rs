@@ -7,7 +7,9 @@
 
 use crate::indicators::{adx, atr, ema};
 use crate::oms::{OrderRequest, StrategyContext};
-use crate::strategies::Strategy;
+use crate::strategies::{
+    atr_stop_loss, atr_take_profit, current_atr_or_default, OhlcVectors, Strategy,
+};
 use crate::{Candle, Position, Side};
 
 use super::config::VolatilityRegimeConfig;
@@ -25,14 +27,12 @@ struct Indicators {
 impl Indicators {
     /// Calculate all indicators once from candle data
     fn new(candles: &[Candle], config: &VolatilityRegimeConfig) -> Self {
-        let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
-        let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
-        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
+        let ohlc = OhlcVectors::from_candles(candles);
 
-        let atr_values = atr(&high, &low, &close, config.atr_period);
-        let ema_fast = ema(&close, config.ema_fast);
-        let ema_slow = ema(&close, config.ema_slow);
-        let adx_values = adx(&high, &low, &close, config.adx_period);
+        let atr_values = atr(&ohlc.high, &ohlc.low, &ohlc.close, config.atr_period);
+        let ema_fast = ema(&ohlc.close, config.ema_fast);
+        let ema_slow = ema(&ohlc.close, config.ema_slow);
+        let adx_values = adx(&ohlc.high, &ohlc.low, &ohlc.close, config.adx_period);
 
         Self {
             current_atr: atr_values.last().and_then(|&x| x),
@@ -41,14 +41,6 @@ impl Indicators {
             current_adx: adx_values.last().and_then(|&x| x),
             atr_values,
         }
-    }
-
-    /// Calculate ATR only (for stop/target/trailing methods)
-    fn atr_only(candles: &[Candle], atr_period: usize) -> Option<f64> {
-        let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
-        let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
-        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
-        atr(&high, &low, &close, atr_period).last().and_then(|&x| x)
     }
 }
 
@@ -215,25 +207,13 @@ impl Strategy for VolatilityRegimeStrategy {
     }
 
     fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
-        let current_atr =
-            Indicators::atr_only(candles, self.config.atr_period).unwrap_or(entry_price * 0.05);
-        let stop_distance = self.config.stop_atr_multiple * current_atr;
-
-        match side {
-            Side::Buy => entry_price - stop_distance,
-            Side::Sell => entry_price + stop_distance,
-        }
+        let atr = current_atr_or_default(candles, self.config.atr_period, entry_price, 0.05);
+        atr_stop_loss(entry_price, atr, self.config.stop_atr_multiple, side)
     }
 
     fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
-        let current_atr =
-            Indicators::atr_only(candles, self.config.atr_period).unwrap_or(entry_price * 0.05);
-        let target_distance = self.config.target_atr_multiple * current_atr;
-
-        match side {
-            Side::Buy => entry_price + target_distance,
-            Side::Sell => entry_price - target_distance,
-        }
+        let atr = current_atr_or_default(candles, self.config.atr_period, entry_price, 0.05);
+        atr_take_profit(entry_price, atr, self.config.target_atr_multiple, side)
     }
 
     fn update_trailing_stop(
@@ -242,10 +222,9 @@ impl Strategy for VolatilityRegimeStrategy {
         current_price: f64,
         candles: &[Candle],
     ) -> Option<f64> {
-        let current_atr =
-            Indicators::atr_only(candles, self.config.atr_period).unwrap_or(current_price * 0.05);
+        let atr = current_atr_or_default(candles, self.config.atr_period, current_price, 0.05);
 
-        if current_atr <= 0.0 {
+        if atr <= 0.0 {
             return None;
         }
 
@@ -253,20 +232,20 @@ impl Strategy for VolatilityRegimeStrategy {
 
         match position.side {
             Side::Buy => {
-                let profit_atr = (current_price - entry_price) / current_atr;
+                let profit_atr = (current_price - entry_price) / atr;
                 if profit_atr >= self.config.trailing_activation {
-                    let new_stop = current_price - self.config.trailing_atr_multiple * current_atr;
-                    let entry_stop = entry_price - self.config.stop_atr_multiple * current_atr;
+                    let new_stop = current_price - self.config.trailing_atr_multiple * atr;
+                    let entry_stop = entry_price - self.config.stop_atr_multiple * atr;
                     Some(new_stop.max(entry_stop))
                 } else {
                     None
                 }
             }
             Side::Sell => {
-                let profit_atr = (entry_price - current_price) / current_atr;
+                let profit_atr = (entry_price - current_price) / atr;
                 if profit_atr >= self.config.trailing_activation {
-                    let new_stop = current_price + self.config.trailing_atr_multiple * current_atr;
-                    let entry_stop = entry_price + self.config.stop_atr_multiple * current_atr;
+                    let new_stop = current_price + self.config.trailing_atr_multiple * atr;
+                    let entry_stop = entry_price + self.config.stop_atr_multiple * atr;
                     Some(new_stop.min(entry_stop))
                 } else {
                     None

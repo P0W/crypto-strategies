@@ -27,15 +27,11 @@ pub struct OptimizationResult {
 }
 
 /// Generic optimizer that works with any strategy
-pub struct Optimizer {
-    _base_config: Config,
-}
+pub struct Optimizer;
 
 impl Optimizer {
-    pub fn new(base_config: Config) -> Self {
-        Optimizer {
-            _base_config: base_config,
-        }
+    pub fn new(_base_config: Config) -> Self {
+        Optimizer
     }
 
     /// Run optimization with MTF data (unified interface)
@@ -289,9 +285,8 @@ mod tests {
     #[test]
     fn test_optimizer_new() {
         let config = create_test_config();
-        let optimizer = Optimizer::new(config);
-        // Optimizer created successfully - the _base_config is stored
-        assert!(std::mem::size_of_val(&optimizer) > 0);
+        let _optimizer = Optimizer::new(config);
+        // Optimizer created successfully
     }
 
     // ==================== sort_results Tests ====================

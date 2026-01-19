@@ -7,9 +7,9 @@
 //! Performance optimized: Indicators are calculated once per signal generation
 //! and reused to avoid O(N²) complexity.
 
-use crate::indicators::{adx, atr, ema, rsi};
+use crate::indicators::{adx, ema, rsi};
 use crate::oms::{OrderRequest, StrategyContext};
-use crate::strategies::Strategy;
+use crate::strategies::{atr_stop_loss, current_atr, OhlcVectors, Strategy};
 use crate::{Candle, Position, Side};
 use chrono::{DateTime, Utc};
 
@@ -27,14 +27,12 @@ struct Indicators {
 impl Indicators {
     /// Calculate all indicators once from candle data
     fn new(candles: &[Candle], config: &RegimeGridConfig) -> Self {
-        let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
-        let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
-        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
+        let ohlc = OhlcVectors::from_candles(candles);
 
-        let ema_short = ema(&close, config.ema_short_period);
-        let ema_long = ema(&close, config.ema_long_period);
-        let adx_values = adx(&high, &low, &close, config.adx_period);
-        let rsi_values = rsi(&close, config.rsi_period);
+        let ema_short = ema(&ohlc.close, config.ema_short_period);
+        let ema_long = ema(&ohlc.close, config.ema_long_period);
+        let adx_values = adx(&ohlc.high, &ohlc.low, &ohlc.close, config.adx_period);
+        let rsi_values = rsi(&ohlc.close, config.rsi_period);
 
         Self {
             current_ema_short: ema_short.last().and_then(|&x| x),
@@ -42,14 +40,6 @@ impl Indicators {
             current_adx: adx_values.last().and_then(|&x| x),
             current_rsi: rsi_values.last().and_then(|&x| x),
         }
-    }
-
-    /// Calculate ATR only (for stop/target/trailing methods and volatility check)
-    fn atr_only(candles: &[Candle], atr_period: usize) -> Option<f64> {
-        let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
-        let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
-        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
-        atr(&high, &low, &close, atr_period).last().and_then(|&x| x)
     }
 }
 use std::sync::RwLock;
@@ -369,7 +359,7 @@ impl Strategy for RegimeGridStrategy {
             Some(c) => c.close,
             None => return orders,
         };
-        if let Some(current_atr) = Indicators::atr_only(ctx.candles, self.config.atr_period_1h) {
+        if let Some(current_atr) = current_atr(ctx.candles, self.config.atr_period_1h) {
             let volatility_ratio = current_atr / current_price;
             if volatility_ratio > self.config.volatility_kill_threshold {
                 tracing::warn!(
@@ -547,14 +537,8 @@ impl Strategy for RegimeGridStrategy {
     }
 
     fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
-        let atr =
-            Indicators::atr_only(candles, self.config.adx_period).unwrap_or(entry_price * 0.02);
-        let stop_distance = atr * self.config.stop_atr_multiple;
-
-        match side {
-            Side::Buy => entry_price - stop_distance,
-            Side::Sell => entry_price + stop_distance,
-        }
+        let atr = current_atr(candles, self.config.adx_period).unwrap_or(entry_price * 0.02);
+        atr_stop_loss(entry_price, atr, self.config.stop_atr_multiple, side)
     }
 
     fn calculate_take_profit(&self, _candles: &[Candle], entry_price: f64, side: Side) -> f64 {
@@ -582,8 +566,7 @@ impl Strategy for RegimeGridStrategy {
             return None;
         }
 
-        let atr =
-            Indicators::atr_only(candles, self.config.adx_period).unwrap_or(current_price * 0.02);
+        let atr = current_atr(candles, self.config.adx_period).unwrap_or(current_price * 0.02);
 
         let trailing_stop = match position.side {
             Side::Buy => current_price - (atr * self.config.trailing_atr_multiple),

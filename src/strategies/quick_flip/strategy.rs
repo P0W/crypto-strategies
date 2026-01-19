@@ -5,30 +5,23 @@
 //! 2. Enter on breakout with optional strong candle filter
 //! 3. ATR-based stop loss and take profit
 
-use crate::indicators::atr;
 use crate::oms::{Fill, OrderRequest, StrategyContext};
-use crate::strategies::Strategy;
-use crate::{Candle, Position, Side, Symbol, Trade};
-use std::collections::HashMap;
+use crate::strategies::{atr_stop_loss, atr_take_profit, current_atr, CooldownManager, Strategy};
+use crate::{Candle, Position, Side, Trade};
 
 use super::config::QuickFlipConfig;
 
 pub struct QuickFlipStrategy {
     config: QuickFlipConfig,
-    /// Per-symbol cooldown counters
-    cooldown_counters: HashMap<Symbol, usize>,
+    cooldown: CooldownManager,
 }
 
 impl QuickFlipStrategy {
     pub fn new(config: QuickFlipConfig) -> Self {
         Self {
             config,
-            cooldown_counters: HashMap::new(),
+            cooldown: CooldownManager::new(),
         }
-    }
-
-    fn get_cooldown(&self, symbol: &Symbol) -> usize {
-        *self.cooldown_counters.get(symbol).unwrap_or(&0)
     }
 
     /// Get range high from last N bars (excluding current)
@@ -57,17 +50,10 @@ impl QuickFlipStrategy {
             .fold(None, |min, l| Some(min.map_or(l, |m: f64| m.min(l))))
     }
 
-    /// Calculate ATR
-    fn get_atr(&self, candles: &[Candle]) -> f64 {
-        let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
-        let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
-        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
-
-        let atr_vals = atr(&high, &low, &close, self.config.atr_period);
-        atr_vals
-            .last()
-            .and_then(|&x| x)
-            .unwrap_or(candles.last().map(|c| c.close * 0.02).unwrap_or(0.0))
+    /// Calculate current ATR value with default fallback
+    fn get_atr_or_default(&self, candles: &[Candle]) -> f64 {
+        let default = candles.last().map(|c| c.close * 0.02).unwrap_or(0.0);
+        current_atr(candles, self.config.atr_period).unwrap_or(default)
     }
 
     /// Check if candle is bullish with strong body
@@ -132,7 +118,7 @@ impl Strategy for QuickFlipStrategy {
         }
 
         // Cooldown (per-symbol)
-        if self.get_cooldown(ctx.symbol) > 0 {
+        if self.cooldown.is_active(ctx.symbol) {
             return orders;
         }
 
@@ -147,7 +133,7 @@ impl Strategy for QuickFlipStrategy {
         };
 
         let range_size = range_high - range_low;
-        let current_atr = self.get_atr(ctx.candles);
+        let current_atr = self.get_atr_or_default(ctx.candles);
 
         // Filter: range must be significant (not too tight)
         if self.config.min_range_pct > 0.0 && range_size < current_atr * self.config.min_range_pct {
@@ -205,23 +191,13 @@ impl Strategy for QuickFlipStrategy {
     }
 
     fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
-        let current_atr = self.get_atr(candles);
-        let stop_distance = self.config.stop_atr * current_atr;
-
-        match side {
-            Side::Buy => entry_price - stop_distance,
-            Side::Sell => entry_price + stop_distance,
-        }
+        let atr = self.get_atr_or_default(candles);
+        atr_stop_loss(entry_price, atr, self.config.stop_atr, side)
     }
 
     fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
-        let current_atr = self.get_atr(candles);
-        let target_distance = self.config.target_atr * current_atr;
-
-        match side {
-            Side::Buy => entry_price + target_distance,
-            Side::Sell => entry_price - target_distance,
-        }
+        let atr = self.get_atr_or_default(candles);
+        atr_take_profit(entry_price, atr, self.config.target_atr, side)
     }
 
     fn update_trailing_stop(
@@ -230,13 +206,13 @@ impl Strategy for QuickFlipStrategy {
         current_price: f64,
         candles: &[Candle],
     ) -> Option<f64> {
-        let current_atr = self.get_atr(candles);
+        let atr = self.get_atr_or_default(candles);
         let entry = position.average_entry_price.to_f64();
 
         match position.side {
             Side::Buy => {
-                if current_price >= entry + current_atr {
-                    let trail_stop = current_price - current_atr;
+                if current_price >= entry + atr {
+                    let trail_stop = current_price - atr;
                     if trail_stop > entry {
                         return Some(trail_stop);
                     }
@@ -245,8 +221,8 @@ impl Strategy for QuickFlipStrategy {
                 None
             }
             Side::Sell => {
-                if current_price <= entry - current_atr {
-                    let trail_stop = current_price + current_atr;
+                if current_price <= entry - atr {
+                    let trail_stop = current_price + atr;
                     if trail_stop < entry {
                         return Some(trail_stop);
                     }
@@ -258,23 +234,17 @@ impl Strategy for QuickFlipStrategy {
     }
 
     fn on_bar(&mut self, ctx: &StrategyContext) {
-        // Decrement per-symbol cooldown
-        if let Some(counter) = self.cooldown_counters.get_mut(ctx.symbol) {
-            if *counter > 0 {
-                *counter -= 1;
-            }
-        }
+        self.cooldown.decrement(ctx.symbol);
     }
 
     fn on_order_filled(&mut self, _fill: &Fill, _position: &Position) {}
 
     fn on_trade_closed(&mut self, trade: &Trade) {
-        // Set per-symbol cooldown after trade closes
-        self.cooldown_counters
-            .insert(trade.symbol.clone(), self.config.cooldown);
+        self.cooldown
+            .set(trade.symbol.clone(), self.config.cooldown);
     }
 
     fn init(&mut self) {
-        self.cooldown_counters.clear();
+        self.cooldown.clear();
     }
 }

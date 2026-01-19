@@ -693,32 +693,46 @@ impl LiveTrader {
         use crypto_strategies::Candle;
 
         for tf in &self.required_timeframes {
-            if let Ok(raw_candles) = self
+            let raw_candles = match self
                 .exchange
                 .get_candles(symbol.as_str(), tf, Some(2))
                 .await
             {
-                if let Some(latest_raw) = raw_candles.last() {
-                    if let Ok(latest) = Candle::try_from(latest_raw.clone()) {
-                        if let Some(mtf_data) = self.candle_cache.get_mut(symbol) {
-                            if let Some(candles) = mtf_data.get_mut(tf) {
-                                // Update last candle or append if new
-                                if let Some(last) = candles.last() {
-                                    if last.datetime == latest.datetime {
-                                        // Update existing candle
-                                        if let Some(last_mut) = candles.last_mut() {
-                                            *last_mut = latest;
-                                        }
-                                    } else {
-                                        // New candle
-                                        candles.push(latest);
-                                    }
-                                } else {
-                                    candles.push(latest);
-                                }
-                            }
-                        }
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let latest_raw = match raw_candles.last() {
+                Some(r) => r,
+                None => continue,
+            };
+
+            let latest = match Candle::try_from(latest_raw.clone()) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let mtf_data = match self.candle_cache.get_mut(symbol) {
+                Some(d) => d,
+                None => continue,
+            };
+
+            let candles = match mtf_data.get_mut(tf) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            // Update last candle or append if new
+            match candles.last() {
+                Some(last) if last.datetime == latest.datetime => {
+                    // Update existing candle
+                    if let Some(last_mut) = candles.last_mut() {
+                        *last_mut = latest;
                     }
+                }
+                _ => {
+                    // New candle or empty
+                    candles.push(latest);
                 }
             }
         }

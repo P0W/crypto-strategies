@@ -13,28 +13,24 @@
 
 use crate::indicators::{adx, atr, ema};
 use crate::oms::{Fill, OrderRequest, StrategyContext};
-use crate::strategies::Strategy;
-use crate::{Candle, Position, Side, Symbol, Trade};
-use std::collections::HashMap;
+use crate::strategies::{
+    atr_stop_loss, atr_take_profit, current_atr, CooldownManager, OhlcVectors, Strategy,
+};
+use crate::{Candle, Position, Side, Trade};
 
 use super::config::RangeBreakoutConfig;
 
 pub struct RangeBreakoutStrategy {
     config: RangeBreakoutConfig,
-    /// Per-symbol cooldown counters
-    cooldown_counters: HashMap<Symbol, usize>,
+    cooldown: CooldownManager,
 }
 
 impl RangeBreakoutStrategy {
     pub fn new(config: RangeBreakoutConfig) -> Self {
         Self {
             config,
-            cooldown_counters: HashMap::new(),
+            cooldown: CooldownManager::new(),
         }
-    }
-
-    fn get_cooldown(&self, symbol: &Symbol) -> usize {
-        *self.cooldown_counters.get(symbol).unwrap_or(&0)
     }
 
     fn get_range_high(&self, candles: &[Candle]) -> Option<f64> {
@@ -69,11 +65,8 @@ impl RangeBreakoutStrategy {
             return true;
         }
 
-        let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
-        let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
-        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
-
-        let atr_vals = atr(&high, &low, &close, self.config.atr_period);
+        let ohlc = OhlcVectors::from_candles(candles);
+        let atr_vals = atr(&ohlc.high, &ohlc.low, &ohlc.close, self.config.atr_period);
         let len = atr_vals.len();
         if len < 5 {
             return true;
@@ -114,8 +107,8 @@ impl RangeBreakoutStrategy {
             return (true, true); // No filter if disabled or insufficient data
         }
 
-        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
-        let ema_vals = ema(&close, self.config.trend_ema);
+        let ohlc = OhlcVectors::from_candles(candles);
+        let ema_vals = ema(&ohlc.close, self.config.trend_ema);
 
         let current_close = match candles.last() {
             Some(c) => c.close,
@@ -139,27 +132,17 @@ impl RangeBreakoutStrategy {
             return true; // Insufficient data
         }
 
-        let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
-        let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
-        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
-
-        let adx_vals = adx(&high, &low, &close, self.config.adx_period);
+        let ohlc = OhlcVectors::from_candles(candles);
+        let adx_vals = adx(&ohlc.high, &ohlc.low, &ohlc.close, self.config.adx_period);
         let current_adx = adx_vals.last().and_then(|&x| x).unwrap_or(0.0);
 
         current_adx >= self.config.min_adx
     }
 
-    /// Calculate current ATR value
-    fn get_current_atr(&self, candles: &[Candle]) -> f64 {
-        let high: Vec<f64> = candles.iter().map(|c| c.high).collect();
-        let low: Vec<f64> = candles.iter().map(|c| c.low).collect();
-        let close: Vec<f64> = candles.iter().map(|c| c.close).collect();
-
-        let atr_vals = atr(&high, &low, &close, self.config.atr_period);
-        atr_vals
-            .last()
-            .and_then(|&x| x)
-            .unwrap_or(candles.last().map(|c| c.close * 0.02).unwrap_or(0.0))
+    /// Calculate current ATR value with default fallback
+    fn get_atr_or_default(&self, candles: &[Candle]) -> f64 {
+        let default = candles.last().map(|c| c.close * 0.02).unwrap_or(0.0);
+        current_atr(candles, self.config.atr_period).unwrap_or(default)
     }
 }
 
@@ -186,7 +169,7 @@ impl Strategy for RangeBreakoutStrategy {
         }
 
         // Cooldown (per-symbol)
-        if self.get_cooldown(ctx.symbol) > 0 {
+        if self.cooldown.is_active(ctx.symbol) {
             return orders;
         }
 
@@ -240,23 +223,13 @@ impl Strategy for RangeBreakoutStrategy {
     }
 
     fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
-        let current_atr = self.get_current_atr(candles);
-        let stop_distance = self.config.stop_atr * current_atr;
-
-        match side {
-            Side::Buy => entry_price - stop_distance,
-            Side::Sell => entry_price + stop_distance,
-        }
+        let atr = self.get_atr_or_default(candles);
+        atr_stop_loss(entry_price, atr, self.config.stop_atr, side)
     }
 
     fn calculate_take_profit(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
-        let current_atr = self.get_current_atr(candles);
-        let target_distance = self.config.target_atr * current_atr;
-
-        match side {
-            Side::Buy => entry_price + target_distance,
-            Side::Sell => entry_price - target_distance,
-        }
+        let atr = self.get_atr_or_default(candles);
+        atr_take_profit(entry_price, atr, self.config.target_atr, side)
     }
 
     fn update_trailing_stop(
@@ -269,15 +242,15 @@ impl Strategy for RangeBreakoutStrategy {
             return None;
         }
 
-        let current_atr = self.get_current_atr(candles);
-        let trail_distance = self.config.trailing_atr * current_atr;
+        let atr = self.get_atr_or_default(candles);
+        let trail_distance = self.config.trailing_atr * atr;
         let entry_price = position.average_entry_price.to_f64();
 
         match position.side {
             Side::Buy => {
                 if current_price > entry_price {
                     let new_stop = current_price - trail_distance;
-                    let min_stop = entry_price - (self.config.stop_atr * current_atr);
+                    let min_stop = entry_price - (self.config.stop_atr * atr);
                     if new_stop > min_stop {
                         return Some(new_stop);
                     }
@@ -287,7 +260,7 @@ impl Strategy for RangeBreakoutStrategy {
             Side::Sell => {
                 if current_price < entry_price {
                     let new_stop = current_price + trail_distance;
-                    let max_stop = entry_price + (self.config.stop_atr * current_atr);
+                    let max_stop = entry_price + (self.config.stop_atr * atr);
                     if new_stop < max_stop {
                         return Some(new_stop);
                     }
@@ -303,21 +276,15 @@ impl Strategy for RangeBreakoutStrategy {
     }
 
     fn on_trade_closed(&mut self, trade: &Trade) {
-        // Set per-symbol cooldown after trade closes
-        self.cooldown_counters
-            .insert(trade.symbol.clone(), self.config.cooldown);
+        self.cooldown
+            .set(trade.symbol.clone(), self.config.cooldown);
     }
 
     fn on_bar(&mut self, ctx: &StrategyContext) {
-        // Decrement per-symbol cooldown
-        if let Some(counter) = self.cooldown_counters.get_mut(ctx.symbol) {
-            if *counter > 0 {
-                *counter -= 1;
-            }
-        }
+        self.cooldown.decrement(ctx.symbol);
     }
 
     fn init(&mut self) {
-        self.cooldown_counters.clear();
+        self.cooldown.clear();
     }
 }
