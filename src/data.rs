@@ -699,10 +699,8 @@ pub async fn ensure_data_for_range(
                     }
 
                     // Merge: new candles + existing candles, deduplicate
-                    let mut all_candles: Vec<Candle> = new_candles
-                        .into_iter()
-                        .chain(existing_candles)
-                        .collect();
+                    let mut all_candles: Vec<Candle> =
+                        new_candles.into_iter().chain(existing_candles).collect();
 
                     // Sort by datetime and deduplicate
                     all_candles.sort_by_key(|c| c.datetime);
@@ -802,10 +800,8 @@ pub async fn ensure_data_for_range(
                     }
 
                     // Merge and deduplicate
-                    let mut all_candles: Vec<Candle> = existing_candles
-                        .into_iter()
-                        .chain(new_candles)
-                        .collect();
+                    let mut all_candles: Vec<Candle> =
+                        existing_candles.into_iter().chain(new_candles).collect();
 
                     all_candles.sort_by_key(|c| c.datetime);
                     all_candles.dedup_by_key(|c| c.datetime);
