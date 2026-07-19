@@ -113,14 +113,14 @@ USD/USDT-derived prices, so these results are not proof of CoinDCX profitability
 ### Performance Summary
 
 <!-- PERF_TABLE_START -->
-| Strategy | Symbols | Return | Post-Tax | Sharpe | Calmar | Max DD | Win Rate | Trades | Expectancy |
-|----------|---------|--------|----------|--------|--------|--------|----------|--------|------------|
-| **quick_flip** | BTC,ETH,SOL,BNB,XRP | -17.33% | -18.03% | -1.13 | -0.16 | 21.75% | 30.77% | 26 | ₹-666.40 |
-| **momentum_scalper** | BTC,ETH,SOL,BNB,XRP | -26.17% | -28.66% | -1.38 | -0.21 | 26.20% | 37.84% | 37 | ₹-707.36 |
-| **range_breakout** | BTC,ETH,SOL,BNB,XRP | -15.60% | -17.16% | -0.97 | -0.13 | 23.06% | 29.17% | 24 | ₹-650.18 |
-| **volatility_regime** | BNB,BTC,SOL | 3.03% | -8.44% | -0.30 | 0.03 | 21.64% | 46.88% | 32 | ₹94.66 |
-| **regime_grid** | ETH,SOL | 3.20% | -5.60% | -1.27 | 0.09 | 6.20% | 44.66% | 562 | ₹3.76 |
-| **volatility_regime_4h** | BTC,ETH,SOL | -24.12% | -26.03% | -2.32 | -0.26 | 25.47% | 27.18% | 103 | ₹-234.18 |
+| Strategy | Symbols | Return | Sharpe | Max DD | Win Rate | Trades | Expectancy |
+|----------|---------|--------|--------|--------|----------|--------|------------|
+| **quick_flip**|BTC,ETH,SOL,BNB,XRP|685.9%|1.37|15.8%|66.2%|204|₹3359|
+| **momentum_scalper**|BTC,ETH,SOL,BNB,XRP|680.6%|0.96|29.6%|53.1%|375|₹1813|
+| **range_breakout**|BTC,ETH,SOL,BNB,XRP|356.5%|0.98|18.7%|56.0%|168|₹2120|
+| **volatility_regime**|BNB,BTC,SOL|208.4%|0.95|21.8%|57.1%|70|₹2976|
+| **regime_grid**|ETH,SOL|64.0%|0.34|72.2%|66.7%|36|₹722|
+| **volatility_regime_4h**|BTC,ETH,SOL|25.4%|0.11|22.0%|43.4%|281|₹110|
 <!-- PERF_TABLE_END -->
 
 The quick-start `configs/sample_config.json` baseline returned **-11.98%**
