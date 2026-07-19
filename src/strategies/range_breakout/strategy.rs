@@ -277,7 +277,7 @@ impl Strategy for RangeBreakoutStrategy {
 
     fn on_trade_closed(&mut self, trade: &Trade) {
         self.cooldown
-            .set(trade.symbol.clone(), self.config.cooldown);
+            .set(trade.symbol.clone(), self.config.cooldown.saturating_add(1));
     }
 
     fn on_bar(&mut self, ctx: &StrategyContext) {

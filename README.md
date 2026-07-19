@@ -19,7 +19,7 @@ cargo build
 cargo run -- backtest --config configs/sample_config.json
 
 # Run optimization
-cargo run --release -- optimize --config configs/sample_config.json
+cargo run -- optimize --config configs/sample_config.json
 
 # Run tests
 cargo test
@@ -67,11 +67,14 @@ cargo run --release -- optimize --config configs/sample_config.json
 
 # Options:
 #   -c, --config <FILE>       Config with grid section
-#   --sort-by <METRIC>        Sort by: sharpe, calmar, return, win_rate, profit_factor
+#   --sort-by <METRIC>        Sort by: sharpe, calmar, return, post_tax_return,
+#                             win_rate, profit_factor
 #   -t, --top <N>             Show top N results
+#   --min-trades <N>          Reject statistically weak candidates (default: 20)
 #   --coins <LIST>            Coins to test (e.g., "BTC,ETH,SOL")
 #   --timeframes <LIST>       Timeframes to test (e.g., "1h,4h,1d")
 #   -O, --override <PARAMS>   Override grid params (e.g., "ema_fast=5,8,13")
+#   --no-update               Report results without changing the config
 ```
 
 ### Live Trading
@@ -99,25 +102,59 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 
 ## Backtest Results
 
-**Note**: Results from grid search optimization using full available data. Initial Capital: ₹100,000 | Timeframe: 1d
+**Reproduced 2026-07-19** from the committed configs after correcting execution,
+position valuation, stop/target, lifecycle, and strategy-sizing defects. These are
+not re-optimized results. Initial capital: ₹100,000. Fees and slippage are taken
+from each config; post-tax return applies 30% tax to winning trades without loss
+offset. Sharpe is calculated from UTC daily closing equity for consistency
+across source timeframes. The local crypto files use INR symbol names but may contain
+USD/USDT-derived prices, so these results are not proof of CoinDCX profitability.
 
 ### Performance Summary
 
 <!-- PERF_TABLE_START -->
-| Strategy | Symbols | Return | Sharpe | Max DD | Win Rate | Trades | Expectancy |
-|----------|---------|--------|--------|--------|----------|--------|------------|
-| **quick_flip**|BTC,ETH,SOL,BNB,XRP|685.9%|1.37|15.8%|66.2%|204|₹3359|
-| **momentum_scalper**|BTC,ETH,SOL,BNB,XRP|680.6%|0.96|29.6%|53.1%|375|₹1813|
-| **range_breakout**|BTC,ETH,SOL,BNB,XRP|356.5%|0.98|18.7%|56.0%|168|₹2120|
-| **volatility_regime**|BNB,BTC,SOL|208.4%|0.95|21.8%|57.1%|70|₹2976|
-| **regime_grid**|ETH,SOL|64.0%|0.34|72.2%|66.7%|36|₹722|
-| **volatility_regime_4h**|BTC,ETH,SOL|25.4%|0.11|22.0%|43.4%|281|₹110|
+| Strategy | Symbols | Return | Post-Tax | Sharpe | Calmar | Max DD | Win Rate | Trades | Expectancy |
+|----------|---------|--------|----------|--------|--------|--------|----------|--------|------------|
+| **quick_flip** | BTC,ETH,SOL,BNB,XRP | -17.33% | -18.03% | -1.13 | -0.16 | 21.75% | 30.77% | 26 | ₹-666.40 |
+| **momentum_scalper** | BTC,ETH,SOL,BNB,XRP | -26.17% | -28.66% | -1.38 | -0.21 | 26.20% | 37.84% | 37 | ₹-707.36 |
+| **range_breakout** | BTC,ETH,SOL,BNB,XRP | -15.60% | -17.16% | -0.97 | -0.13 | 23.06% | 29.17% | 24 | ₹-650.18 |
+| **volatility_regime** | BNB,BTC,SOL | 3.03% | -8.44% | -0.30 | 0.03 | 21.64% | 46.88% | 32 | ₹94.66 |
+| **regime_grid** | ETH,SOL | 3.20% | -5.60% | -1.27 | 0.09 | 6.20% | 44.66% | 562 | ₹3.76 |
+| **volatility_regime_4h** | BTC,ETH,SOL | -24.12% | -26.03% | -2.32 | -0.26 | 25.47% | 27.18% | 103 | ₹-234.18 |
 <!-- PERF_TABLE_END -->
+
+The quick-start `configs/sample_config.json` baseline returned **-11.98%**
+pre-tax and **-18.23%** post-tax over the same daily data range.
+
+### CoinDCX-Native Research Candidate
+
+`configs/sol_bnb_regime_grid_candidate.json` is the only candidate that remained
+positive after chronological validation on CoinDCX-native daily candles. It is
+**paper-only** and is not a live recommendation.
+
+Assumptions: SOLINR + BNBINR, ₹100,000 initial capital, 1% risk per trade,
+20% grid capital cap, 0.1% fee per side, 0.1% slippage, 30% tax on winning
+trades without loss offset.
+
+| Period | Dates | Pre-Tax | Post-Tax | Sharpe | Max DD | Profit Factor | Trades |
+|--------|-------|---------|----------|--------|--------|---------------|--------|
+| Training | 2023-10-24 to 2025-03-31 | 12.29% | 6.18% | 0.66 | 2.18% | 2.52 | 512 |
+| Validation | 2025-04-01 to 2025-12-31 | 14.38% | 8.69% | 1.70 | 1.93% | 4.13 | 420 |
+| Holdout | 2026-01-01 to 2026-07-19 | 7.21% | 4.30% | 1.47 | 1.29% | 3.88 | 194 |
+
+Cost stress:
+
+- At 0.2% fee and 0.2% slippage, the holdout remained positive at **0.85% post-tax**.
+- At a 0.5% fee and 0.25% slippage, full-period post-tax return was **-2.15%**.
+
+Therefore the candidate must not trade live unless the actual CoinDCX account fee
+tier is low enough, current native data reproduces the result, and paper execution
+passes the gates in [`docs/LIVE_TRADING_REVIEW.md`](docs/LIVE_TRADING_REVIEW.md).
 
 ### Strategy Configurations
 
 <details>
-<summary><b>quick_flip</b> - Best risk-adjusted returns (Sharpe 1.37, Calmar 2.92)</summary>
+<summary><b>quick_flip</b> - Corrected run: -17.33% return, Sharpe -1.13</summary>
 
 ```json
 {
@@ -143,7 +180,7 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 </details>
 
 <details>
-<summary><b>momentum_scalper</b> - High trade frequency (375 trades)</summary>
+<summary><b>momentum_scalper</b> - Corrected run: -26.17% return, 37 trades</summary>
 
 ```json
 {
@@ -171,7 +208,7 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 </details>
 
 <details>
-<summary><b>range_breakout</b> - Balanced performance (Sharpe 0.98, Calmar 1.72)</summary>
+<summary><b>range_breakout</b> - Corrected run: -15.60% return, Sharpe -0.97</summary>
 
 ```json
 {
@@ -198,7 +235,7 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 </details>
 
 <details>
-<summary><b>volatility_regime</b> - ATR-based regime trading (Sharpe 0.95, Calmar 1.06)</summary>
+<summary><b>volatility_regime</b> - Corrected run: 3.03% pre-tax, -8.44% post-tax</summary>
 
 ```json
 {
@@ -227,7 +264,7 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 </details>
 
 <details>
-<summary><b>regime_grid</b> - Grid trading with regime adaptation (Sharpe 0.34)</summary>
+<summary><b>regime_grid</b> - Corrected run: 3.20% pre-tax, -5.60% post-tax</summary>
 
 ```json
 {
@@ -258,7 +295,10 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 ```
 </details>
 
-> **Note**: Past performance does not guarantee future results. These configurations are provided as starting points for further optimization.
+> **Note**: None of the committed strategies currently has positive post-tax
+> performance in this run. Do not deploy them with real funds without
+> CoinDCX-native data, walk-forward validation, realistic fee tiers, and paper
+> trading.
 
 ## Repository Structure
 

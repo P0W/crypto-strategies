@@ -113,11 +113,12 @@ pub fn run(opts: BacktestOptions) -> Result<()> {
 
     // Check and fetch missing data
     let tf_strings: Vec<String> = all_tfs.iter().map(|s| s.to_string()).collect();
+    let load_start_date = start_date.map(|start| data::warmup_start(start, &tf_strings, 300));
     data::check_and_fetch_data(
         &config.backtest.data_dir,
         &symbols,
         &tf_strings,
-        start_date,
+        load_start_date,
         end_date,
     )?;
 
@@ -129,7 +130,7 @@ pub fn run(opts: BacktestOptions) -> Result<()> {
             &symbols,
             &all_tfs,
             &primary_tf,
-            start_date,
+            load_start_date,
             end_date,
         )?
     } else {
@@ -138,7 +139,7 @@ pub fn run(opts: BacktestOptions) -> Result<()> {
             &config.backtest.data_dir,
             &symbols,
             &primary_tf,
-            start_date,
+            load_start_date,
             end_date,
         )?;
 
@@ -155,7 +156,7 @@ pub fn run(opts: BacktestOptions) -> Result<()> {
     info!("Loaded data for {} symbols", mtf_data.len());
 
     // Extract actual date range from loaded data
-    let (data_start, data_end) = mtf_data
+    let (mut data_start, data_end) = mtf_data
         .values()
         .next()
         .and_then(|mtf| {
@@ -170,9 +171,13 @@ pub fn run(opts: BacktestOptions) -> Result<()> {
             }
         })
         .unzip();
+    if start_date.is_some() {
+        data_start = start_date;
+    }
 
     // Run backtest
-    let mut backtester = Backtester::new(config.clone(), strategy);
+    let mut backtester =
+        Backtester::new(config.clone(), strategy).with_evaluation_start(start_date);
     let result = backtester.run(&mtf_data);
 
     // Print results

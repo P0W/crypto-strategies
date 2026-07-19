@@ -12,6 +12,7 @@ use crate::oms::{OrderRequest, StrategyContext};
 use crate::strategies::{atr_stop_loss, current_atr, OhlcVectors, Strategy};
 use crate::{Candle, Position, Side};
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
 
 use super::config::RegimeGridConfig;
 use super::MarketRegime;
@@ -59,14 +60,14 @@ struct GridState {
 /// Regime-Aware Grid Trading Strategy
 pub struct RegimeGridStrategy {
     config: RegimeGridConfig,
-    state: RwLock<GridState>,
+    states: RwLock<HashMap<crate::Symbol, GridState>>,
 }
 
 impl RegimeGridStrategy {
     pub fn new(config: RegimeGridConfig) -> Self {
         RegimeGridStrategy {
             config,
-            state: RwLock::new(GridState::default()),
+            states: RwLock::new(HashMap::new()),
         }
     }
 
@@ -87,13 +88,13 @@ impl RegimeGridStrategy {
     }
 
     /// Check if volatility kill switch is active
-    fn is_volatility_paused(&self) -> bool {
-        let state = self.state.read().unwrap();
-        if let Some(paused_until) = state.paused_until {
-            Utc::now() < paused_until
-        } else {
-            false
-        }
+    fn is_volatility_paused(&self, symbol: &crate::Symbol, now: DateTime<Utc>) -> bool {
+        self.states
+            .read()
+            .unwrap()
+            .get(symbol)
+            .and_then(|state| state.paused_until)
+            .is_some_and(|paused_until| now < paused_until)
     }
 
     /// Classify market regime based on indicators
@@ -188,6 +189,7 @@ impl RegimeGridStrategy {
             if !has_nearby_order && quantity_per_level > 0.0 {
                 orders.push(
                     OrderRequest::limit_buy(ctx.symbol.clone(), quantity_per_level, buy_price)
+                        .with_quantity_cap()
                         .with_client_id(format!("grid_buy_{}", i)),
                 );
             }
@@ -212,6 +214,7 @@ impl RegimeGridStrategy {
                     if sell_qty > 0.0 {
                         orders.push(
                             OrderRequest::limit_sell(ctx.symbol.clone(), sell_qty, sell_price)
+                                .with_quantity_cap()
                                 .with_client_id(format!("grid_sell_{}", i)),
                         );
                     }
@@ -251,6 +254,7 @@ impl RegimeGridStrategy {
             if !has_nearby_order && quantity_per_level > 0.0 {
                 orders.push(
                     OrderRequest::limit_buy(ctx.symbol.clone(), quantity_per_level, buy_price)
+                        .with_quantity_cap()
                         .with_client_id(format!("bull_grid_buy_{}", i)),
                 );
             }
@@ -279,6 +283,7 @@ impl RegimeGridStrategy {
                     if sell_qty > 0.0 {
                         orders.push(
                             OrderRequest::limit_sell(ctx.symbol.clone(), sell_qty, sell_price)
+                                .with_quantity_cap()
                                 .with_client_id(format!("bull_grid_sell_{}", i)),
                         );
                     }
@@ -322,6 +327,7 @@ impl RegimeGridStrategy {
                 if sell_qty > 0.0 {
                     orders.push(
                         OrderRequest::limit_sell(ctx.symbol.clone(), sell_qty, sell_price)
+                            .with_quantity_cap()
                             .with_client_id(format!("max_exp_sell_{}", i)),
                     );
                 }
@@ -350,7 +356,12 @@ impl Strategy for RegimeGridStrategy {
         }
 
         // 1. Check volatility kill switch
-        if self.is_volatility_paused() {
+        let current_time = match ctx.candles.last() {
+            Some(c) => c.datetime,
+            None => return orders,
+        };
+
+        if self.is_volatility_paused(ctx.symbol, current_time) {
             return orders;
         }
 
@@ -370,9 +381,10 @@ impl Strategy for RegimeGridStrategy {
                 );
                 // Set pause until
                 {
-                    let mut state = self.state.write().unwrap();
+                    let mut states = self.states.write().unwrap();
+                    let state = states.entry(ctx.symbol.clone()).or_default();
                     state.paused_until = Some(
-                        Utc::now()
+                        current_time
                             + chrono::Duration::hours(self.config.volatility_pause_hours as i64),
                     );
                 }
@@ -404,8 +416,13 @@ impl Strategy for RegimeGridStrategy {
 
         // Check if we're in drawdown recovery mode
         {
-            let state = self.state.read().unwrap();
-            if let Some(breach_peak) = state.drawdown_breach_peak {
+            let breach_peak = self
+                .states
+                .read()
+                .unwrap()
+                .get(ctx.symbol)
+                .and_then(|state| state.drawdown_breach_peak);
+            if let Some(breach_peak) = breach_peak {
                 // Only resume trading when equity recovers to 95% of the breach peak
                 // This prevents whipsawing in/out during volatile recovery periods
                 let recovery_threshold = breach_peak * 0.95;
@@ -425,8 +442,6 @@ impl Strategy for RegimeGridStrategy {
                     }
                     return orders;
                 } else {
-                    // Will recover below - need to drop lock first
-                    drop(state);
                     // Recovered! Clear the breach state
                     tracing::info!(
                         "{} Drawdown recovery complete: equity {:.0} >= recovery threshold {:.0}",
@@ -434,9 +449,10 @@ impl Strategy for RegimeGridStrategy {
                         ctx.equity,
                         recovery_threshold
                     );
-                    let mut state = self.state.write().unwrap();
-                    state.drawdown_breach_time = None;
-                    state.drawdown_breach_peak = None;
+                    if let Some(state) = self.states.write().unwrap().get_mut(ctx.symbol) {
+                        state.drawdown_breach_time = None;
+                        state.drawdown_breach_peak = None;
+                    }
                 }
             }
         }
@@ -444,7 +460,12 @@ impl Strategy for RegimeGridStrategy {
         // Check for new drawdown breach
         if current_drawdown > self.config.max_drawdown_pct {
             // Only log once when first breaching
-            let should_log = self.state.read().unwrap().drawdown_breach_peak.is_none();
+            let should_log = self
+                .states
+                .read()
+                .unwrap()
+                .get(ctx.symbol)
+                .is_none_or(|state| state.drawdown_breach_peak.is_none());
             if should_log {
                 tracing::warn!(
                     "{} Drawdown limit hit: {:.1}% > {:.1}% - entering cooldown mode",
@@ -452,8 +473,9 @@ impl Strategy for RegimeGridStrategy {
                     current_drawdown * 100.0,
                     self.config.max_drawdown_pct * 100.0
                 );
-                let mut state = self.state.write().unwrap();
-                state.drawdown_breach_time = Some(Utc::now());
+                let mut states = self.states.write().unwrap();
+                let state = states.entry(ctx.symbol.clone()).or_default();
+                state.drawdown_breach_time = Some(current_time);
                 state.drawdown_breach_peak = Some(ctx.peak_equity);
             }
 
@@ -537,7 +559,7 @@ impl Strategy for RegimeGridStrategy {
     }
 
     fn calculate_stop_loss(&self, candles: &[Candle], entry_price: f64, side: Side) -> f64 {
-        let atr = current_atr(candles, self.config.adx_period).unwrap_or(entry_price * 0.02);
+        let atr = current_atr(candles, self.config.atr_period_1h).unwrap_or(entry_price * 0.02);
         atr_stop_loss(entry_price, atr, self.config.stop_atr_multiple, side)
     }
 
@@ -566,7 +588,7 @@ impl Strategy for RegimeGridStrategy {
             return None;
         }
 
-        let atr = current_atr(candles, self.config.adx_period).unwrap_or(current_price * 0.02);
+        let atr = current_atr(candles, self.config.atr_period_1h).unwrap_or(current_price * 0.02);
 
         let trailing_stop = match position.side {
             Side::Buy => current_price - (atr * self.config.trailing_atr_multiple),
@@ -586,11 +608,29 @@ impl Strategy for RegimeGridStrategy {
         }
     }
 
+    fn orders_to_cancel(&self, ctx: &StrategyContext) -> Vec<u64> {
+        let current_price = match ctx.candles.last() {
+            Some(candle) if candle.close > 0.0 => candle.close,
+            _ => return vec![],
+        };
+
+        ctx.open_orders
+            .iter()
+            .filter(|order| {
+                order.limit_price.is_some_and(|price| {
+                    (price.to_f64() - current_price).abs() / current_price
+                        > self.config.cancel_threshold_pct
+                })
+            })
+            .map(|order| order.id)
+            .collect()
+    }
+
     fn clone_boxed(&self) -> Box<dyn Strategy> {
         Box::new(RegimeGridStrategy::new(self.config.clone()))
     }
 
     fn init(&mut self) {
-        *self.state.write().unwrap() = GridState::default();
+        self.states.write().unwrap().clear();
     }
 }

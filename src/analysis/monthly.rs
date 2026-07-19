@@ -6,7 +6,7 @@
 use chrono::{DateTime, Datelike, Utc};
 use std::collections::BTreeMap;
 
-use crate::Trade;
+use crate::{Trade, PNL_EPSILON};
 
 /// Monthly P&L data for a specific month
 #[derive(Debug, Clone, Default)]
@@ -29,10 +29,13 @@ impl MonthlyPnL {
     }
 
     fn add_trade(&mut self, trade: &Trade) {
+        if trade.net_pnl.to_f64().abs() <= PNL_EPSILON {
+            return;
+        }
         self.net_pnl += trade.net_pnl.to_f64();
         self.trade_count += 1;
 
-        if trade.net_pnl.is_positive() {
+        if trade.net_pnl.to_f64() > PNL_EPSILON {
             self.winning_trades += 1;
         } else {
             self.losing_trades += 1;

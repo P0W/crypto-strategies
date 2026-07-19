@@ -7,6 +7,7 @@
 //! - Cooldown counter management for per-symbol state
 
 use crate::indicators::atr;
+use crate::oms::{OrderRequest, Position};
 use crate::{Candle, Side, Symbol};
 use std::collections::HashMap;
 
@@ -71,6 +72,72 @@ pub fn atr_take_profit(entry_price: f64, atr_value: f64, multiplier: f64, side: 
     match side {
         Side::Buy => entry_price + distance,
         Side::Sell => entry_price - distance,
+    }
+}
+
+pub fn volume_ratio_confirmed(candles: &[Candle], period: usize, minimum_ratio: f64) -> bool {
+    if period == 0 || candles.len() <= period {
+        return false;
+    }
+
+    let end = candles.len() - 1;
+    let start = end - period;
+    let average = candles[start..end]
+        .iter()
+        .map(|candle| candle.volume)
+        .sum::<f64>()
+        / period as f64;
+    candles[end].volume >= average * minimum_ratio
+}
+
+pub fn close_position_order(symbol: &Symbol, position: &Position) -> OrderRequest {
+    match position.side {
+        Side::Buy => OrderRequest::market_sell(symbol.clone(), position.quantity.to_f64()),
+        Side::Sell => OrderRequest::market_buy(symbol.clone(), position.quantity.to_f64()),
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct PositionLifecycleManager {
+    states: HashMap<Symbol, PositionLifecycleState>,
+}
+
+#[derive(Default, Clone)]
+struct PositionLifecycleState {
+    bars_in_position: usize,
+    cooldown: usize,
+}
+
+impl PositionLifecycleManager {
+    pub fn on_bar(&mut self, symbol: &Symbol, in_position: bool) {
+        let state = self.states.entry(symbol.clone()).or_default();
+        if in_position {
+            state.bars_in_position += 1;
+        } else if state.cooldown > 0 {
+            state.cooldown -= 1;
+        }
+    }
+
+    pub fn bars_in_position(&self, symbol: &Symbol) -> usize {
+        self.states
+            .get(symbol)
+            .map_or(0, |state| state.bars_in_position)
+    }
+
+    pub fn is_cooling_down(&self, symbol: &Symbol) -> bool {
+        self.states
+            .get(symbol)
+            .is_some_and(|state| state.cooldown > 0)
+    }
+
+    pub fn close_trade(&mut self, symbol: &Symbol, cooldown_bars: usize) {
+        let state = self.states.entry(symbol.clone()).or_default();
+        state.bars_in_position = 0;
+        state.cooldown = cooldown_bars.saturating_add(1);
+    }
+
+    pub fn clear(&mut self) {
+        self.states.clear();
     }
 }
 
@@ -196,5 +263,35 @@ mod tests {
 
         assert_eq!(mgr.get(&Symbol::new("BTCINR")), 0);
         assert_eq!(mgr.get(&Symbol::new("ETHINR")), 0);
+    }
+
+    #[test]
+    fn test_position_lifecycle_manager() {
+        let symbol = Symbol::new("BTCINR");
+        let mut lifecycle = PositionLifecycleManager::default();
+
+        lifecycle.on_bar(&symbol, true);
+        lifecycle.on_bar(&symbol, true);
+        assert_eq!(lifecycle.bars_in_position(&symbol), 2);
+
+        lifecycle.close_trade(&symbol, 2);
+        assert!(lifecycle.is_cooling_down(&symbol));
+        lifecycle.on_bar(&symbol, false);
+        lifecycle.on_bar(&symbol, false);
+        assert!(lifecycle.is_cooling_down(&symbol));
+        lifecycle.on_bar(&symbol, false);
+        assert!(!lifecycle.is_cooling_down(&symbol));
+    }
+
+    #[test]
+    fn test_volume_ratio_confirmed() {
+        let mut candles = vec![create_test_candle(100.0); 21];
+        for candle in candles.iter_mut().take(20) {
+            candle.volume = 100.0;
+        }
+        candles[20].volume = 120.0;
+
+        assert!(volume_ratio_confirmed(&candles, 20, 1.2));
+        assert!(!volume_ratio_confirmed(&candles, 20, 1.21));
     }
 }

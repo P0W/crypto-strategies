@@ -25,14 +25,15 @@ use crypto_strategies::coindcx::{
 };
 use crypto_strategies::multi_timeframe::{MultiTimeframeCandles, MultiTimeframeData};
 use crypto_strategies::oms::{
-    size_order, ExecutionEngine, Fill, OrderBook, PositionManager, SizedOrder, StrategyContext,
+    evaluate_exit, size_order, tighten_trailing_stop, ExecutionEngine, ExitReason, Fill, OrderBook,
+    PositionManager, SizedOrder, StrategyContext,
 };
 use crypto_strategies::risk::RiskManager;
 use crypto_strategies::state_manager::{
     create_state_manager, Checkpoint, PendingOrder, Position as StatePosition, SqliteStateManager,
 };
 use crypto_strategies::strategies::{self, Strategy};
-use crypto_strategies::{Config, Money, Side, Symbol, Trade};
+use crypto_strategies::{Config, Money, Side, Symbol, PNL_EPSILON};
 
 // ============================================================================
 // Configuration Constants
@@ -135,6 +136,7 @@ impl PerformanceMetrics {
 /// Info about an order pending on the exchange
 #[derive(Debug, Clone)]
 struct PendingExchangeOrder {
+    internal_order_id: u64,
     symbol: Symbol,
     side: Side,
     quantity: f64,
@@ -190,7 +192,8 @@ impl LiveTrader {
         let start = Instant::now();
         info!("⚙️  Initializing trading engine...");
 
-        let strategy = strategies::create_strategy(&config)?;
+        let mut strategy = strategies::create_strategy(&config)?;
+        strategy.init();
         info!(
             "✓ Strategy loaded: {} ({} μs)",
             strategy.name(),
@@ -341,7 +344,7 @@ impl LiveTrader {
                 true,
             );
 
-            self.position_manager.add_fill(fill, symbol.clone(), side);
+            let _ = self.position_manager.add_fill(fill, symbol.clone(), side);
 
             // Restore stop/target levels if saved
             if sp.stop_loss > 0.0 || sp.take_profit > 0.0 {
@@ -769,14 +772,24 @@ impl LiveTrader {
 
         // Collect orders for live exchange submission (used by both exit and entry orders)
         let mut live_orders: Vec<crypto_strategies::oms::Order> = Vec::new();
+        let mut live_cancellations: Vec<(String, crypto_strategies::oms::Order)> = Vec::new();
 
         // Step 1: Check fills (microsecond precision)
         let fill_check_start = Instant::now();
         let fills_before = self.metrics.total_fills;
         let mut orders: Vec<_> = orderbook.get_all_orders().into_iter().cloned().collect();
         let initial_order_count = orders.len();
+        let mut completed_order_ids = Vec::new();
 
         for order in &mut orders {
+            if !self.paper_mode {
+                continue;
+            }
+
+            if !order.is_active() {
+                continue;
+            }
+
             // Live trading passes None for bar_idx - no look-ahead bias concern in real-time
             if let Some(fill_price) = self
                 .execution_engine
@@ -792,15 +805,52 @@ impl LiveTrader {
                     current_candle.datetime,
                 );
 
-                self.position_manager
-                    .add_fill(fill.clone(), order.symbol.clone(), order.side);
+                match order.side {
+                    Side::Buy => {
+                        self.paper_cash -= (fill.price * fill.quantity + fill.commission).to_f64()
+                    }
+                    Side::Sell => {
+                        self.paper_cash += (fill.price * fill.quantity - fill.commission).to_f64()
+                    }
+                }
+
+                let previous_side = self
+                    .position_manager
+                    .get_position(&order.symbol)
+                    .map(|position| position.side);
+                let realized_trade =
+                    self.position_manager
+                        .add_fill(fill.clone(), order.symbol.clone(), order.side);
                 self.metrics.record_fill();
+
+                let current_position = self.position_manager.get_position(&order.symbol);
+                let position_cycle_closed = previous_side.is_some()
+                    && current_position
+                        .map(|position| Some(position.side) != previous_side)
+                        .unwrap_or(true);
+
+                if let Some(trade) = realized_trade {
+                    if position_cycle_closed {
+                        self.strategy.on_trade_closed(&trade);
+                    }
+                    if trade.net_pnl.to_f64() > PNL_EPSILON {
+                        self.risk_manager.record_win();
+                    } else if trade.net_pnl.to_f64() < -PNL_EPSILON {
+                        self.risk_manager.record_loss();
+                    }
+                    if current_position.is_none() {
+                        self.position_manager.close_position(&order.symbol);
+                        self.entry_levels.remove(&order.symbol);
+                        self.trailing_stops.remove(&order.symbol);
+                    }
+                }
 
                 if let Some(pos) = self.position_manager.get_position(&order.symbol) {
                     self.strategy.on_order_filled(&fill, pos);
                 }
 
                 orderbook.mark_filled(order.id);
+                completed_order_ids.push(order.id);
 
                 info!(
                     "│  💰 FILL #{} [{}μs latency]",
@@ -827,6 +877,10 @@ impl LiveTrader {
                     fill.timestamp.format("%H:%M:%S%.3f")
                 );
             }
+        }
+
+        for order_id in completed_order_ids {
+            orderbook.cancel_order(order_id);
         }
 
         let fills_detected = self.metrics.total_fills - fills_before;
@@ -864,10 +918,7 @@ impl LiveTrader {
             // Update trailing stop if strategy provides one
             if let Some(new_trailing) = self.strategy.update_trailing_stop(&pos, price, candles) {
                 let current_stored = self.trailing_stops.get(symbol).copied();
-                let best_stop = match current_stored {
-                    Some(stored) => new_trailing.max(stored), // Never lower the trailing stop
-                    None => new_trailing,
-                };
+                let best_stop = tighten_trailing_stop(pos.side, current_stored, new_trailing);
                 self.trailing_stops.insert(symbol.clone(), best_stop);
             }
 
@@ -878,120 +929,64 @@ impl LiveTrader {
                 .copied()
                 .unwrap_or(stop_price);
 
-            // Check stop/target hit using intracandle prices (not close)
-            // For longs: stop triggers if low breaches stop, target if high reaches target
-            // For shorts: stop triggers if high breaches stop, target if low reaches target
-            let stopped = match pos.side {
-                Side::Buy => current_candle.low <= active_stop,
-                Side::Sell => current_candle.high >= active_stop,
-            };
-
-            let target_hit = match pos.side {
-                Side::Buy => current_candle.high >= target_price,
-                Side::Sell => current_candle.low <= target_price,
-            };
-
-            if stopped || target_hit {
-                let reason = if target_hit { "TARGET" } else { "STOP" };
-                let trigger_price = if target_hit {
-                    target_price
+            if let Some(exit_trigger) =
+                evaluate_exit(pos.side, current_candle, active_stop, target_price)
+            {
+                let exit_side = match pos.side {
+                    Side::Buy => Side::Sell,
+                    Side::Sell => Side::Buy,
+                };
+                let has_pending_exit = orderbook.get_all_orders().iter().any(|order| {
+                    order.is_active()
+                        && order.side == exit_side
+                        && matches!(order.order_type, crypto_strategies::oms::OrderType::Market)
+                });
+                if has_pending_exit {
+                    debug!("│  Exit already pending for {}, not resubmitting", symbol);
                 } else {
-                    active_stop
-                };
+                    let reason = match exit_trigger.reason {
+                        ExitReason::Stop => "STOP",
+                        ExitReason::Target => "TARGET",
+                    };
+                    let trigger_price = exit_trigger.trigger_price;
 
-                info!(
-                    "│  🎯 {} HIT for {} {:?} @ {:.2} (entry: {:.2})",
-                    reason, symbol, pos.side, trigger_price, pos.average_entry_price
-                );
+                    info!(
+                        "│  🎯 {} HIT for {} {:?} @ {:.2} (entry: {:.2})",
+                        reason, symbol, pos.side, trigger_price, pos.average_entry_price
+                    );
 
-                // Create exit order - opposite side to close position
-                let exit_order = match pos.side {
-                    Side::Buy => crypto_strategies::oms::OrderRequest::market_sell(
-                        symbol.clone(),
-                        pos.quantity.to_f64(),
-                    ),
-                    Side::Sell => crypto_strategies::oms::OrderRequest::market_buy(
-                        symbol.clone(),
-                        pos.quantity.to_f64(),
-                    ),
-                };
-
-                let order = exit_order.to_order();
-                let exit_side = order.side;
-
-                // Add to orderbook for paper mode fill simulation
-                // In live mode, we'll also send to exchange below
-                orderbook.add_order(order.clone());
-
-                info!(
-                    "│  📋 EXIT ORDER placed: {} {} @ market",
-                    if exit_side == Side::Buy {
-                        "BUY"
-                    } else {
-                        "SELL"
-                    },
-                    symbol
-                );
-
-                // Collect for live exchange submission (processed after orderbook borrow ends)
-                if !self.paper_mode {
-                    live_orders.push(order);
-                }
-
-                // Clear cached levels for this position
-                self.entry_levels.remove(symbol);
-                self.trailing_stops.remove(symbol);
-            }
-        }
-
-        // Step 3: Check closed positions
-        if let Some(pos) = self.position_manager.get_position(symbol) {
-            if pos.quantity.is_zero() && pos.fills.len() > 1 {
-                let trade = Trade {
-                    symbol: symbol.clone(),
-                    side: pos.side,
-                    entry_price: pos.average_entry_price,
-                    exit_price: Money::from_f64(current_candle.close),
-                    quantity: Money::from_f64(pos.total_quantity_traded()),
-                    entry_time: pos.entry_time(),
-                    exit_time: Utc::now(),
-                    pnl: pos.realized_pnl,
-                    commission: Money::from_f64(pos.total_commission()),
-                    net_pnl: pos.realized_pnl - Money::from_f64(pos.total_commission()),
-                };
-
-                self.strategy.on_trade_closed(&trade);
-
-                if trade.net_pnl.is_positive() {
-                    self.risk_manager.record_win();
-                } else {
-                    self.risk_manager.record_loss();
-                }
-
-                let return_pct = trade.return_pct();
-                info!("│  ✅ TRADE CLOSED");
-                info!("│    └─ Symbol:      {}", symbol);
-                info!(
-                    "│    └─ Side:        {}",
-                    if trade.side == Side::Buy {
-                        "LONG "
-                    } else {
-                        "SHORT"
+                    // Create exit order - opposite side to close position
+                    let exit_order = match pos.side {
+                        Side::Buy => crypto_strategies::oms::OrderRequest::market_sell(
+                            symbol.clone(),
+                            pos.quantity.to_f64(),
+                        ),
+                        Side::Sell => crypto_strategies::oms::OrderRequest::market_buy(
+                            symbol.clone(),
+                            pos.quantity.to_f64(),
+                        ),
                     }
-                );
-                info!("│    └─ Entry:       {:.2}", trade.entry_price);
-                info!("│    └─ Exit:        {:.2}", trade.exit_price);
-                info!("│    └─ Quantity:    {:.6}", trade.quantity);
-                info!("│    └─ Gross P&L:   {:.2}", trade.pnl);
-                info!("│    └─ Commission:  {:.2}", trade.commission);
-                info!(
-                    "│    └─ Net P&L:     {:.2} ({:+.2}%)",
-                    trade.net_pnl, return_pct
-                );
-                info!(
-                    "│    └─ Duration:    {}",
-                    (trade.exit_time - trade.entry_time).num_seconds() / 3600
-                );
+                    .with_client_id(format!("risk_exit_{}", symbol));
+
+                    let order = exit_order.to_order();
+
+                    orderbook.add_order(order.clone());
+
+                    info!(
+                        "│  📋 EXIT ORDER placed: {} {} @ market",
+                        if exit_side == Side::Buy {
+                            "BUY"
+                        } else {
+                            "SELL"
+                        },
+                        symbol
+                    );
+
+                    // Collect for live exchange submission (processed after orderbook borrow ends)
+                    if !self.paper_mode {
+                        live_orders.push(order);
+                    }
+                }
             }
         }
 
@@ -1011,6 +1006,29 @@ impl LiveTrader {
             peak_equity: self.risk_manager.peak_capital(),
         };
 
+        for order_id in self.strategy.orders_to_cancel(&ctx) {
+            if let Some(order) = orderbook.cancel_order(order_id) {
+                if self.paper_mode {
+                    self.strategy.on_order_cancelled(&order);
+                } else if let Some(exchange_id) =
+                    self.pending_exchange_orders
+                        .iter()
+                        .find_map(|(exchange_id, pending)| {
+                            (pending.internal_order_id == order_id).then(|| exchange_id.clone())
+                        })
+                {
+                    live_cancellations.push((exchange_id, order));
+                } else {
+                    warn!(
+                        "│  ⚠️  No exchange order mapping for local cancellation {}",
+                        order_id
+                    );
+                    orderbook.add_order(order);
+                }
+            }
+        }
+
+        self.strategy.on_bar(&ctx);
         let requests = self.strategy.generate_orders(&ctx);
         let strategy_latency = strategy_start.elapsed().as_micros();
 
@@ -1034,8 +1052,24 @@ impl LiveTrader {
         let mut placed_count = 0;
 
         for req in requests {
+            if let Some(position) = self.position_manager.get_position(&req.symbol) {
+                let duplicate_exit = position.side != req.side
+                    && matches!(req.order_type, crypto_strategies::oms::OrderType::Market)
+                    && orderbook.get_all_orders().iter().any(|order| {
+                        order.is_active()
+                            && order.side == req.side
+                            && matches!(order.order_type, crypto_strategies::oms::OrderType::Market)
+                    });
+                if duplicate_exit {
+                    debug!(
+                        "│  Exit already pending for {}, skipping duplicate strategy exit",
+                        req.symbol
+                    );
+                    continue;
+                }
+            }
+
             // Collect position data fresh for each order to avoid borrow conflicts
-            let has_position = self.position_manager.get_position(&req.symbol).is_some();
             let position_count = self.position_manager.open_position_count();
             let all_positions: Vec<&crypto_strategies::oms::types::Position> = self
                 .position_manager
@@ -1047,7 +1081,7 @@ impl LiveTrader {
             let order = match size_order(
                 &req,
                 candles,
-                has_position,
+                self.position_manager.get_position(&req.symbol),
                 position_count,
                 &all_positions,
                 &self.risk_manager,
@@ -1106,6 +1140,7 @@ impl LiveTrader {
                 }
                 info!("│    └─ Order ID: {}", order.id);
             } else {
+                orderbook.add_order(order.clone());
                 // Collect for deferred exchange submission
                 live_orders.push(order);
             }
@@ -1113,6 +1148,25 @@ impl LiveTrader {
 
         if placed_count > 0 {
             debug!("│  ✓ Placed {} paper order(s)", placed_count);
+        }
+
+        // Cancel live orders on the exchange after the local orderbook borrow ends.
+        for (exchange_id, order) in live_cancellations {
+            match self.exchange.cancel_order(&exchange_id).await {
+                Ok(()) => {
+                    self.pending_exchange_orders.remove(&exchange_id);
+                    self.strategy.on_order_cancelled(&order);
+                }
+                Err(error) => {
+                    error!(
+                        "│  ❌ Failed to cancel exchange order {}: {}",
+                        exchange_id, error
+                    );
+                    if let Some(orderbook) = self.orderbooks.get_mut(&order.symbol) {
+                        orderbook.add_order(order);
+                    }
+                }
+            }
         }
 
         // Send live orders to exchange (after orderbook borrow ends)
@@ -1131,6 +1185,9 @@ impl LiveTrader {
                 }
                 Err(e) => {
                     error!("│  ❌ Failed to place order on exchange: {}", e);
+                    if let Some(orderbook) = self.orderbooks.get_mut(&order.symbol) {
+                        orderbook.cancel_order(order.id);
+                    }
                 }
             }
         }
@@ -1145,7 +1202,12 @@ impl LiveTrader {
     fn calculate_portfolio_value(&self) -> f64 {
         let mut total = self.paper_cash;
         for (_sym, pos) in self.position_manager.get_all_positions() {
-            total += pos.unrealized_pnl.to_f64();
+            total += match pos.side {
+                Side::Buy => (pos.average_entry_price * pos.quantity + pos.unrealized_pnl).to_f64(),
+                Side::Sell => {
+                    (-pos.average_entry_price * pos.quantity + pos.unrealized_pnl).to_f64()
+                }
+            };
         }
         total
     }
@@ -1209,6 +1271,7 @@ impl LiveTrader {
         self.pending_exchange_orders.insert(
             exchange_order_id.clone(),
             PendingExchangeOrder {
+                internal_order_id: order.id,
                 symbol: order.symbol.clone(),
                 side: order.side,
                 quantity,
@@ -1299,7 +1362,7 @@ impl LiveTrader {
 
         let start = Instant::now();
         let mut fills_detected = 0;
-        let mut completed_orders: Vec<String> = Vec::new();
+        let mut completed_orders: Vec<(String, Symbol, u64)> = Vec::new();
         let mut partial_fill_updates: Vec<(String, f64)> = Vec::new(); // (order_id, new_filled_qty)
 
         // Check each pending order
@@ -1343,10 +1406,54 @@ impl LiveTrader {
                             false, // taker
                         );
 
-                        self.position_manager
-                            .add_fill(fill, pending.symbol.clone(), pending.side);
+                        match pending.side {
+                            Side::Buy => {
+                                self.paper_cash -=
+                                    (fill.price * fill.quantity + fill.commission).to_f64()
+                            }
+                            Side::Sell => {
+                                self.paper_cash +=
+                                    (fill.price * fill.quantity - fill.commission).to_f64()
+                            }
+                        }
+
+                        let previous_side = self
+                            .position_manager
+                            .get_position(&pending.symbol)
+                            .map(|position| position.side);
+                        let realized_trade = self.position_manager.add_fill(
+                            fill.clone(),
+                            pending.symbol.clone(),
+                            pending.side,
+                        );
                         self.metrics.record_fill();
                         fills_detected += 1;
+
+                        let current_position = self.position_manager.get_position(&pending.symbol);
+                        let position_cycle_closed = previous_side.is_some()
+                            && current_position
+                                .map(|position| Some(position.side) != previous_side)
+                                .unwrap_or(true);
+
+                        if let Some(trade) = realized_trade {
+                            if position_cycle_closed {
+                                self.strategy.on_trade_closed(&trade);
+                            }
+                            if trade.net_pnl.to_f64() > PNL_EPSILON {
+                                self.risk_manager.record_win();
+                            } else if trade.net_pnl.to_f64() < -PNL_EPSILON {
+                                self.risk_manager.record_loss();
+                            }
+                            if current_position.is_none() {
+                                self.position_manager.close_position(&pending.symbol);
+                                self.entry_levels.remove(&pending.symbol);
+                                self.trailing_stops.remove(&pending.symbol);
+                            }
+                        }
+
+                        if let Some(pos) = self.position_manager.get_position(&pending.symbol) {
+                            self.strategy.on_order_filled(&fill, pos);
+                        }
 
                         // Track the update for later
                         partial_fill_updates.push((exchange_id.clone(), total_filled));
@@ -1354,20 +1461,11 @@ impl LiveTrader {
 
                     if status_str == "filled" {
                         // Order complete - remove from tracking
-                        completed_orders.push(exchange_id.clone());
-
-                        // Update risk manager based on P&L
-                        if let Some(pos) = self.position_manager.get_position(&pending.symbol) {
-                            if pos.quantity.is_zero() {
-                                // Position closed - record win/loss
-                                let pnl = pos.realized_pnl.to_f64();
-                                if pnl > 0.0 {
-                                    self.risk_manager.record_win();
-                                } else {
-                                    self.risk_manager.record_loss();
-                                }
-                            }
-                        }
+                        completed_orders.push((
+                            exchange_id.clone(),
+                            pending.symbol.clone(),
+                            pending.internal_order_id,
+                        ));
                     } else if status_str == "open" || status_str == "init" {
                         // Still pending - check for timeout
                         let age_secs = pending.submitted_at.elapsed().as_secs();
@@ -1391,7 +1489,11 @@ impl LiveTrader {
                     } else if status_str == "cancelled" || status_str == "rejected" {
                         // Order cancelled/rejected
                         warn!("│  ⚠️  Order {} was {}", exchange_id, status_str);
-                        completed_orders.push(exchange_id.clone());
+                        completed_orders.push((
+                            exchange_id.clone(),
+                            pending.symbol.clone(),
+                            pending.internal_order_id,
+                        ));
                     }
                     // "open" or "init" - still pending, do nothing
                 }
@@ -1402,8 +1504,11 @@ impl LiveTrader {
         }
 
         // Remove completed orders
-        for id in completed_orders {
-            self.pending_exchange_orders.remove(&id);
+        for (exchange_id, symbol, internal_order_id) in completed_orders {
+            self.pending_exchange_orders.remove(&exchange_id);
+            if let Some(orderbook) = self.orderbooks.get_mut(&symbol) {
+                orderbook.cancel_order(internal_order_id);
+            }
         }
 
         // Update filled quantities for partial fills

@@ -241,7 +241,7 @@ impl Strategy for QuickFlipStrategy {
 
     fn on_trade_closed(&mut self, trade: &Trade) {
         self.cooldown
-            .set(trade.symbol.clone(), self.config.cooldown);
+            .set(trade.symbol.clone(), self.config.cooldown.saturating_add(1));
     }
 
     fn init(&mut self) {

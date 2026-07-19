@@ -3,7 +3,7 @@
 //! Tracks consecutive winning and losing trades to understand
 //! strategy behavior and psychological demands.
 
-use crate::Trade;
+use crate::{Trade, PNL_EPSILON};
 
 /// Streak analysis for consecutive wins and losses
 #[derive(Debug, Clone, Default)]
@@ -49,7 +49,22 @@ impl StreakAnalysis {
         let mut last_was_win: Option<bool> = None;
 
         for trade in trades {
-            let is_win = trade.net_pnl.is_positive();
+            let pnl = trade.net_pnl.to_f64();
+            if pnl.abs() <= PNL_EPSILON {
+                if current_win_streak > 0 {
+                    win_streaks.push(current_win_streak);
+                    max_win_streak = max_win_streak.max(current_win_streak);
+                    current_win_streak = 0;
+                }
+                if current_loss_streak > 0 {
+                    loss_streaks.push(current_loss_streak);
+                    max_loss_streak = max_loss_streak.max(current_loss_streak);
+                    current_loss_streak = 0;
+                }
+                last_was_win = None;
+                continue;
+            }
+            let is_win = pnl > 0.0;
 
             match (is_win, last_was_win) {
                 (true, Some(true)) => {

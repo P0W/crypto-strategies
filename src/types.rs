@@ -4,6 +4,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Monetary P&L smaller than one cent/paisa is treated as neutral.
+pub const PNL_EPSILON: f64 = 0.01;
+
 /// Validation errors for candle data
 #[derive(Debug, Error)]
 pub enum CandleValidationError {

@@ -18,8 +18,8 @@ pub mod regime_grid;
 pub mod volatility_regime;
 
 pub use common::{
-    atr_stop_loss, atr_take_profit, current_atr, current_atr_or_default, CooldownManager,
-    OhlcVectors,
+    atr_stop_loss, atr_take_profit, close_position_order, current_atr, current_atr_or_default,
+    volume_ratio_confirmed, CooldownManager, OhlcVectors, PositionLifecycleManager,
 };
 
 use crate::oms::{Fill, Order, OrderRequest, Position, StrategyContext};
@@ -112,6 +112,11 @@ pub trait Strategy: Send + Sync {
     /// Notification when an order is cancelled
     fn on_order_cancelled(&mut self, _order: &Order) {
         // Default: no-op
+    }
+
+    /// Select active orders that should be cancelled before generating new orders.
+    fn orders_to_cancel(&self, _ctx: &StrategyContext) -> Vec<u64> {
+        vec![]
     }
 
     /// Notification when a complete trade cycle closes (position fully exited)

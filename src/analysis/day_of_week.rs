@@ -5,7 +5,7 @@
 
 use chrono::Datelike;
 
-use crate::Trade;
+use crate::{Trade, PNL_EPSILON};
 
 /// Day of week performance statistics
 #[derive(Default, Clone)]
@@ -35,10 +35,13 @@ impl DayOfWeekAnalysis {
         ];
 
         for trade in trades {
+            if trade.net_pnl.to_f64().abs() <= PNL_EPSILON {
+                continue;
+            }
             let day_idx = trade.exit_time.weekday().num_days_from_monday() as usize;
             data[day_idx].total_pnl += trade.net_pnl.to_f64();
             data[day_idx].trade_count += 1;
-            if trade.net_pnl.is_positive() {
+            if trade.net_pnl.to_f64() > PNL_EPSILON {
                 data[day_idx].wins += 1;
             }
         }

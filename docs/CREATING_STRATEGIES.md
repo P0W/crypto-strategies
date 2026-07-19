@@ -343,6 +343,7 @@ Import from `crate::indicators`:
 | `get_regime_score()` | `1.0` | Regime score for position sizing |
 | `on_order_filled()` | no-op | Callback when order fills |
 | `on_order_cancelled()` | no-op | Callback when order cancelled |
+| `orders_to_cancel()` | `vec![]` | Return active order IDs that should be cancelled |
 | `on_trade_closed()` | no-op | Callback when position closes |
 | `on_bar()` | no-op | Called each candle |
 | `init()` | no-op | One-time initialization |
@@ -359,7 +360,11 @@ OrderRequest::limit_buy(symbol, quantity, price)
 OrderRequest::limit_sell(symbol, quantity, price)
 ```
 
-**Note:** Quantity `0.0` means the risk manager will calculate position size based on config.
+**Position sizing:** Entry requests are risk-sized by default, regardless of the
+placeholder quantity. Use `.with_quantity_cap()` only when a strategy such as a
+grid supplies a maximum desired quantity; the risk manager may still reduce it.
+Opposite-side orders reduce the current position and preserve the requested exit
+quantity up to the open position size.
 
 ## Multi-Timeframe Strategies
 
@@ -409,7 +414,15 @@ Add a `grid` section to your config for parameter optimization:
 Run optimization:
 
 ```bash
-cargo run --release -- optimize --config configs/my_strategy_config.json
+cargo run -- optimize --config configs/my_strategy_config.json \
+  --sort-by post_tax_return \
+  --min-trades 30 \
+  --no-update
+
+# Example training window; validate selected parameters on a later untouched window.
+cargo run -- optimize --config configs/my_strategy_config.json \
+  --start 2022-01-01 --end 2024-12-31 \
+  --sort-by post_tax_return --min-trades 30 --no-update
 ```
 
 ## Tips
@@ -419,7 +432,10 @@ cargo run --release -- optimize --config configs/my_strategy_config.json
 3. **Test thoroughly** - Run backtests across different date ranges
 4. **Check logs** - Use `-v` flag for detailed execution logs
 5. **Validate indicators** - Print indicator values during development
-6. **Position sizing** - Return `0.0` quantity to let risk manager size positions
+6. **Position sizing** - Entry orders are risk-sized automatically; use
+   `.with_quantity_cap()` only for a strategy-defined upper bound
+7. **Avoid full-history optimization** - Select parameters on training data and
+   require positive post-tax performance on an untouched holdout
 
 ## Example: Complete Simple Strategy
 

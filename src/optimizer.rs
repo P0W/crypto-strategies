@@ -18,6 +18,7 @@ pub struct OptimizationResult {
     pub params: HashMap<String, f64>,
     pub sharpe_ratio: f64,
     pub total_return: f64,
+    pub post_tax_return: f64,
     pub max_drawdown: f64,
     pub win_rate: f64,
     pub total_trades: usize,
@@ -60,6 +61,7 @@ impl Optimizer {
                     params: crate::grid::extract_params(config),
                     sharpe_ratio: result.metrics.sharpe_ratio,
                     total_return: result.metrics.total_return,
+                    post_tax_return: result.metrics.post_tax_return,
                     max_drawdown: result.metrics.max_drawdown,
                     win_rate: result.metrics.win_rate,
                     total_trades: result.metrics.total_trades,
@@ -99,6 +101,7 @@ impl Optimizer {
                     params: crate::grid::extract_params(config),
                     sharpe_ratio: result.metrics.sharpe_ratio,
                     total_return: result.metrics.total_return,
+                    post_tax_return: result.metrics.post_tax_return,
                     max_drawdown: result.metrics.max_drawdown,
                     win_rate: result.metrics.win_rate,
                     total_trades: result.metrics.total_trades,
@@ -136,6 +139,7 @@ impl Optimizer {
                     params: crate::grid::extract_params(config),
                     sharpe_ratio: result.metrics.sharpe_ratio,
                     total_return: result.metrics.total_return,
+                    post_tax_return: result.metrics.post_tax_return,
                     max_drawdown: result.metrics.max_drawdown,
                     win_rate: result.metrics.win_rate,
                     total_trades: result.metrics.total_trades,
@@ -153,6 +157,7 @@ impl Optimizer {
             let (va, vb) = match sort_by {
                 "calmar" => (a.calmar_ratio, b.calmar_ratio),
                 "return" => (a.total_return, b.total_return),
+                "post_tax_return" => (a.post_tax_return, b.post_tax_return),
                 "win_rate" => (a.win_rate, b.win_rate),
                 "profit_factor" => (a.profit_factor, b.profit_factor),
                 "expectancy" => (a.expectancy, b.expectancy),
@@ -236,6 +241,7 @@ mod tests {
             params,
             sharpe_ratio: 1.5,
             total_return: 50.0,
+            post_tax_return: 35.0,
             max_drawdown: 10.0,
             win_rate: 55.0,
             total_trades: 100,
@@ -246,6 +252,7 @@ mod tests {
 
         assert_eq!(result.sharpe_ratio, 1.5);
         assert_eq!(result.total_return, 50.0);
+        assert_eq!(result.post_tax_return, 35.0);
         assert_eq!(result.max_drawdown, 10.0);
         assert_eq!(result.win_rate, 55.0);
         assert_eq!(result.total_trades, 100);
@@ -264,6 +271,7 @@ mod tests {
             params,
             sharpe_ratio: 1.5,
             total_return: 50.0,
+            post_tax_return: 35.0,
             max_drawdown: 10.0,
             win_rate: 55.0,
             total_trades: 100,
@@ -297,6 +305,7 @@ mod tests {
                 params: HashMap::new(),
                 sharpe_ratio: 1.0,
                 total_return: 30.0,
+                post_tax_return: 20.0,
                 max_drawdown: 15.0,
                 win_rate: 50.0,
                 total_trades: 80,
@@ -308,6 +317,7 @@ mod tests {
                 params: HashMap::new(),
                 sharpe_ratio: 2.0,
                 total_return: 50.0,
+                post_tax_return: 35.0,
                 max_drawdown: 10.0,
                 win_rate: 60.0,
                 total_trades: 100,
@@ -319,6 +329,7 @@ mod tests {
                 params: HashMap::new(),
                 sharpe_ratio: 1.5,
                 total_return: 40.0,
+                post_tax_return: 28.0,
                 max_drawdown: 12.0,
                 win_rate: 55.0,
                 total_trades: 90,
@@ -419,6 +430,7 @@ mod tests {
             params: HashMap::new(),
             sharpe_ratio: 1.5,
             total_return: 40.0,
+            post_tax_return: 28.0,
             max_drawdown: 12.0,
             win_rate: 55.0,
             total_trades: 90,
@@ -559,6 +571,7 @@ mod tests {
                 },
                 sharpe_ratio: 1.5,
                 total_return: 40.0,
+                post_tax_return: 28.0,
                 max_drawdown: 12.0,
                 win_rate: 55.0,
                 total_trades: 90,
@@ -574,6 +587,7 @@ mod tests {
                 },
                 sharpe_ratio: 1.5, // Same sharpe
                 total_return: 40.0,
+                post_tax_return: 28.0,
                 max_drawdown: 12.0,
                 win_rate: 55.0,
                 total_trades: 90,

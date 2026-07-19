@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use crypto_strategies::backtest::Backtester;
 use crypto_strategies::multi_timeframe::MultiTimeframeData;
 use crypto_strategies::oms::{
-    ExecutionEngine, Fill, Order, OrderBook, OrderRequest, OrderState, OrderType, PositionManager,
-    StrategyContext, TimeInForce,
+    ExecutionEngine, Fill, Order, OrderBook, OrderRequest, OrderState, OrderType, Position,
+    PositionManager, StrategyContext, TimeInForce,
 };
 use crypto_strategies::strategies::volatility_regime::{
     VolatilityRegimeConfig, VolatilityRegimeStrategy,
@@ -529,4 +529,119 @@ fn test_backtest_portfolio_heat_without_t1_execution() {
     //
     // We can't assert exact differences since same signals may be generated,
     // but the test verifies the code path works without errors.
+}
+
+#[derive(Clone)]
+struct BuyAndHoldTestStrategy;
+
+impl Strategy for BuyAndHoldTestStrategy {
+    fn name(&self) -> &'static str {
+        "buy_and_hold_test"
+    }
+
+    fn clone_boxed(&self) -> Box<dyn Strategy> {
+        Box::new(self.clone())
+    }
+
+    fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest> {
+        if ctx.current_position.is_none() {
+            vec![OrderRequest::market_buy(ctx.symbol.clone(), 1.0).with_quantity_cap()]
+        } else {
+            vec![]
+        }
+    }
+
+    fn calculate_stop_loss(&self, _candles: &[Candle], _entry_price: f64, _side: Side) -> f64 {
+        0.0
+    }
+
+    fn calculate_take_profit(&self, _candles: &[Candle], _entry_price: f64, _side: Side) -> f64 {
+        f64::MAX
+    }
+
+    fn update_trailing_stop(
+        &self,
+        _position: &Position,
+        _current_price: f64,
+        _candles: &[Candle],
+    ) -> Option<f64> {
+        None
+    }
+}
+
+#[test]
+fn test_backtest_matches_analytical_buy_and_hold_return() {
+    let config: Config = serde_json::from_value(serde_json::json!({
+        "exchange": {
+            "maker_fee": 0.0,
+            "taker_fee": 0.0,
+            "assumed_slippage": 0.0,
+            "rate_limit": 10
+        },
+        "trading": {
+            "symbols": ["TEST"],
+            "initial_capital": 1000.0,
+            "risk_per_trade": 1.0,
+            "max_positions": 1,
+            "max_portfolio_heat": 1.0,
+            "max_position_pct": 1.0,
+            "max_drawdown": 1.0,
+            "drawdown_warning": 0.9,
+            "drawdown_critical": 0.95,
+            "drawdown_warning_multiplier": 1.0,
+            "drawdown_critical_multiplier": 1.0,
+            "consecutive_loss_limit": 100,
+            "consecutive_loss_multiplier": 1.0
+        },
+        "strategy": {
+            "name": "buy_and_hold_test",
+            "timeframe": "1d"
+        },
+        "tax": {
+            "tax_rate": 0.0,
+            "tds_rate": 0.0,
+            "loss_offset_allowed": true
+        },
+        "backtest": {
+            "data_dir": "./data",
+            "results_dir": "./results",
+            "commission": 0.0,
+            "use_t1_execution": false
+        }
+    }))
+    .unwrap();
+
+    let start = Utc::now() - Duration::days(3);
+    let candles = vec![
+        Candle::new_unchecked(start, 100.0, 100.0, 100.0, 100.0, 1000.0),
+        Candle::new_unchecked(
+            start + Duration::days(1),
+            110.0,
+            110.0,
+            110.0,
+            110.0,
+            1000.0,
+        ),
+        Candle::new_unchecked(
+            start + Duration::days(2),
+            120.0,
+            120.0,
+            120.0,
+            120.0,
+            1000.0,
+        ),
+    ];
+    let symbol = Symbol::new("TEST");
+    let mut mtf = MultiTimeframeData::new("1d");
+    mtf.add_timeframe("1d", candles);
+    let data = HashMap::from([(symbol, mtf)]);
+
+    let mut backtester = Backtester::new(config, Box::new(BuyAndHoldTestStrategy));
+    let result = backtester.run(&data);
+
+    assert_eq!(result.metrics.total_trades, 1);
+    assert!((result.metrics.total_return - 2.0).abs() < 1e-9);
+    assert!(result.metrics.sharpe_ratio > 0.0);
+    assert!((result.equity_curve.last().unwrap().1 - 1020.0).abs() < 1e-9);
+    assert!((result.trades[0].net_pnl.to_f64() - 20.0).abs() < 1e-9);
 }

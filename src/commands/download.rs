@@ -5,7 +5,7 @@ use anyhow::Result;
 use crypto_strategies::data::{load_csv, BinanceDataFetcher, CoinDCXDataFetcher, DataSource};
 use tracing::info;
 
-pub fn run(
+pub async fn run(
     pairs: String,
     timeframes: String,
     days: u32,
@@ -13,9 +13,6 @@ pub fn run(
     source: DataSource,
 ) -> Result<()> {
     info!("Starting data download from {}", source);
-
-    // Create a tokio runtime for async operations
-    let rt = tokio::runtime::Runtime::new()?;
 
     // Parse pairs and timeframes
     let symbols: Vec<&str> = pairs.split(',').map(|s| s.trim()).collect();
@@ -39,54 +36,31 @@ pub fn run(
     let mut success_count = 0;
     let mut total_downloads = 0;
 
-    match source {
-        DataSource::Binance => {
-            let fetcher = BinanceDataFetcher::new(&output);
+    let binance_fetcher = BinanceDataFetcher::new(&output);
+    let coindcx_fetcher = CoinDCXDataFetcher::new(&output);
 
-            for symbol in &symbols {
-                println!("\n{}:", symbol);
+    for symbol in &symbols {
+        println!("\n{}:", symbol);
 
-                for interval in &intervals {
-                    total_downloads += 1;
-                    print!("  Downloading {} {}... ", symbol, interval);
+        for interval in &intervals {
+            total_downloads += 1;
+            print!("  Downloading {} {}... ", symbol, interval);
 
-                    match rt.block_on(fetcher.download_pair(symbol, interval, days)) {
-                        Ok(filepath) => {
-                            if let Ok(candles) = load_csv(&filepath) {
-                                total_candles += candles.len();
-                                println!("✓ {} candles", candles.len());
-                                success_count += 1;
-                            }
-                        }
-                        Err(e) => {
-                            println!("✗ Error: {}", e);
-                        }
+            let result = match source {
+                DataSource::Binance => binance_fetcher.download_pair(symbol, interval, days).await,
+                DataSource::CoinDCX => coindcx_fetcher.download_pair(symbol, interval, days).await,
+            };
+
+            match result {
+                Ok(filepath) => {
+                    if let Ok(candles) = load_csv(&filepath) {
+                        total_candles += candles.len();
+                        println!("✓ {} candles", candles.len());
+                        success_count += 1;
                     }
                 }
-            }
-        }
-        DataSource::CoinDCX => {
-            let fetcher = CoinDCXDataFetcher::new(&output);
-
-            for symbol in &symbols {
-                println!("\n{}:", symbol);
-
-                for interval in &intervals {
-                    total_downloads += 1;
-                    print!("  Downloading {} {}... ", symbol, interval);
-
-                    match rt.block_on(fetcher.download_pair(symbol, interval, days)) {
-                        Ok(filepath) => {
-                            if let Ok(candles) = load_csv(&filepath) {
-                                total_candles += candles.len();
-                                println!("✓ {} candles", candles.len());
-                                success_count += 1;
-                            }
-                        }
-                        Err(e) => {
-                            println!("✗ Error: {}", e);
-                        }
-                    }
+                Err(e) => {
+                    println!("✗ Error: {}", e);
                 }
             }
         }

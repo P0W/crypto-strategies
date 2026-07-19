@@ -36,6 +36,38 @@ pub const INTERVALS: &[&str] = &[
     "1m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "1d", "3d", "1w", "1M",
 ];
 
+pub fn timeframe_duration(timeframe: &str) -> Option<Duration> {
+    match timeframe {
+        "1m" => Some(Duration::minutes(1)),
+        "5m" => Some(Duration::minutes(5)),
+        "15m" => Some(Duration::minutes(15)),
+        "30m" => Some(Duration::minutes(30)),
+        "1h" => Some(Duration::hours(1)),
+        "2h" => Some(Duration::hours(2)),
+        "4h" => Some(Duration::hours(4)),
+        "6h" => Some(Duration::hours(6)),
+        "8h" => Some(Duration::hours(8)),
+        "1d" => Some(Duration::days(1)),
+        "3d" => Some(Duration::days(3)),
+        "1w" => Some(Duration::weeks(1)),
+        "1M" => Some(Duration::days(30)),
+        _ => None,
+    }
+}
+
+pub fn warmup_start(
+    evaluation_start: DateTime<Utc>,
+    timeframes: &[impl AsRef<str>],
+    bars: i32,
+) -> DateTime<Utc> {
+    let longest = timeframes
+        .iter()
+        .filter_map(|timeframe| timeframe_duration(timeframe.as_ref()))
+        .max()
+        .unwrap_or_else(Duration::zero);
+    evaluation_start - longest * bars
+}
+
 /// Validate that symbols have proper INR suffix for data files
 /// Returns error message if any symbols are invalid
 pub fn validate_symbol_names(symbols: &[Symbol]) -> Option<String> {
@@ -1479,6 +1511,13 @@ mod tests {
             close,
             volume: 1000.0,
         }
+    }
+
+    #[test]
+    fn test_warmup_start_uses_longest_timeframe() {
+        let start = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+        let warmup = warmup_start(start, &["15m", "1d"], 300);
+        assert_eq!(warmup, start - Duration::days(300));
     }
 
     // ==================== DataSource Tests ====================

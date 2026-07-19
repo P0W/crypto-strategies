@@ -55,6 +55,11 @@ pub const PUBLIC_BASE_URL: &str = "https://public.coindcx.com";
 pub fn symbol_to_pair(symbol: &str) -> String {
     let symbol = symbol.to_uppercase();
 
+    // Already in CoinDCX pair format.
+    if symbol.contains('-') && symbol.contains('_') {
+        return symbol;
+    }
+
     // Handle INR pairs (e.g., BTCINR -> I-BTC_INR)
     if symbol.ends_with("INR") {
         let base = &symbol[..symbol.len() - 3];
@@ -65,11 +70,6 @@ pub fn symbol_to_pair(symbol: &str) -> String {
     if symbol.ends_with("USDT") {
         let base = &symbol[..symbol.len() - 4];
         return format!("B-{}_USDT", base);
-    }
-
-    // If already in pair format or unknown, return as-is
-    if symbol.contains('-') && symbol.contains('_') {
-        return symbol;
     }
 
     // Default: return as-is
@@ -648,5 +648,13 @@ mod tests {
     fn test_api_urls() {
         assert_eq!(API_BASE_URL, "https://api.coindcx.com");
         assert_eq!(PUBLIC_BASE_URL, "https://public.coindcx.com");
+    }
+
+    #[test]
+    fn test_symbol_to_pair_is_idempotent() {
+        assert_eq!(symbol_to_pair("XRPINR"), "I-XRP_INR");
+        assert_eq!(symbol_to_pair("I-XRP_INR"), "I-XRP_INR");
+        assert_eq!(symbol_to_pair("BTCUSDT"), "B-BTC_USDT");
+        assert_eq!(symbol_to_pair("B-BTC_USDT"), "B-BTC_USDT");
     }
 }

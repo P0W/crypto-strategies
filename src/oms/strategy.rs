@@ -89,6 +89,8 @@ pub struct OrderRequest {
     pub stop_price: Option<Money>,
     pub time_in_force: TimeInForce,
     pub client_id: Option<String>,
+    /// Treat `quantity` as a strategy-defined maximum while retaining risk sizing.
+    pub quantity_is_cap: bool,
 }
 
 impl OrderRequest {
@@ -102,6 +104,7 @@ impl OrderRequest {
             stop_price: None,
             time_in_force: TimeInForce::GTC,
             client_id: None,
+            quantity_is_cap: false,
         }
     }
 
@@ -115,6 +118,7 @@ impl OrderRequest {
             stop_price: None,
             time_in_force: TimeInForce::GTC,
             client_id: None,
+            quantity_is_cap: false,
         }
     }
 
@@ -128,6 +132,7 @@ impl OrderRequest {
             stop_price: None,
             time_in_force: TimeInForce::GTC,
             client_id: None,
+            quantity_is_cap: false,
         }
     }
 
@@ -141,6 +146,7 @@ impl OrderRequest {
             stop_price: None,
             time_in_force: TimeInForce::GTC,
             client_id: None,
+            quantity_is_cap: false,
         }
     }
 
@@ -154,6 +160,7 @@ impl OrderRequest {
             stop_price: Some(Money::from_f64(stop_price)),
             time_in_force: TimeInForce::GTC,
             client_id: None,
+            quantity_is_cap: false,
         }
     }
 
@@ -167,6 +174,7 @@ impl OrderRequest {
             stop_price: Some(Money::from_f64(stop_price)),
             time_in_force: TimeInForce::GTC,
             client_id: None,
+            quantity_is_cap: false,
         }
     }
 
@@ -177,6 +185,11 @@ impl OrderRequest {
 
     pub fn with_time_in_force(mut self, tif: TimeInForce) -> Self {
         self.time_in_force = tif;
+        self
+    }
+
+    pub fn with_quantity_cap(mut self) -> Self {
+        self.quantity_is_cap = true;
         self
     }
 

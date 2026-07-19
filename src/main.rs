@@ -72,13 +72,17 @@ enum Commands {
         #[arg(short, long, default_value = "configs/btc_eth_sol_bnb_xrp_1d.json")]
         config: String,
 
-        /// Sort results by metric (sharpe, calmar, return, win_rate, profit_factor)
+        /// Sort results by metric (sharpe, calmar, return, post_tax_return, win_rate, profit_factor)
         #[arg(long, default_value = "sharpe")]
         sort_by: String,
 
         /// Number of top results to show
         #[arg(short, long, default_value = "10")]
         top: usize,
+
+        /// Minimum completed trades required for an optimization result
+        #[arg(long, default_value = "20")]
+        min_trades: usize,
 
         /// Coins to test (comma-separated). E.g., "BTC,ETH,SOL"
         #[arg(long)]
@@ -283,6 +287,7 @@ async fn main() -> Result<()> {
             config,
             sort_by,
             top,
+            min_trades,
             coins,
             symbols,
             min_combo,
@@ -294,8 +299,8 @@ async fn main() -> Result<()> {
             sequential,
             no_update,
         } => commands::optimize::run(
-            config, sort_by, top, coins, symbols, min_combo, max_combo, timeframes, start, end,
-            overrides, sequential, no_update,
+            config, sort_by, top, min_trades, coins, symbols, min_combo, max_combo, timeframes,
+            start, end, overrides, sequential, no_update,
         ),
 
         Commands::Live {
@@ -323,7 +328,7 @@ async fn main() -> Result<()> {
                 tracing::warn!("{}, using binance", e);
                 crypto_strategies::data::DataSource::Binance
             });
-            commands::download::run(symbols, timeframes, days, output, data_source)
+            commands::download::run(symbols, timeframes, days, output, data_source).await
         }
     }
 }

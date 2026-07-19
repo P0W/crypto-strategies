@@ -218,6 +218,7 @@ classDiagram
         +on_bar(ctx)
         +on_order_filled(fill, position)
         +on_order_cancelled(order)
+        +orders_to_cancel(ctx) Vec~OrderId~
         +on_trade_closed(trade)
         +init()
     }
@@ -240,11 +241,26 @@ classDiagram
         +quantity: f64
         +limit_price: Option~f64~
         +stop_price: Option~f64~
+        +quantity_is_cap: bool
     }
 
     Strategy ..> StrategyContext : uses
     Strategy ..> OrderRequest : creates
 ```
+
+## Backtest Execution Semantics
+
+- Market signals execute using the configured intra-candle or T+1 path.
+- Limit orders cannot fill on the bar where they were created.
+- Existing positions evaluate gap-through levels first. If both stop and target
+  trade later within one OHLC candle, the stop wins because sequence is unknown.
+- Long equity contribution is positive market value; short positions contribute
+  negative market liability.
+- End-of-data liquidation settles cash, exit commission, trades, and final equity.
+- Sharpe uses UTC daily closing equity and 365-day crypto annualization, making it
+  comparable across 5m, 15m, hourly, and daily source bars.
+- Taxable gains respect `loss_offset_allowed`; TDS is treated as withholding rather
+  than an additional final tax cost.
 
 ## Optimizer Flow
 
@@ -269,6 +285,11 @@ flowchart TD
         WorkerN --> BacktestN["Run Backtest"]
     end
 
+    Backtest1 --> Eligibility["Reject results below --min-trades"]
+    Backtest2 --> Eligibility
+    BacktestN --> Eligibility
+    Eligibility --> Sort["Sort by Sharpe, Calmar, Return, or Post-Tax Return"]
+
     Backtest1 --> Collect["Collect Results"]
     Backtest2 --> Collect
     BacktestN --> Collect
@@ -283,6 +304,19 @@ flowchart TD
 ```
 
 ## State Manager (Live Trading)
+
+### Live Order Reconciliation
+
+- Paper mode fills orders locally against candles and settles cash immediately.
+- Live mode keeps accepted orders in the local `OrderBook` for strategy visibility,
+  but never simulates their fills locally.
+- `PendingExchangeOrder` maps the CoinDCX exchange ID to the internal order ID.
+- Exchange fill, cancellation, rejection, and placement-failure paths remove or
+  restore the corresponding local order deterministically.
+- Strategy cancellation requests are sent to CoinDCX; if cancellation fails, the
+  local order is restored because the exchange may still execute it.
+- Active market exits are latched per symbol to prevent duplicate stop/target
+  submissions while allowing multiple distinct grid limit orders.
 
 ```mermaid
 flowchart TD

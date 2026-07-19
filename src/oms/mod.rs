@@ -26,7 +26,9 @@ pub mod strategy;
 pub mod types;
 
 // Re-export core types
-pub use execution::ExecutionEngine;
+pub use execution::{
+    evaluate_exit, tighten_trailing_stop, ExecutionEngine, ExitReason, ExitTrigger,
+};
 pub use order_sizer::{size_order, OrderRejection, OrderSizer, SizedOrder};
 pub use orderbook::OrderBook;
 pub use position_manager::PositionManager;

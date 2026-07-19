@@ -59,7 +59,7 @@ pub enum OrderRejection {
 /// # Arguments
 /// * `req` - The order request from strategy (typically with quantity=1.0)
 /// * `candles` - Price history for indicator calculations
-/// * `has_position` - Whether there's an existing position for this symbol
+/// * `current_position` - Existing position for this symbol, if any
 /// * `position_count` - Total number of open positions
 /// * `all_positions` - All current positions for portfolio heat calculation
 /// * `risk_manager` - Reference to risk manager for position sizing
@@ -72,15 +72,21 @@ pub enum OrderRejection {
 pub fn size_order(
     req: &OrderRequest,
     candles: &[Candle],
-    has_position: bool,
+    current_position: Option<&Position>,
     position_count: usize,
     all_positions: &[&Position],
     risk_manager: &RiskManager,
     strategy: &dyn Strategy,
 ) -> SizedOrder {
-    // Exit orders pass through with strategy's quantity
-    if has_position {
-        return SizedOrder::Exit(req.to_order());
+    // Opposite-side orders reduce an existing position and preserve strategy quantity.
+    if let Some(position) = current_position {
+        if position.side != req.side {
+            let mut order = req.to_order();
+            let exit_quantity = order.quantity.min(position.quantity);
+            order.quantity = exit_quantity;
+            order.remaining_quantity = exit_quantity;
+            return SizedOrder::Exit(order);
+        }
     }
 
     // Entry order - apply full risk management
@@ -91,7 +97,7 @@ pub fn size_order(
     }
 
     // Check position count limit
-    if !risk_manager.can_open_position_count(position_count) {
+    if current_position.is_none() && !risk_manager.can_open_position_count(position_count) {
         return SizedOrder::Rejected(OrderRejection::MaxPositionsReached {
             current: position_count,
             max: risk_manager.max_positions(),
@@ -111,12 +117,17 @@ pub fn size_order(
     let regime_score = strategy.get_regime_score(candles);
 
     // Calculate quantity via risk manager
-    let quantity = risk_manager.calculate_position_size_with_regime(
+    let risk_quantity = risk_manager.calculate_position_size_with_regime(
         price,
         stop_price,
         all_positions,
         regime_score,
     );
+    let quantity = if req.quantity_is_cap {
+        req.quantity.to_f64().min(risk_quantity)
+    } else {
+        risk_quantity
+    };
 
     if quantity <= 0.0 {
         return SizedOrder::Rejected(OrderRejection::ZeroQuantity);
@@ -160,14 +171,14 @@ impl<'a> OrderSizer<'a> {
         &self,
         req: &OrderRequest,
         candles: &[Candle],
-        has_position: bool,
+        current_position: Option<&Position>,
         position_count: usize,
         all_positions: &[&Position],
     ) -> SizedOrder {
         size_order(
             req,
             candles,
-            has_position,
+            current_position,
             position_count,
             all_positions,
             self.risk_manager,
@@ -183,7 +194,7 @@ impl<'a> OrderSizer<'a> {
         &self,
         requests: &[OrderRequest],
         candles: &[Candle],
-        has_position_fn: impl Fn(&Symbol) -> bool,
+        current_position_fn: impl Fn(&Symbol) -> Option<&Position>,
         position_count: usize,
         all_positions: &[&Position],
     ) -> (Vec<Order>, HashMap<Symbol, (f64, f64)>) {
@@ -191,9 +202,15 @@ impl<'a> OrderSizer<'a> {
         let mut entry_levels = HashMap::new();
 
         for req in requests {
-            let has_position = has_position_fn(&req.symbol);
+            let current_position = current_position_fn(&req.symbol);
 
-            match self.size_order(req, candles, has_position, position_count, all_positions) {
+            match self.size_order(
+                req,
+                candles,
+                current_position,
+                position_count,
+                all_positions,
+            ) {
                 SizedOrder::Entry {
                     order,
                     stop_price,
@@ -221,7 +238,7 @@ mod tests {
     use crate::oms::strategy::OrderRequest;
     use crate::risk::RiskManager;
     use crate::strategies::volatility_regime::{VolatilityRegimeConfig, VolatilityRegimeStrategy};
-    use crate::{Candle, Symbol};
+    use crate::{Candle, Side, Symbol};
     use chrono::Utc;
 
     fn create_candles(prices: &[f64]) -> Vec<Candle> {
@@ -263,7 +280,7 @@ mod tests {
         let candles = create_candles(&[100.0; 50]);
         let req = OrderRequest::market_buy(Symbol::new("BTCUSDT"), 1.0);
 
-        let result = sizer.size_order(&req, &candles, false, 0, &[]);
+        let result = sizer.size_order(&req, &candles, None, 0, &[]);
 
         match result {
             SizedOrder::Entry {
@@ -291,9 +308,13 @@ mod tests {
 
         let candles = create_candles(&[100.0; 50]);
         let req = OrderRequest::market_sell(Symbol::new("BTCUSDT"), 5.5);
+        let position = Position::from_fill(
+            crate::oms::Fill::from_f64(1, 100.0, 5.5, Utc::now(), 0.0, false),
+            Symbol::new("BTCUSDT"),
+            Side::Buy,
+        );
 
-        // has_position=true means this is an exit order
-        let result = sizer.size_order(&req, &candles, true, 1, &[]);
+        let result = sizer.size_order(&req, &candles, Some(&position), 1, &[&position]);
 
         match result {
             SizedOrder::Exit(order) => {
@@ -314,7 +335,7 @@ mod tests {
         let req = OrderRequest::market_buy(Symbol::new("BTCUSDT"), 1.0);
 
         // Already at max positions
-        let result = sizer.size_order(&req, &candles, false, 5, &[]);
+        let result = sizer.size_order(&req, &candles, None, 5, &[]);
 
         match result {
             SizedOrder::Rejected(OrderRejection::MaxPositionsReached { current, max }) => {
@@ -334,11 +355,29 @@ mod tests {
         let candles: Vec<Candle> = vec![];
         let req = OrderRequest::market_buy(Symbol::new("BTCUSDT"), 1.0);
 
-        let result = sizer.size_order(&req, &candles, false, 0, &[]);
+        let result = sizer.size_order(&req, &candles, None, 0, &[]);
 
         match result {
             SizedOrder::Rejected(OrderRejection::NoCandles) => {}
             _ => panic!("Expected rejection due to no candles"),
+        }
+    }
+
+    #[test]
+    fn test_strategy_quantity_cap_is_preserved_when_below_risk_limit() {
+        let rm = create_risk_manager();
+        let strategy = create_strategy();
+        let sizer = OrderSizer::new(&rm, strategy.as_ref());
+        let candles = create_candles(&[100.0; 50]);
+        let req = OrderRequest::limit_buy(Symbol::new("BTCUSDT"), 0.5, 99.0).with_quantity_cap();
+
+        let result = sizer.size_order(&req, &candles, None, 0, &[]);
+
+        match result {
+            SizedOrder::Entry { order, .. } => {
+                assert_eq!(order.quantity.to_f64(), 0.5);
+            }
+            _ => panic!("Expected explicit entry order"),
         }
     }
 }

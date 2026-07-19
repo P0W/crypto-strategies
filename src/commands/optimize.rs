@@ -61,6 +61,7 @@ pub fn run(
     config_path: String,
     sort_by: String,
     top: usize,
+    min_trades: usize,
     coins: Option<String>,
     symbols: Option<String>,
     min_combo: usize,
@@ -166,11 +167,13 @@ pub fn run(
 
     // Check for missing data and fetch if needed (including date range coverage)
     info!("Checking for missing data files...");
+    let coverage_start =
+        start_date.map(|start| data::warmup_start(start, &timeframes_to_test, 300));
     data::check_and_fetch_data(
         &config.backtest.data_dir,
         &all_symbols,
         &timeframes_to_test,
-        start_date,
+        coverage_start,
         end_date,
     )?;
 
@@ -230,13 +233,14 @@ pub fn run(
 
         for timeframe in &timeframes_to_test {
             task_config.set_timeframe(timeframe);
+            let load_start = start_date.map(|start| data::warmup_start(start, &[timeframe], 300));
 
             let symbol_list: Vec<Symbol> = symbols_vec.iter().map(Symbol::new).collect();
             match data::load_multi_symbol_with_range(
                 &task_config.backtest.data_dir,
                 &symbol_list,
                 timeframe,
-                start_date,
+                load_start,
                 end_date,
             ) {
                 Ok(data) if !data.is_empty() => {
@@ -356,6 +360,10 @@ pub fn run(
         total_runs, ""
     );
     println!(
+        "  ║  Min Trades   │ {:>8} per candidate{:<34} ║",
+        min_trades, ""
+    );
+    println!(
         "  ║  Execution    │ {:<58} ║",
         if sequential {
             "Sequential (single-threaded)".to_string()
@@ -400,13 +408,12 @@ pub fn run(
         all_runs
             .iter()
             .filter_map(|(task, param_config)| {
-                let result = run_single_backtest(task, param_config);
+                let result = run_single_backtest(task, param_config)
+                    .filter(|candidate| candidate.total_trades >= min_trades);
                 pb.inc(1);
-                if let Some(ref r) = result {
-                    if r.total_trades > 0 {
-                        let count = valid_count.fetch_add(1, Ordering::Relaxed) + 1;
-                        pb.set_message(format!("{} valid", count));
-                    }
+                if result.is_some() {
+                    let count = valid_count.fetch_add(1, Ordering::Relaxed) + 1;
+                    pb.set_message(format!("{} valid", count));
                 }
                 result
             })
@@ -415,13 +422,12 @@ pub fn run(
         all_runs
             .par_iter()
             .filter_map(|(task, param_config)| {
-                let result = run_single_backtest(task, param_config);
+                let result = run_single_backtest(task, param_config)
+                    .filter(|candidate| candidate.total_trades >= min_trades);
                 pb.inc(1);
-                if let Some(ref r) = result {
-                    if r.total_trades > 0 {
-                        let count = valid_count_clone.fetch_add(1, Ordering::Relaxed) + 1;
-                        pb.set_message(format!("{} valid", count));
-                    }
+                if result.is_some() {
+                    let count = valid_count_clone.fetch_add(1, Ordering::Relaxed) + 1;
+                    pb.set_message(format!("{} valid", count));
                 }
                 result
             })
@@ -502,8 +508,10 @@ pub fn run(
     let top_results: Vec<_> = all_results.iter().take(display_count).collect();
     let avg_sharpe: f64 =
         top_results.iter().map(|r| r.sharpe_ratio).sum::<f64>() / display_count as f64;
-    let avg_return: f64 =
-        top_results.iter().map(|r| r.total_return).sum::<f64>() / display_count as f64;
+    let best_post_tax_return = top_results
+        .iter()
+        .map(|r| r.post_tax_return)
+        .fold(f64::NEG_INFINITY, f64::max);
     let best_sharpe = top_results
         .iter()
         .map(|r| r.sharpe_ratio)
@@ -519,14 +527,14 @@ pub fn run(
         display_count, sort_by
     );
     println!("  ╠{}╣", border);
-    println!("  ║  Quick Stats: Best Sharpe: {:.2} │ Best Return: {:.1}% │ Avg Sharpe: {:.2} │ Avg Return: {:.1}% ║", best_sharpe, best_return, avg_sharpe, avg_return);
+    println!("  ║  Quick Stats: Best Sharpe: {:.2} │ Best Return: {:.1}% │ Best Post-Tax: {:.1}% │ Avg Sharpe: {:.2} ║", best_sharpe, best_return, best_post_tax_return, avg_sharpe);
     println!("  ╚{}╝", border);
     println!();
     println!(
-        "  {:<3} │ {:>7} │ {:>8} │ {:>7} │ {:>6} │ {:>8} │ {:>5} │ {:<12} │ {:>3} │ Grid Parameters",
-        "#", "Sharpe", "Return", "MaxDD", "WinR", "Expect", "Trd", "Symbols", "TF"
+        "  {:<3} │ {:>7} │ {:>8} │ {:>8} │ {:>7} │ {:>6} │ {:>8} │ {:>5} │ {:<12} │ {:>3} │ Grid Parameters",
+        "#", "Sharpe", "Return", "PostTax", "MaxDD", "WinR", "Expect", "Trd", "Symbols", "TF"
     );
-    println!("  ───┼─────────┼──────────┼─────────┼────────┼──────────┼───────┼──────────────┼─────┼─────────────────");
+    println!("  ───┼─────────┼──────────┼──────────┼─────────┼────────┼──────────┼───────┼──────────────┼─────┼─────────────────");
 
     for (i, result) in all_results.iter().take(top).enumerate() {
         let group_idx = *result.params.get("_group_idx").unwrap_or(&0.0) as usize;
@@ -574,11 +582,12 @@ pub fn run(
         };
 
         println!(
-            "{} {:<2} │ {:>7.2} │ {:>7.1}% │ {:>6.1}% │ {:>5.0}% │ {:>8.2} │ {:>5} │ {:<12} │ {:>3} │ {}",
+            "{} {:<2} │ {:>7.2} │ {:>7.1}% │ {:>7.1}% │ {:>6.1}% │ {:>5.0}% │ {:>8.2} │ {:>5} │ {:<12} │ {:>3} │ {}",
             rank_indicator,
             i + 1,
             result.sharpe_ratio,
             result.total_return,
+            result.post_tax_return,
             result.max_drawdown,
             result.win_rate,
             result.expectancy,
@@ -687,6 +696,7 @@ fn get_metric_value(result: &OptimizationResult, sort_by: &str) -> f64 {
     match sort_by {
         "sharpe" => result.sharpe_ratio,
         "return" => result.total_return,
+        "post_tax_return" => result.post_tax_return,
         "calmar" => result.calmar_ratio,
         "win_rate" => result.win_rate,
         "profit_factor" => result.profit_factor,
@@ -706,6 +716,7 @@ fn get_saved_optimization_metric(config: &Config, sort_by: &str) -> Option<f64> 
     let metric_name = match sort_by {
         "sharpe" => "sharpe_ratio",
         "return" => "total_return",
+        "post_tax_return" => "post_tax_return",
         "calmar" => "calmar_ratio",
         "win_rate" => "win_rate",
         "profit_factor" => "profit_factor",
@@ -738,21 +749,23 @@ fn run_baseline_backtest(
         if !all_tfs.contains(&timeframe.as_str()) {
             all_tfs.push(&timeframe);
         }
+        let load_start = start_date.map(|start| data::warmup_start(start, &all_tfs, 300));
         data::load_multi_timeframe(
             &config.backtest.data_dir,
             &symbols,
             &all_tfs,
             &timeframe,
-            start_date,
+            load_start,
             end_date,
         )
         .ok()?
     } else {
+        let load_start = start_date.map(|start| data::warmup_start(start, &[&timeframe], 300));
         let single_data = data::load_multi_symbol_with_range(
             &config.backtest.data_dir,
             &symbols,
             &timeframe,
-            start_date,
+            load_start,
             end_date,
         )
         .ok()?;
@@ -772,12 +785,14 @@ fn run_baseline_backtest(
     }
 
     let strategy = strategies::create_strategy(config).ok()?;
-    let mut backtester = Backtester::new(config.clone(), strategy);
+    let mut backtester =
+        Backtester::new(config.clone(), strategy).with_evaluation_start(start_date);
     let result = backtester.run(&mtf_data);
 
     Some(match sort_by {
         "sharpe" => result.metrics.sharpe_ratio,
         "return" => result.metrics.total_return,
+        "post_tax_return" => result.metrics.post_tax_return,
         "calmar" => result.metrics.calmar_ratio,
         "win_rate" => result.metrics.win_rate,
         "profit_factor" => result.metrics.profit_factor,
@@ -857,6 +872,7 @@ fn update_config_with_best(
             serde_json::json!([{
                 "sharpe_ratio": (best.sharpe_ratio * 100.0).round() / 100.0,
                 "total_return": (best.total_return * 10.0).round() / 10.0,
+                "post_tax_return": (best.post_tax_return * 10.0).round() / 10.0,
                 "max_drawdown": (best.max_drawdown * 10.0).round() / 10.0,
                 "win_rate": (best.win_rate * 10.0).round() / 10.0,
                 "total_trades": best.total_trades,
@@ -924,13 +940,16 @@ fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<Optimiza
         if !all_tfs.contains(&task.timeframe.as_str()) {
             all_tfs.push(&task.timeframe);
         }
+        let load_start = task
+            .start_date
+            .map(|start| data::warmup_start(start, &all_tfs, 300));
 
         match data::load_multi_timeframe(
             &task.config.backtest.data_dir,
             &symbol_list,
             &all_tfs,
             &task.timeframe,
-            task.start_date,
+            load_start,
             task.end_date,
         ) {
             Ok(d) if !d.is_empty() => d,
@@ -938,11 +957,14 @@ fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<Optimiza
         }
     } else {
         // Single-TF strategy - wrap in MTF format
+        let load_start = task
+            .start_date
+            .map(|start| data::warmup_start(start, &[task.timeframe.as_str()], 300));
         let single_data = match data::load_multi_symbol_with_range(
             &task.config.backtest.data_dir,
             &symbol_list,
             &task.timeframe,
-            task.start_date,
+            load_start,
             task.end_date,
         ) {
             Ok(d) if !d.is_empty() => d,
@@ -959,7 +981,8 @@ fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<Optimiza
             .collect()
     };
 
-    let mut backtester = Backtester::new(param_config.clone(), strategy);
+    let mut backtester =
+        Backtester::new(param_config.clone(), strategy).with_evaluation_start(task.start_date);
     let result = backtester.run(&mtf_data);
 
     // Build params with metadata
@@ -986,6 +1009,7 @@ fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<Optimiza
         params,
         sharpe_ratio: result.metrics.sharpe_ratio,
         total_return: result.metrics.total_return,
+        post_tax_return: result.metrics.post_tax_return,
         max_drawdown: result.metrics.max_drawdown,
         win_rate: result.metrics.win_rate,
         total_trades: result.metrics.total_trades,
@@ -1000,6 +1024,7 @@ fn sort_results(results: &mut [OptimizationResult], sort_by: &str) {
         let val_a = match sort_by {
             "sharpe" => a.sharpe_ratio,
             "return" => a.total_return,
+            "post_tax_return" => a.post_tax_return,
             "calmar" => a.calmar_ratio,
             "win_rate" => a.win_rate,
             "profit_factor" => a.profit_factor,
@@ -1009,6 +1034,7 @@ fn sort_results(results: &mut [OptimizationResult], sort_by: &str) {
         let val_b = match sort_by {
             "sharpe" => b.sharpe_ratio,
             "return" => b.total_return,
+            "post_tax_return" => b.post_tax_return,
             "calmar" => b.calmar_ratio,
             "win_rate" => b.win_rate,
             "profit_factor" => b.profit_factor,

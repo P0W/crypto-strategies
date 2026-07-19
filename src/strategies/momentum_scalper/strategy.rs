@@ -17,10 +17,10 @@
 use crate::indicators::{adx, ema, macd};
 use crate::oms::{Fill, OrderRequest, StrategyContext};
 use crate::strategies::{
-    atr_stop_loss, atr_take_profit, current_atr_or_default, OhlcVectors, Strategy,
+    atr_stop_loss, atr_take_profit, close_position_order, current_atr_or_default,
+    volume_ratio_confirmed, OhlcVectors, PositionLifecycleManager, Strategy,
 };
-use crate::{Candle, Position, Side, Symbol, Trade};
-use std::collections::HashMap;
+use crate::{Candle, Position, Side, Trade};
 
 use super::config::MomentumScalperConfig;
 use super::MomentumState;
@@ -29,6 +29,9 @@ use super::MomentumState;
 struct Indicators {
     current_ema_fast: Option<f64>,
     current_ema_slow: Option<f64>,
+    previous_ema_fast: Option<f64>,
+    previous_ema_slow: Option<f64>,
+    current_ema_trend: Option<f64>,
     current_adx: Option<f64>,
     hist_curr: f64,
     hist_prev: f64,
@@ -43,6 +46,7 @@ impl Indicators {
         // Batch EMA calculations
         let ema_fast = ema(&ohlc.close, config.ema_fast);
         let ema_slow_vals = ema(&ohlc.close, config.ema_slow);
+        let ema_trend = ema(&ohlc.close, config.ema_trend);
 
         // Batch ADX calculation
         let adx_values = adx(&ohlc.high, &ohlc.low, &ohlc.close, config.adx_period);
@@ -65,6 +69,13 @@ impl Indicators {
         Self {
             current_ema_fast: ema_fast.last().and_then(|&x| x),
             current_ema_slow: ema_slow_vals.last().and_then(|&x| x),
+            previous_ema_fast: ema_fast
+                .get(ema_fast.len().saturating_sub(2))
+                .and_then(|&x| x),
+            previous_ema_slow: ema_slow_vals
+                .get(ema_slow_vals.len().saturating_sub(2))
+                .and_then(|&x| x),
+            current_ema_trend: ema_trend.last().and_then(|&x| x),
             current_adx: adx_values.last().and_then(|&x| x),
             hist_curr,
             hist_prev,
@@ -74,34 +85,18 @@ impl Indicators {
     }
 }
 
-/// Per-symbol position tracking
-#[derive(Default)]
-struct SymbolState {
-    bars_in_position: usize,
-    cooldown_counter: usize,
-}
-
 /// Momentum Scalper Strategy - Production Grade
 pub struct MomentumScalperStrategy {
     config: MomentumScalperConfig,
-    /// Per-symbol state tracking
-    symbol_states: HashMap<Symbol, SymbolState>,
+    lifecycle: PositionLifecycleManager,
 }
 
 impl MomentumScalperStrategy {
     pub fn new(config: MomentumScalperConfig) -> Self {
         Self {
             config,
-            symbol_states: HashMap::new(),
+            lifecycle: PositionLifecycleManager::default(),
         }
-    }
-
-    fn get_or_create_state(&mut self, symbol: &Symbol) -> &mut SymbolState {
-        self.symbol_states.entry(symbol.clone()).or_default()
-    }
-
-    fn get_state(&self, symbol: &Symbol) -> Option<&SymbolState> {
-        self.symbol_states.get(symbol)
     }
 
     /// Get EMA alignment signal from pre-calculated indicators
@@ -112,6 +107,21 @@ impl MomentumScalperStrategy {
         if fast > slow {
             Some(Side::Buy)
         } else if fast < slow {
+            Some(Side::Sell)
+        } else {
+            None
+        }
+    }
+
+    fn get_ema_cross(ind: &Indicators) -> Option<Side> {
+        let fast = ind.current_ema_fast?;
+        let slow = ind.current_ema_slow?;
+        let previous_fast = ind.previous_ema_fast?;
+        let previous_slow = ind.previous_ema_slow?;
+
+        if fast > slow && previous_fast <= previous_slow {
+            Some(Side::Buy)
+        } else if fast < slow && previous_fast >= previous_slow {
             Some(Side::Sell)
         } else {
             None
@@ -161,6 +171,17 @@ impl MomentumScalperStrategy {
         }
         false
     }
+
+    fn is_volume_confirmed(&self, candles: &[Candle]) -> bool {
+        if !self.config.require_volume {
+            return true;
+        }
+        volume_ratio_confirmed(
+            candles,
+            self.config.volume_period,
+            self.config.volume_threshold,
+        )
+    }
 }
 
 impl Strategy for MomentumScalperStrategy {
@@ -173,17 +194,8 @@ impl Strategy for MomentumScalperStrategy {
     }
 
     fn on_bar(&mut self, ctx: &StrategyContext) {
-        let state = self.get_or_create_state(ctx.symbol);
-
-        // Increment bars in position if we have a position
-        if ctx.current_position.is_some() {
-            state.bars_in_position += 1;
-        }
-
-        // Decrement cooldown when not in position
-        if ctx.current_position.is_none() && state.cooldown_counter > 0 {
-            state.cooldown_counter -= 1;
-        }
+        self.lifecycle
+            .on_bar(ctx.symbol, ctx.current_position.is_some());
     }
 
     fn generate_orders(&self, ctx: &StrategyContext) -> Vec<OrderRequest> {
@@ -201,10 +213,8 @@ impl Strategy for MomentumScalperStrategy {
         }
 
         // Check cooldown (per-symbol)
-        if let Some(state) = self.get_state(ctx.symbol) {
-            if state.cooldown_counter > 0 && ctx.current_position.is_none() {
-                return orders;
-            }
+        if self.lifecycle.is_cooling_down(ctx.symbol) && ctx.current_position.is_none() {
+            return orders;
         }
 
         // Calculate all indicators ONCE using batch functions
@@ -212,36 +222,36 @@ impl Strategy for MomentumScalperStrategy {
 
         // If in position, check exit conditions
         if let Some(pos) = ctx.current_position {
+            let is_long = pos.side == Side::Buy;
+            let exit_order = || close_position_order(ctx.symbol, pos);
+
             // Exit on EMA cross
-            if self.should_exit_on_cross(&ind, true) {
-                orders.push(OrderRequest::market_sell(
-                    ctx.symbol.clone(),
-                    pos.quantity.to_f64(),
-                ));
+            if self.should_exit_on_cross(&ind, is_long) {
+                orders.push(exit_order());
                 return orders;
             }
 
             // Exit on max hold bars
-            if let Some(state) = self.get_state(ctx.symbol) {
-                if state.bars_in_position >= self.config.max_hold_bars {
-                    orders.push(OrderRequest::market_sell(
-                        ctx.symbol.clone(),
-                        pos.quantity.to_f64(),
-                    ));
-                    return orders;
-                }
+            if self.lifecycle.bars_in_position(ctx.symbol) >= self.config.max_hold_bars {
+                orders.push(exit_order());
+                return orders;
             }
 
             // Exit on momentum reversal
             let momentum = self.get_momentum_state(&ind);
-            if matches!(
-                momentum,
-                MomentumState::WeakBearish | MomentumState::StrongBearish
-            ) {
-                orders.push(OrderRequest::market_sell(
-                    ctx.symbol.clone(),
-                    pos.quantity.to_f64(),
-                ));
+            let momentum_reversed = if is_long {
+                matches!(
+                    momentum,
+                    MomentumState::WeakBearish | MomentumState::StrongBearish
+                )
+            } else {
+                matches!(
+                    momentum,
+                    MomentumState::WeakBullish | MomentumState::StrongBullish
+                )
+            };
+            if momentum_reversed {
+                orders.push(exit_order());
                 return orders;
             }
 
@@ -250,14 +260,28 @@ impl Strategy for MomentumScalperStrategy {
         }
 
         // Entry logic using pre-calculated batch indicators
-        let alignment = match Self::get_ema_alignment(&ind) {
+        let alignment = match Self::get_ema_cross(&ind) {
             Some(side) => side,
             None => return orders,
         };
 
-        // Only take long entries
-        if alignment != Side::Buy {
+        if alignment == Side::Sell && !self.config.allow_short {
             return orders;
+        }
+
+        if self.config.trade_with_trend {
+            let current_close = ctx.candles.last().map(|c| c.close).unwrap_or(0.0);
+            let trend = match ind.current_ema_trend {
+                Some(value) => value,
+                None => return orders,
+            };
+            let aligned_with_trend = match alignment {
+                Side::Buy => current_close > trend,
+                Side::Sell => current_close < trend,
+            };
+            if !aligned_with_trend {
+                return orders;
+            }
         }
 
         // ADX filter
@@ -265,19 +289,32 @@ impl Strategy for MomentumScalperStrategy {
             return orders;
         }
 
+        if !self.is_volume_confirmed(ctx.candles) {
+            return orders;
+        }
+
         // MACD momentum filter
         if self.config.use_macd {
             let momentum = self.get_momentum_state(&ind);
-            if !matches!(
-                momentum,
-                MomentumState::StrongBullish | MomentumState::WeakBullish | MomentumState::Neutral
-            ) {
+            let confirmed = match alignment {
+                Side::Buy => matches!(
+                    momentum,
+                    MomentumState::StrongBullish | MomentumState::WeakBullish
+                ),
+                Side::Sell => matches!(
+                    momentum,
+                    MomentumState::StrongBearish | MomentumState::WeakBearish
+                ),
+            };
+            if !confirmed {
                 return orders;
             }
         }
 
-        // Generate buy order
-        orders.push(OrderRequest::market_buy(ctx.symbol.clone(), 1.0));
+        orders.push(match alignment {
+            Side::Buy => OrderRequest::market_buy(ctx.symbol.clone(), 1.0),
+            Side::Sell => OrderRequest::market_sell(ctx.symbol.clone(), 1.0),
+        });
         orders
     }
 
@@ -301,13 +338,19 @@ impl Strategy for MomentumScalperStrategy {
 
         let entry_price = position.average_entry_price.to_f64();
         let profit_atr = if atr > 0.0 {
-            (current_price - entry_price) / atr
+            match position.side {
+                Side::Buy => (current_price - entry_price) / atr,
+                Side::Sell => (entry_price - current_price) / atr,
+            }
         } else {
             0.0
         };
 
         if profit_atr >= self.config.trailing_activation {
-            let new_stop = current_price - self.config.trailing_atr_multiple * atr;
+            let new_stop = match position.side {
+                Side::Buy => current_price - self.config.trailing_atr_multiple * atr,
+                Side::Sell => current_price + self.config.trailing_atr_multiple * atr,
+            };
             Some(new_stop)
         } else {
             None
@@ -330,10 +373,8 @@ impl Strategy for MomentumScalperStrategy {
     }
 
     fn on_trade_closed(&mut self, trade: &Trade) {
-        if let Some(state) = self.symbol_states.get_mut(&trade.symbol) {
-            state.cooldown_counter = self.config.cooldown_bars;
-            state.bars_in_position = 0;
-        }
+        self.lifecycle
+            .close_trade(&trade.symbol, self.config.cooldown_bars);
 
         tracing::info!(
             symbol = %trade.symbol,
@@ -344,7 +385,7 @@ impl Strategy for MomentumScalperStrategy {
     }
 
     fn init(&mut self) {
-        self.symbol_states.clear();
+        self.lifecycle.clear();
         tracing::info!("Momentum Scalper strategy initialized");
     }
 }

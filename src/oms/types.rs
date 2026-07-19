@@ -270,6 +270,13 @@ impl Position {
         (self.quantity * Money::from_f64(current_price)).to_f64()
     }
 
+    pub fn equity_contribution(&self, current_price: f64) -> f64 {
+        match self.side {
+            Side::Buy => self.current_value(current_price),
+            Side::Sell => -self.current_value(current_price),
+        }
+    }
+
     pub fn total_pnl(&self) -> f64 {
         (self.realized_pnl + self.unrealized_pnl).to_f64()
     }
@@ -332,5 +339,13 @@ mod tests {
         let mut position = Position::from_fill(fill, Symbol::new("BTCUSDT"), Side::Buy);
         position.update_unrealized_pnl(51000.0);
         assert_eq!(position.unrealized_pnl.to_f64(), 1000.0);
+    }
+
+    #[test]
+    fn test_short_position_is_an_equity_liability() {
+        let fill = Fill::from_f64(1, 100.0, 2.0, Utc::now(), 0.0, true);
+        let position = Position::from_fill(fill, Symbol::new("BTCUSDT"), Side::Sell);
+
+        assert_eq!(position.equity_contribution(90.0), -180.0);
     }
 }
