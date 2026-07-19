@@ -1,6 +1,8 @@
 //! Execution engine with intra-candle fill detection
 
-use crate::oms::types::{Fill, Order, OrderState, OrderType};
+use crate::config::ExchangeConfig;
+use crate::oms::costs::TransactionCostCalculator;
+use crate::oms::types::{Fill, Order, OrderId, OrderState, OrderType};
 use crate::{Candle, Money, Side};
 use chrono::{DateTime, Utc};
 
@@ -85,8 +87,7 @@ pub struct FillPrice {
 
 /// Execution engine for processing orders against candles
 pub struct ExecutionEngine {
-    maker_commission_rate: f64,
-    taker_commission_rate: f64,
+    cost_calculator: TransactionCostCalculator,
     slippage: f64,
 }
 
@@ -94,10 +95,36 @@ impl ExecutionEngine {
     /// Create new execution engine
     pub fn new(maker_commission_rate: f64, taker_commission_rate: f64, slippage: f64) -> Self {
         Self {
-            maker_commission_rate,
-            taker_commission_rate,
+            cost_calculator: TransactionCostCalculator::percentage(
+                maker_commission_rate,
+                taker_commission_rate,
+            ),
             slippage,
         }
+    }
+
+    pub fn from_exchange_config(config: &ExchangeConfig) -> Self {
+        Self {
+            cost_calculator: TransactionCostCalculator::from_exchange_config(config),
+            slippage: config.assumed_slippage,
+        }
+    }
+
+    pub fn estimate_commission(&self, side: Side, turnover: f64, is_maker: bool) -> Money {
+        self.cost_calculator.estimate(side, turnover, is_maker)
+    }
+
+    pub fn calculate_commission(
+        &self,
+        order_id: OrderId,
+        symbol: &crate::Symbol,
+        side: Side,
+        turnover: f64,
+        is_maker: bool,
+        timestamp: DateTime<Utc>,
+    ) -> Money {
+        self.cost_calculator
+            .calculate(order_id, symbol, side, turnover, is_maker, timestamp)
     }
 
     pub fn check_fill(
@@ -182,12 +209,15 @@ impl ExecutionEngine {
         let fill_qty = Money::from_f64(f64::min(order.remaining_quantity.to_f64(), max_fill_qty));
         let fill_price_m = Money::from_f64(fill_price);
 
-        let commission_rate = if is_maker {
-            self.maker_commission_rate
-        } else {
-            self.taker_commission_rate
-        };
-        let commission = fill_price_m * fill_qty * Money::from_f64(commission_rate);
+        let turnover = fill_price * fill_qty.to_f64();
+        let commission = self.calculate_commission(
+            order.id,
+            &order.symbol,
+            order.side,
+            turnover,
+            is_maker,
+            timestamp,
+        );
 
         // Update weighted average fill price
         let prev_total_value = order.average_fill_price * order.filled_quantity;

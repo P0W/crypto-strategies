@@ -24,7 +24,7 @@ use crate::oms::{
 };
 use crate::risk::RiskManager;
 use crate::Strategy;
-use crate::{Config, PerformanceMetrics, Side, Symbol, Trade, PNL_EPSILON};
+use crate::{Config, Money, PerformanceMetrics, Side, Symbol, Trade, PNL_EPSILON};
 
 /// Backtest result container
 #[derive(Debug, Default)]
@@ -83,11 +83,7 @@ impl Backtester {
             config.trading.consecutive_loss_multiplier,
         );
 
-        let execution_engine = ExecutionEngine::new(
-            config.exchange.maker_fee,
-            config.exchange.taker_fee,
-            config.exchange.assumed_slippage,
-        );
+        let execution_engine = ExecutionEngine::from_exchange_config(&config.exchange);
 
         Self {
             config,
@@ -209,8 +205,10 @@ impl Backtester {
                                     // Check if we have enough cash for buy orders (matches main branch)
                                     if order.side == Side::Buy {
                                         let position_value = fill_price * order.quantity.to_f64();
-                                        let commission =
-                                            position_value * self.config.exchange.taker_fee;
+                                        let commission = self
+                                            .execution_engine
+                                            .estimate_commission(Side::Buy, position_value, false)
+                                            .to_f64();
                                         let cash_needed = position_value + commission;
                                         if cash < cash_needed {
                                             tracing::debug!(
@@ -902,7 +900,10 @@ impl Backtester {
                         // Check if we have enough cash for buy orders (matches main branch)
                         if final_order.side == Side::Buy {
                             let position_value = fill_price * final_order.quantity.to_f64();
-                            let commission = position_value * self.config.exchange.taker_fee;
+                            let commission = self
+                                .execution_engine
+                                .estimate_commission(Side::Buy, position_value, false)
+                                .to_f64();
                             let cash_needed = position_value + commission;
                             if cash < cash_needed {
                                 tracing::debug!(
@@ -1041,18 +1042,46 @@ impl Backtester {
                 let last_candle = primary.last().unwrap();
                 let exit_price = last_candle.close;
                 let quantity = pos.quantity.to_f64();
-                let exit_commission = exit_price * quantity * self.config.exchange.taker_fee;
+                let exit_side = match pos.side {
+                    Side::Buy => Side::Sell,
+                    Side::Sell => Side::Buy,
+                };
+                let mut close_order = Order::new(
+                    symbol.clone(),
+                    exit_side,
+                    crate::oms::OrderType::Market,
+                    Money::from_f64(quantity),
+                    None,
+                    None,
+                    crate::oms::TimeInForce::GTC,
+                    Some("end_of_data".to_string()),
+                );
+                let slippage_factor = match exit_side {
+                    Side::Buy => 1.0 + self.config.exchange.assumed_slippage,
+                    Side::Sell => 1.0 - self.config.exchange.assumed_slippage,
+                };
+                let fill = self.execution_engine.execute_fill(
+                    &mut close_order,
+                    exit_price * slippage_factor,
+                    false,
+                    last_candle.datetime,
+                );
 
-                match pos.side {
-                    Side::Buy => cash += exit_price * quantity - exit_commission,
-                    Side::Sell => cash -= exit_price * quantity + exit_commission,
+                match exit_side {
+                    Side::Buy => cash -= (fill.price * fill.quantity + fill.commission).to_f64(),
+                    Side::Sell => cash += (fill.price * fill.quantity - fill.commission).to_f64(),
                 }
 
                 // Clear cached entry levels for closed position
                 entry_levels.remove(symbol);
                 trailing_stops.remove(symbol);
 
-                let trade = self.create_trade_from_position(&pos, exit_price, last_candle.datetime);
+                let trade = self.create_trade_from_position(
+                    &pos,
+                    fill.price.to_f64(),
+                    fill.commission.to_f64(),
+                    last_candle.datetime,
+                );
                 self.record_realized_trade(trade, &mut trades, true);
             }
         }
@@ -1074,6 +1103,7 @@ impl Backtester {
         &self,
         pos: &Position,
         exit_price: f64,
+        exit_commission: f64,
         exit_time: DateTime<Utc>,
     ) -> Trade {
         let entry_price = pos.average_entry_price.to_f64();
@@ -1084,8 +1114,8 @@ impl Backtester {
             Side::Sell => (entry_price - exit_price) * quantity,
         };
 
-        let commission = pos.fills.iter().map(|f| f.commission.to_f64()).sum::<f64>()
-            + exit_price * quantity * self.config.exchange.taker_fee;
+        let commission =
+            pos.fills.iter().map(|f| f.commission.to_f64()).sum::<f64>() + exit_commission;
 
         let net_pnl = pnl - commission;
 

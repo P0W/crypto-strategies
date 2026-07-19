@@ -19,6 +19,10 @@ pub fn next_order_id() -> OrderId {
     ORDER_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
+pub fn reserve_order_id(order_id: OrderId) {
+    ORDER_ID_COUNTER.fetch_max(order_id.saturating_add(1), Ordering::Relaxed);
+}
+
 /// Order type - determines execution logic
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrderType {
@@ -311,6 +315,13 @@ mod tests {
         let id1 = next_order_id();
         let id2 = next_order_id();
         assert!(id2 > id1);
+    }
+
+    #[test]
+    fn test_reserve_order_id_advances_counter() {
+        let restored_id = 1_000_000_000;
+        reserve_order_id(restored_id);
+        assert!(next_order_id() > restored_id);
     }
 
     #[test]

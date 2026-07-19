@@ -645,3 +645,94 @@ fn test_backtest_matches_analytical_buy_and_hold_return() {
     assert!((result.equity_curve.last().unwrap().1 - 1020.0).abs() < 1e-9);
     assert!((result.trades[0].net_pnl.to_f64() - 20.0).abs() < 1e-9);
 }
+
+#[test]
+fn test_component_costs_match_analytical_round_trip() {
+    let config: Config = serde_json::from_value(serde_json::json!({
+        "exchange": {
+            "maker_fee": 0.0,
+            "taker_fee": 0.0,
+            "assumed_slippage": 0.0,
+            "rate_limit": 10,
+            "cost_model": {
+                "type": "components",
+                "brokerage_rate": 0.0,
+                "brokerage_cap_per_order": 0.0,
+                "buy_turnover_rate": 0.001,
+                "sell_turnover_rate": 0.001,
+                "exchange_rate": 0.0000307,
+                "regulatory_rate": 0.000001,
+                "buy_stamp_rate": 0.00015,
+                "indirect_tax_rate": 0.18,
+                "sell_fixed_charge": 15.34,
+                "sell_fixed_charge_frequency": "per_symbol_per_day"
+            }
+        },
+        "trading": {
+            "symbols": ["TEST"],
+            "initial_capital": 1000.0,
+            "risk_per_trade": 1.0,
+            "max_positions": 1,
+            "max_portfolio_heat": 1.0,
+            "max_position_pct": 1.0,
+            "max_drawdown": 1.0,
+            "drawdown_warning": 0.9,
+            "drawdown_critical": 0.95,
+            "drawdown_warning_multiplier": 1.0,
+            "drawdown_critical_multiplier": 1.0,
+            "consecutive_loss_limit": 100,
+            "consecutive_loss_multiplier": 1.0
+        },
+        "strategy": {
+            "name": "buy_and_hold_test",
+            "timeframe": "1d"
+        },
+        "tax": {
+            "tax_rate": 0.0,
+            "tds_rate": 0.0,
+            "loss_offset_allowed": true
+        },
+        "backtest": {
+            "data_dir": "./data",
+            "results_dir": "./results",
+            "commission": 0.0,
+            "use_t1_execution": false
+        }
+    }))
+    .unwrap();
+
+    let start = Utc::now() - Duration::days(3);
+    let candles = vec![
+        Candle::new_unchecked(start, 100.0, 100.0, 100.0, 100.0, 1000.0),
+        Candle::new_unchecked(
+            start + Duration::days(1),
+            110.0,
+            110.0,
+            110.0,
+            110.0,
+            1000.0,
+        ),
+        Candle::new_unchecked(
+            start + Duration::days(2),
+            120.0,
+            120.0,
+            120.0,
+            120.0,
+            1000.0,
+        ),
+    ];
+    let symbol = Symbol::new("TEST");
+    let mut mtf = MultiTimeframeData::new("1d");
+    mtf.add_timeframe("1d", candles);
+    let data = HashMap::from([(symbol, mtf)]);
+
+    let mut backtester = Backtester::new(config, Box::new(BuyAndHoldTestStrategy));
+    let result = backtester.run(&data);
+
+    let expected_commission = 0.1187406 + 15.46448872;
+    let expected_net_pnl = 20.0 - expected_commission;
+    assert_eq!(result.metrics.total_trades, 1);
+    assert!((result.trades[0].commission.to_f64() - expected_commission).abs() < 1e-6);
+    assert!((result.trades[0].net_pnl.to_f64() - expected_net_pnl).abs() < 1e-6);
+    assert!((result.equity_curve.last().unwrap().1 - (1000.0 + expected_net_pnl)).abs() < 1e-6);
+}

@@ -32,6 +32,9 @@ the configured 0.1% fee/0.1% slippage assumptions, but it fails the conservative
 - Long and short trailing stops tighten in the correct direction.
 - Portfolio value includes long assets and short liabilities correctly.
 - Strategy quantities can be upper bounds, but the risk manager remains authoritative.
+- Percentage transaction costs are shared across paper and real exchange fills.
+- Stateful component costs are intentionally rejected in real-live mode until
+  per-order and per-day charge state is durable across restarts.
 
 ## Remaining Deployment Blockers
 

@@ -1,0 +1,72 @@
+{
+  "_comment": "Indian equity delivery model using tradable NIFTYBEES and BANKBEES ETFs. Tax rate assumes short-term capital gains.",
+  "backtest": {
+    "commission": 0.0,
+    "data_dir": "./data",
+    "results_dir": "results"
+  },
+  "exchange": {
+    "assumed_slippage": 0.0005,
+    "maker_fee": 0.0,
+    "rate_limit": 3,
+    "taker_fee": 0.0,
+    "cost_model": {
+      "type": "components",
+      "brokerage_rate": 0.0,
+      "brokerage_cap_per_order": 0.0,
+      "buy_turnover_rate": 0.001,
+      "sell_turnover_rate": 0.001,
+      "exchange_rate": 0.0000307,
+      "regulatory_rate": 0.000001,
+      "buy_stamp_rate": 0.00015,
+      "indirect_tax_rate": 0.18,
+      "sell_fixed_charge": 15.34,
+      "sell_fixed_charge_frequency": "per_symbol_per_day"
+    }
+  },
+  "grid": {
+    "adx_threshold": [15, 20, 25],
+    "ema_fast": [8, 13],
+    "ema_slow": [21, 34, 55],
+    "stop_atr_multiple": [1.5, 2.0, 2.5],
+    "target_atr_multiple": [3.0, 4.0, 5.0]
+  },
+  "strategy": {
+    "adx_period": 14,
+    "adx_threshold": 20,
+    "atr_period": 14,
+    "breakout_atr_multiple": 1.5,
+    "compression_threshold": 0.75,
+    "ema_fast": 8,
+    "ema_slow": 21,
+    "expansion_threshold": 1.5,
+    "extreme_threshold": 2.0,
+    "name": "volatility_regime",
+    "stop_atr_multiple": 2.0,
+    "target_atr_multiple": 4.0,
+    "timeframe": "1d",
+    "trailing_activation": 1.5,
+    "trailing_atr_multiple": 1.5,
+    "volatility_lookback": 20
+  },
+  "tax": {
+    "loss_offset_allowed": true,
+    "tax_rate": 0.20,
+    "tds_rate": 0.0
+  },
+  "trading": {
+    "consecutive_loss_limit": 3,
+    "consecutive_loss_multiplier": 0.5,
+    "drawdown_critical": 0.10,
+    "drawdown_critical_multiplier": 0.25,
+    "drawdown_warning": 0.06,
+    "drawdown_warning_multiplier": 0.5,
+    "initial_capital": 500000.0,
+    "max_drawdown": 0.12,
+    "max_portfolio_heat": 0.05,
+    "max_position_pct": 0.40,
+    "max_positions": 2,
+    "risk_per_trade": 0.01,
+    "symbols": ["NIFTYBEES", "BANKBEES"]
+  }
+}

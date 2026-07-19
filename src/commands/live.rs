@@ -192,6 +192,17 @@ impl LiveTrader {
         let start = Instant::now();
         info!("⚙️  Initializing trading engine...");
 
+        if !paper_mode
+            && matches!(
+                config.exchange.cost_model,
+                crypto_strategies::config::TransactionCostConfig::Components { .. }
+            )
+        {
+            anyhow::bail!(
+                "Component-based transaction costs are not enabled for live trading until cost state persistence is implemented"
+            );
+        }
+
         let mut strategy = strategies::create_strategy(&config)?;
         strategy.init();
         info!(
@@ -252,15 +263,10 @@ impl LiveTrader {
         let state_manager = create_state_manager(state_dir, "sqlite")?;
         info!("✓ State manager ready (path: {})", state_db_path);
 
-        let execution_engine = ExecutionEngine::new(
-            config.exchange.maker_fee,
-            config.exchange.taker_fee,
-            config.exchange.assumed_slippage,
-        );
+        let execution_engine = ExecutionEngine::from_exchange_config(&config.exchange);
         info!(
-            "✓ Execution engine configured (maker: {:.4}%, taker: {:.4}%, slippage: {:.4}%)",
-            config.exchange.maker_fee * 100.0,
-            config.exchange.taker_fee * 100.0,
+            "✓ Execution engine configured (cost_model: {:?}, slippage: {:.4}%)",
+            config.exchange.cost_model,
             config.exchange.assumed_slippage * 100.0
         );
 
@@ -392,8 +398,13 @@ impl LiveTrader {
                     _ => crypto_strategies::oms::OrderType::Market,
                 };
 
+                let restored_order_id = po
+                    .order_id
+                    .parse()
+                    .with_context(|| format!("Invalid restored order ID: {}", po.order_id))?;
+                crypto_strategies::oms::reserve_order_id(restored_order_id);
                 let order = crypto_strategies::oms::Order {
-                    id: po.order_id.parse().unwrap_or(0),
+                    id: restored_order_id,
                     symbol: symbol.clone(),
                     side,
                     order_type,
@@ -1397,12 +1408,21 @@ impl LiveTrader {
                         );
 
                         // Create fill for the NEW quantity only
+                        let fill_timestamp = Utc::now();
+                        let commission = self.execution_engine.calculate_commission(
+                            pending.internal_order_id,
+                            &pending.symbol,
+                            pending.side,
+                            fill_price * newly_filled,
+                            false,
+                            fill_timestamp,
+                        );
                         let fill = Fill::from_f64(
-                            0, // Order ID (internal)
+                            pending.internal_order_id,
                             fill_price,
                             newly_filled,
-                            Utc::now(),
-                            self.config.exchange.taker_fee * fill_price * newly_filled,
+                            fill_timestamp,
+                            commission.to_f64(),
                             false, // taker
                         );
 

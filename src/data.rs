@@ -900,12 +900,6 @@ pub fn check_and_fetch_data(
     start: Option<DateTime<Utc>>,
     end: Option<DateTime<Utc>>,
 ) -> Result<()> {
-    // Validate symbol names have INR suffix
-    if let Some(err) = validate_symbol_names(symbols) {
-        eprintln!("\n❌ {}", err);
-        std::process::exit(1);
-    }
-
     let data_dir = data_dir.as_ref();
 
     let (missing_files, needs_earlier, needs_later) =
@@ -917,6 +911,15 @@ pub fn check_and_fetch_data(
     if !needs_download {
         info!("All required data files are available");
         return Ok(());
+    }
+
+    // Automatic fetching currently uses Binance and therefore only supports
+    // crypto symbols with the repository's INR filename convention.
+    if let Some(err) = validate_symbol_names(symbols) {
+        anyhow::bail!(
+            "{} Automatic fetching is only available for crypto symbols; provide local CSV files for equity symbols.",
+            err
+        );
     }
 
     println!("\n{}", "=".repeat(60));

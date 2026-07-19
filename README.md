@@ -324,6 +324,7 @@ passes the gates in [`docs/LIVE_TRADING_REVIEW.md`](docs/LIVE_TRADING_REVIEW.md)
 │   │   ├── quick_flip/          # Range breakout with candle confirmation
 │   │   └── regime_grid/         # Grid trading with volatility adaptation
 │   ├── oms/                 # Order Management System
+│   │   ├── costs.rs             # Configurable transaction-cost calculator
 │   │   ├── orderbook.rs         # Order storage and matching
 │   │   ├── execution.rs         # Fill simulation with slippage
 │   │   ├── position_manager.rs  # FIFO position accounting
@@ -375,6 +376,58 @@ Strategy configs are JSON files with these sections:
 ```
 
 See `configs/sample_config.json` for a complete example.
+
+### Transaction Costs
+
+Existing crypto configs use the default percentage model through
+`maker_fee`/`taker_fee`. Brokers with component-based charges can use a generic
+configuration without adding exchange-specific code:
+
+```json
+{
+  "exchange": {
+    "maker_fee": 0,
+    "taker_fee": 0,
+    "assumed_slippage": 0.0005,
+    "rate_limit": 3,
+    "cost_model": {
+      "type": "components",
+      "brokerage_rate": 0,
+      "brokerage_cap_per_order": 0,
+      "buy_turnover_rate": 0.001,
+      "sell_turnover_rate": 0.001,
+      "exchange_rate": 0.0000307,
+      "regulatory_rate": 0.000001,
+      "buy_stamp_rate": 0.00015,
+      "indirect_tax_rate": 0.18,
+      "sell_fixed_charge": 15.34,
+      "sell_fixed_charge_frequency": "per_symbol_per_day"
+    }
+  }
+}
+```
+
+The same calculator is used by backtests, optimization, paper fills, and exchange
+fill reconciliation. Stateful component models are currently blocked in real-live
+mode until their daily/order charge state is persisted across restarts.
+
+See `configs/nse_niftybees_bankbees_1d.json` for a configurable Indian equity
+delivery example. Tax treatment remains separate in the `tax` section.
+
+### Indian Equity Research Candidate
+
+`configs/nse_niftybees_trend_candidate.json` contains a long-only NIFTYBEES
+20/100-day EMA trend overlay using the component delivery-cost model.
+
+| Period | Post-Tax Return | Sharpe | Max DD | Profit Factor | Trades |
+|--------|----------------:|-------:|-------:|--------------:|-------:|
+| Training through 2022 | 23.10% | -0.02 | 11.06% | 3.32 | 9 |
+| Validation 2023-2024 | 11.36% | 0.82 | 7.84% | 6.86 | 2 |
+| Holdout 2025-2026 | 1.78% | -0.68 | 2.48% | Infinity | 1 |
+| Full history | 38.49% | 0.03 | 11.06% | 4.10 | 12 |
+
+This is a low-turnover research candidate, not proven active alpha. The holdout
+contains only one completed trade, so paper validation remains required.
 
 ## Documentation
 

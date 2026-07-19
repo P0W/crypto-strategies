@@ -262,6 +262,26 @@ classDiagram
 - Taxable gains respect `loss_offset_allowed`; TDS is treated as withholding rather
   than an additional final tax cost.
 
+## Transaction Cost Pipeline
+
+`ExecutionEngine` owns one `TransactionCostCalculator`, reused by backtest,
+optimizer, paper trading, exchange fill reconciliation, cash prechecks, and
+end-of-data liquidation.
+
+Two generic models are supported:
+
+1. `percentage`: maker/taker turnover rates for crypto and similar venues.
+2. `components`: configurable brokerage rate/cap, side-specific turnover charges,
+   exchange/regulatory rates, buy-side stamp rate, indirect tax, and fixed sell charges.
+
+Brokerage caps are tracked per `(order_id, trade_date)`. Fixed charges can be
+configured per fill or once per `(symbol, trade_date)`. Old dates are pruned during
+calculation, and each optimizer run receives a fresh calculator.
+
+Component models are safe for backtest, optimizer, and paper mode. Real-live use is
+fail-fast blocked until state persistence can restore partially consumed order caps
+and daily fixed-charge state after process restart.
+
 ## Optimizer Flow
 
 ```mermaid

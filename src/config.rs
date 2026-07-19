@@ -82,6 +82,8 @@ pub struct ExchangeConfig {
     pub taker_fee: f64,
     pub assumed_slippage: f64,
     pub rate_limit: u32,
+    #[serde(default)]
+    pub cost_model: TransactionCostConfig,
 }
 
 impl Default for ExchangeConfig {
@@ -93,8 +95,46 @@ impl Default for ExchangeConfig {
             taker_fee: 0.001, // 0.1%
             assumed_slippage: 0.001,
             rate_limit: 10,
+            cost_model: TransactionCostConfig::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TransactionCostConfig {
+    #[default]
+    Percentage,
+    Components {
+        #[serde(default)]
+        brokerage_rate: f64,
+        #[serde(default)]
+        brokerage_cap_per_order: f64,
+        #[serde(default)]
+        buy_turnover_rate: f64,
+        #[serde(default)]
+        sell_turnover_rate: f64,
+        #[serde(default)]
+        exchange_rate: f64,
+        #[serde(default)]
+        regulatory_rate: f64,
+        #[serde(default)]
+        buy_stamp_rate: f64,
+        #[serde(default)]
+        indirect_tax_rate: f64,
+        #[serde(default)]
+        sell_fixed_charge: f64,
+        #[serde(default)]
+        sell_fixed_charge_frequency: FixedChargeFrequency,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FixedChargeFrequency {
+    #[default]
+    PerFill,
+    PerSymbolPerDay,
 }
 
 /// Trading configuration
