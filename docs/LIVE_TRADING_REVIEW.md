@@ -8,7 +8,7 @@
 **Not approved for unattended real-money deployment.**
 
 The local execution, accounting, lifecycle, and exchange-order reconciliation paths
-have been corrected and independently reviewed. However, operational protections
+have been independently reviewed. However, operational protections
 listed below remain mandatory before live capital is enabled. Paper mode is the
 supported deployment stage.
 
@@ -17,7 +17,7 @@ The current paper candidate is
 the configured 0.1% fee/0.1% slippage assumptions, but it fails the conservative
 0.5% retail-fee stress. Fee-tier verification is therefore a hard deployment gate.
 
-## Corrected and Verified
+## Verified Behavior
 
 - Paper fills settle cash, commissions, positions, and trade-close callbacks.
 - Live orders remain visible in the local orderbook but are filled only from

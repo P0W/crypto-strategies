@@ -154,7 +154,7 @@ passes the gates in [`docs/LIVE_TRADING_REVIEW.md`](docs/LIVE_TRADING_REVIEW.md)
 ### Strategy Configurations
 
 <details>
-<summary><b>quick_flip</b> - Corrected run: -17.33% return, Sharpe -1.13</summary>
+<summary><b>quick_flip</b> - Baseline: -17.33% return, Sharpe -1.13</summary>
 
 ```json
 {
@@ -180,7 +180,7 @@ passes the gates in [`docs/LIVE_TRADING_REVIEW.md`](docs/LIVE_TRADING_REVIEW.md)
 </details>
 
 <details>
-<summary><b>momentum_scalper</b> - Corrected run: -26.17% return, 37 trades</summary>
+<summary><b>momentum_scalper</b> - Baseline: -26.17% return, 37 trades</summary>
 
 ```json
 {
@@ -208,7 +208,7 @@ passes the gates in [`docs/LIVE_TRADING_REVIEW.md`](docs/LIVE_TRADING_REVIEW.md)
 </details>
 
 <details>
-<summary><b>range_breakout</b> - Corrected run: -15.60% return, Sharpe -0.97</summary>
+<summary><b>range_breakout</b> - Baseline: -15.60% return, Sharpe -0.97</summary>
 
 ```json
 {
@@ -235,7 +235,7 @@ passes the gates in [`docs/LIVE_TRADING_REVIEW.md`](docs/LIVE_TRADING_REVIEW.md)
 </details>
 
 <details>
-<summary><b>volatility_regime</b> - Corrected run: 3.03% pre-tax, -8.44% post-tax</summary>
+<summary><b>volatility_regime</b> - Baseline: 3.03% pre-tax, -8.44% post-tax</summary>
 
 ```json
 {
@@ -264,7 +264,7 @@ passes the gates in [`docs/LIVE_TRADING_REVIEW.md`](docs/LIVE_TRADING_REVIEW.md)
 </details>
 
 <details>
-<summary><b>regime_grid</b> - Corrected run: 3.20% pre-tax, -5.60% post-tax</summary>
+<summary><b>regime_grid</b> - Baseline: 3.20% pre-tax, -5.60% post-tax</summary>
 
 ```json
 {
