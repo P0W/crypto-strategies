@@ -18,12 +18,15 @@
 //! Strategy → OrderRequest(qty=1.0) → OrderSizer → Order(qty=calculated) → OrderBook
 //! ```
 
+pub mod broker;
 pub mod costs;
 pub mod execution;
+pub mod live_execution;
 pub mod order_sizer;
 pub mod orderbook;
 pub mod position_manager;
 pub mod strategy;
+pub mod trading_engine;
 pub mod types;
 
 // Re-export core types
@@ -35,6 +38,7 @@ pub use order_sizer::{size_order, OrderRejection, OrderSizer, SizedOrder};
 pub use orderbook::OrderBook;
 pub use position_manager::PositionManager;
 pub use strategy::{OrderRequest, StrategyContext};
+pub use trading_engine::{EngineSnapshot, TradingEngine};
 pub use types::{
     reserve_order_id, Fill, Order, OrderId, OrderState, OrderType, Position, TimeInForce,
 };

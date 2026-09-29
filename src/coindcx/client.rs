@@ -138,6 +138,14 @@ pub struct CoinDCXClient {
     circuit_breaker: Arc<Mutex<CircuitBreaker>>,
     rate_limiter: RateLimiter,
     max_retries: u32,
+    api_base_url: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("CoinDCX HTTP {status}: {body}")]
+pub(super) struct ApiError {
+    pub status: u16,
+    pub body: String,
 }
 
 impl CoinDCXClient {
@@ -154,6 +162,7 @@ impl CoinDCXClient {
     ) -> Self {
         let http_client = Client::builder()
             .timeout(config.timeout)
+            .redirect(reqwest::redirect::Policy::none())
             .pool_max_idle_per_host(10)
             .pool_idle_timeout(Duration::from_secs(90))
             .build()
@@ -165,6 +174,7 @@ impl CoinDCXClient {
             circuit_breaker: Arc::new(Mutex::new(CircuitBreaker::new(config.circuit_breaker))),
             rate_limiter: RateLimiter::new(config.rate_limiter),
             max_retries: config.max_retries,
+            api_base_url: API_BASE_URL.to_owned(),
         }
     }
 
@@ -242,7 +252,7 @@ impl CoinDCXClient {
         T: serde::Serialize,
         R: serde::de::DeserializeOwned,
     {
-        let url = format!("{}{}", API_BASE_URL, endpoint);
+        let url = format!("{}{}", self.api_base_url, endpoint);
         let json_body = serde_json::to_string(body)?;
         let signature = sign_request(&json_body, self.credentials.api_secret());
 
@@ -261,10 +271,46 @@ impl CoinDCXClient {
         let text = response.text().await.context("Failed to read response")?;
 
         if !status.is_success() {
-            return Err(anyhow!("API error ({}): {}", status, text));
+            return Err(ApiError {
+                status: status.as_u16(),
+                body: text,
+            }
+            .into());
         }
 
         serde_json::from_str(&text).context("Failed to parse response")
+    }
+
+    pub(super) async fn post_once<T: serde::Serialize, R: serde::de::DeserializeOwned>(
+        &self,
+        endpoint: &str,
+        body: &T,
+    ) -> Result<R> {
+        self.rate_limiter.acquire().await;
+        self.authenticated_post(endpoint, body).await
+    }
+
+    pub(super) async fn get_once<R: serde::de::DeserializeOwned>(
+        &self,
+        endpoint: &str,
+    ) -> Result<R> {
+        self.rate_limiter.acquire().await;
+        self.http_client
+            .get(format!("{}{}", self.api_base_url, endpoint))
+            .send()
+            .await
+            .context("Sending CoinDCX public request")?
+            .error_for_status()
+            .context("CoinDCX public request status")?
+            .json()
+            .await
+            .context("Decoding CoinDCX public response")
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_endpoint(mut self, endpoint: String) -> Self {
+        self.api_base_url = endpoint;
+        self
     }
 
     // ==================== PUBLIC ENDPOINTS ====================
@@ -453,31 +499,18 @@ impl CoinDCXClient {
 
     /// Place a new order
     pub async fn place_order(&self, order: &OrderRequest) -> Result<OrdersResponse> {
-        let order = order.clone();
-        self.execute_with_retry(|| {
-            let endpoint = "/exchange/v1/orders/create";
-            let ord = order.clone();
-            let this = self.clone();
-
-            async move { this.authenticated_post(endpoint, &ord).await }
-        })
-        .await
+        let mut order = order.clone();
+        order.timestamp = chrono::Utc::now().timestamp_millis();
+        self.post_once("/exchange/v1/orders/create", &order).await
     }
 
     /// Cancel an order by ID
     pub async fn cancel_order(&self, order_id: &str) -> Result<()> {
         let request = CancelOrderRequest::new(order_id);
-        self.execute_with_retry(|| {
-            let endpoint = "/exchange/v1/orders/cancel";
-            let req = request.clone();
-            let this = self.clone();
-
-            async move {
-                let _: serde_json::Value = this.authenticated_post(endpoint, &req).await?;
-                Ok(())
-            }
-        })
-        .await
+        let _: serde_json::Value = self
+            .post_once("/exchange/v1/orders/cancel", &request)
+            .await?;
+        Ok(())
     }
 
     /// Get order status
@@ -501,7 +534,10 @@ impl CoinDCXClient {
             let req = request.clone();
             let this = self.clone();
 
-            async move { this.authenticated_post(endpoint, &req).await }
+            async move {
+                let response: OrdersResponse = this.authenticated_post(endpoint, &req).await?;
+                Ok(response.orders)
+            }
         })
         .await
     }
@@ -513,17 +549,10 @@ impl CoinDCXClient {
             request = request.with_side(s);
         }
 
-        self.execute_with_retry(|| {
-            let endpoint = "/exchange/v1/orders/cancel_all";
-            let req = request.clone();
-            let this = self.clone();
-
-            async move {
-                let _: serde_json::Value = this.authenticated_post(endpoint, &req).await?;
-                Ok(())
-            }
-        })
-        .await
+        let _: serde_json::Value = self
+            .post_once("/exchange/v1/orders/cancel_all", &request)
+            .await?;
+        Ok(())
     }
 
     /// Get trade history

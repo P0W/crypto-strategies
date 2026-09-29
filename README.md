@@ -5,7 +5,14 @@
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-High-performance Rust trading system for backtesting and live trading on CoinDCX (crypto) and Zerodha (equity).
+Rust trading research system with one shared engine for backtesting, streaming
+paper trading, and broker-neutral execution with a CoinDCX spot adapter.
+
+> **Real execution requires venue capabilities and account reconciliation.**
+> Only spot markets advertising native stop-limit orders are eligible. Current
+> BTC/ETH/SOL/BNB INR markets do not advertise them; BTCUSDT and ETHUSDT do.
+> No pair or currency is changed automatically. Offline tests are not account
+> certification or evidence of profitability. See [live operation](docs/LIVE_TRADING_REVIEW.md).
 
 > **Note**: A legacy Python implementation exists in the [`python`](https://github.com/P0W/crypto-strategies/tree/python) branch but is deprecated and unmaintained.
 
@@ -80,9 +87,34 @@ cargo run --release -- optimize --config configs/sample_config.json
 ### Live Trading
 
 ```bash
-cargo run -- live --config configs/sample_config.json --paper   # Paper trading
-cargo run -- live --config configs/sample_config.json --live    # Real trading (CAUTION!)
+cargo run -- live --config configs/sample_config.json --paper --state-db paper-state.db
 ```
+
+Backtest and streaming paper trading use the same `TradingEngine`: strategy
+callbacks, position sizing, pending-order reservations, stops, FIFO accounting,
+fees, and drawdown controls. `backtest.use_t1_execution` selects the same execution
+policy in both adapters. Only closed candles are used; polling is not HFT.
+
+Real execution uses the same decisions, sizing, FIFO and risk accounting, but
+waits for confirmed venue fills instead of simulating them. It is long-only spot:
+short entries are rejected. Set up a separate configuration with supported pairs,
+capital denominated in their common quote currency, and your approved risk limits.
+Start with `live --live --preflight --config <spot-config.json>`: it checks the
+account without placing or cancelling orders. Removing `--preflight` authorizes
+real order submission. Paper is still the default; real state defaults to
+`live-state.db`, separately from `paper-state.db`.
+
+Keep one writer per account and do not trade the configured assets manually.
+Create `<state-name>.halt` beside the database to durably stop new entries while
+continuing reconciliation/protection. Ctrl+C cancels non-protective orders and
+tries to leave existing holdings covered by native stops. Remove the halt file
+and use `--resume` only after reconciling the cause. Native stop-limit orders can
+remain unfilled through gaps; cancel/replace and exit handoffs are not atomic OCO.
+
+Paper recovery uses atomic SQLite snapshots, including strategy and cost state.
+Legacy state databases are rejected rather than guessed or silently migrated.
+Preserve them and reconcile any outstanding real exchange orders manually before
+starting paper trading with a new state database.
 
 ### Download Data
 
@@ -101,6 +133,10 @@ cargo run -- download --symbols BTC,ETH,SOL --timeframes 1h,4h,1d --days 180
 | `regime_grid` | Grid trading that adapts spacing based on volatility regime. |
 
 ## Backtest Results
+
+> These historical results predate the shared-engine and lookahead corrections.
+> They have not been regenerated for the current engine and must not be used to
+> justify deployment or profitability claims.
 
 **Reproduced 2026-07-19** from the committed configs using the current execution,
 position valuation, stop/target, lifecycle, and strategy-sizing behavior. These
@@ -407,9 +443,12 @@ configuration without adding exchange-specific code:
 }
 ```
 
-The same calculator is used by backtests, optimization, paper fills, and exchange
-fill reconciliation. Stateful component models are currently blocked in real-live
-mode until their daily/order charge state is persisted across restarts.
+The calculator supplies simulated costs for backtests, optimization and paper
+fills, and estimates for order sizing. Real settlement uses cumulative fees
+reported by the broker, not an additional simulated debit. Fee-only increments
+adjust cash and their original FIFO allocation. Unexplained wallet discrepancies,
+including fees/taxes not represented in the order report, halt new entries instead
+of silently resetting cash.
 
 See `configs/nse_niftybees_bankbees_1d.json` for a configurable Indian equity
 delivery example. Tax treatment remains separate in the `tax` section.

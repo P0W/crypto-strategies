@@ -55,6 +55,15 @@ pub fn timeframe_duration(timeframe: &str) -> Option<Duration> {
     }
 }
 
+/// API candle timestamps identify the opening, not the availability of its OHLCV.
+pub fn candle_close_time(open: DateTime<Utc>, timeframe: &str) -> Option<DateTime<Utc>> {
+    if timeframe == "1M" {
+        open.checked_add_months(chrono::Months::new(1))
+    } else {
+        open.checked_add_signed(timeframe_duration(timeframe)?)
+    }
+}
+
 pub fn warmup_start(
     evaluation_start: DateTime<Utc>,
     timeframes: &[impl AsRef<str>],

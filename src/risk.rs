@@ -125,7 +125,7 @@ impl RiskManagerConfig {
 }
 
 /// Risk manager for portfolio-level risk controls
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RiskManager {
     pub initial_capital: f64,
     pub current_capital: f64,

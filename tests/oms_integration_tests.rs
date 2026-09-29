@@ -300,7 +300,7 @@ fn test_backtest_with_real_strategy() {
     mtf_data.insert(Symbol::new("BTCINR"), btc_mtf);
 
     // Run backtest
-    let result = backtester.run(&mtf_data);
+    let result = backtester.run(&mtf_data).unwrap();
 
     // Verify result structure
     assert!(!result.equity_curve.is_empty());
@@ -463,7 +463,7 @@ fn test_backtest_portfolio_heat_without_t1_execution() {
     }
 
     // Run backtest with restrictive heat
-    let result_low_heat = backtester.run(&mtf_data);
+    let result_low_heat = backtester.run(&mtf_data).unwrap();
 
     // Now run with high portfolio heat (original or 100%)
     config.trading.max_portfolio_heat = original_heat.max(0.50);
@@ -489,7 +489,7 @@ fn test_backtest_portfolio_heat_without_t1_execution() {
         }
     }
 
-    let result_high_heat = backtester_high.run(&mtf_data_2);
+    let result_high_heat = backtester_high.run(&mtf_data_2).unwrap();
 
     // Print results for debugging
     println!(
@@ -637,7 +637,7 @@ fn test_backtest_matches_analytical_buy_and_hold_return() {
     let data = HashMap::from([(symbol, mtf)]);
 
     let mut backtester = Backtester::new(config, Box::new(BuyAndHoldTestStrategy));
-    let result = backtester.run(&data);
+    let result = backtester.run(&data).unwrap();
 
     assert_eq!(result.metrics.total_trades, 1);
     assert!((result.metrics.total_return - 2.0).abs() < 1e-9);
@@ -727,7 +727,7 @@ fn test_component_costs_match_analytical_round_trip() {
     let data = HashMap::from([(symbol, mtf)]);
 
     let mut backtester = Backtester::new(config, Box::new(BuyAndHoldTestStrategy));
-    let result = backtester.run(&data);
+    let result = backtester.run(&data).unwrap();
 
     let expected_commission = 0.1187406 + 15.46448872;
     let expected_net_pnl = 20.0 - expected_commission;

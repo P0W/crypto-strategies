@@ -5,7 +5,7 @@
 
 use crate::{Candle, Symbol};
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 /// Multi-timeframe candle data for a single symbol
 #[derive(Debug, Clone)]
@@ -29,7 +29,9 @@ impl MultiTimeframeData {
     }
 
     /// Add candle data for a specific timeframe
-    pub fn add_timeframe(&mut self, timeframe: impl Into<String>, candles: Vec<Candle>) {
+    pub fn add_timeframe(&mut self, timeframe: impl Into<String>, mut candles: Vec<Candle>) {
+        candles.sort_by_key(|c| c.datetime);
+        candles.dedup_by_key(|c| c.datetime);
         self.timeframes.insert(timeframe.into(), candles);
     }
 
@@ -155,8 +157,7 @@ pub type MultiSymbolMultiTimeframeData = HashMap<Symbol, MultiTimeframeData>;
 
 /// Align multi-timeframe data to common datetime points
 ///
-/// Ensures all timeframes for all symbols have data for the same datetime range.
-/// Uses the primary timeframe as the reference.
+/// Intersect primary timestamps, retaining secondary history for indicator warmup.
 pub fn align_multi_timeframe_data(
     data: &MultiSymbolMultiTimeframeData,
 ) -> Vec<(Symbol, MultiTimeframeData)> {
@@ -164,38 +165,25 @@ pub fn align_multi_timeframe_data(
         return Vec::new();
     }
 
-    // Find common date range across all symbols' primary timeframes
-    let mut min_date: Option<DateTime<Utc>> = None;
-    let mut max_date: Option<DateTime<Utc>> = None;
-
-    for mtf_data in data.values() {
-        let primary = mtf_data.primary();
-        if primary.is_empty() {
-            continue;
+    let first = data.values().next().expect("nonempty data");
+    let primary_tf = first.primary_timeframe();
+    let mut common_dates: BTreeSet<_> = first.primary().iter().map(|c| c.datetime).collect();
+    for mtf in data.values() {
+        if mtf.primary_timeframe() != primary_tf || mtf.primary().is_empty() {
+            tracing::error!("All symbols must have nonempty data for the same primary timeframe");
+            return Vec::new();
         }
-
-        let first = primary.first().unwrap().datetime;
-        let last = primary.last().unwrap().datetime;
-
-        min_date = Some(match min_date {
-            Some(d) => d.max(first),
-            None => first,
-        });
-
-        max_date = Some(match max_date {
-            Some(d) => d.min(last),
-            None => last,
-        });
+        let dates: BTreeSet<_> = mtf.primary().iter().map(|c| c.datetime).collect();
+        common_dates.retain(|date| dates.contains(date));
     }
-
-    if min_date.is_none() || max_date.is_none() {
+    let Some(last_date) = common_dates.last().copied() else {
         return Vec::new();
-    }
+    };
+    let Some(end) = crate::data::candle_close_time(last_date, primary_tf) else {
+        tracing::error!("Unsupported primary timeframe: {}", primary_tf);
+        return Vec::new();
+    };
 
-    let min_date = min_date.unwrap();
-    let max_date = max_date.unwrap();
-
-    // Filter each symbol's data to the common range
     let mut aligned = Vec::new();
     for (symbol, mtf_data) in data {
         let mut aligned_mtf = MultiTimeframeData::new(mtf_data.primary_timeframe());
@@ -204,7 +192,13 @@ pub fn align_multi_timeframe_data(
             if let Some(candles) = mtf_data.get(timeframe) {
                 let filtered: Vec<Candle> = candles
                     .iter()
-                    .filter(|c| c.datetime >= min_date && c.datetime <= max_date)
+                    .filter(|c| {
+                        if timeframe == primary_tf {
+                            common_dates.contains(&c.datetime)
+                        } else {
+                            c.datetime < end
+                        }
+                    })
                     .cloned()
                     .collect();
 
@@ -517,13 +511,7 @@ mod tests {
 
         let aligned = align_multi_timeframe_data(&data);
 
-        // With no overlap, at least one symbol should have filtered-empty data
-        // The implementation filters to common range where min_date > max_date
-        // resulting in empty candles which are excluded
-        for (_, mtf) in &aligned {
-            // Each should have been filtered (may be empty or partial)
-            assert!(mtf.primary().is_empty() || !mtf.primary().is_empty());
-        }
+        assert!(aligned.is_empty());
     }
 
     // ==================== Edge Cases ====================

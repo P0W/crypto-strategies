@@ -185,6 +185,15 @@ impl MomentumScalperStrategy {
 }
 
 impl Strategy for MomentumScalperStrategy {
+    fn snapshot_state(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(&self.lifecycle)?)
+    }
+
+    fn restore_state(&mut self, state: serde_json::Value) -> anyhow::Result<()> {
+        self.lifecycle = serde_json::from_value(state)?;
+        Ok(())
+    }
+
     fn name(&self) -> &'static str {
         "momentum_scalper"
     }

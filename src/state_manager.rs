@@ -102,6 +102,7 @@ pub struct PendingOrder {
 // State Manager Implementation
 // =============================================================================
 
+#[derive(Clone)]
 pub struct SqliteStateManager {
     conn: Arc<Mutex<Connection>>,
     db_path: PathBuf,
@@ -114,10 +115,14 @@ impl SqliteStateManager {
         let db_path_ref = db_path.as_ref();
 
         // Create parent directories
-        if let Some(parent) = db_path_ref.parent() {
+        if let Some(parent) = db_path_ref.parent().filter(|p| !p.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent)?;
         }
-        if let Some(parent) = json_backup_path.as_ref().parent() {
+        if let Some(parent) = json_backup_path
+            .as_ref()
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+        {
             std::fs::create_dir_all(parent)?;
         }
 
@@ -127,6 +132,7 @@ impl SqliteStateManager {
         // Enable WAL mode for better concurrency
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.pragma_update(None, "synchronous", "FULL")?;
 
         let manager = Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -143,6 +149,14 @@ impl SqliteStateManager {
 
     fn create_tables(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS engine_snapshot (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                payload TEXT NOT NULL
+            )",
+            [],
+        )?;
 
         conn.execute(
             "CREATE TABLE IF NOT EXISTS positions (
@@ -288,6 +302,69 @@ impl SqliteStateManager {
         }
 
         Ok(())
+    }
+
+    /// The complete engine state is replaced by one atomic SQLite statement.
+    pub fn save_engine_snapshot<T: Serialize>(&self, snapshot: &T) -> Result<()> {
+        let payload = serde_json::to_string(snapshot)?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("State database lock poisoned"))?;
+        conn.execute(
+            "INSERT INTO engine_snapshot (id, payload) VALUES (1, ?1)
+                 ON CONFLICT(id) DO UPDATE SET payload = excluded.payload",
+            params![payload],
+        )?;
+        drop(conn);
+        if self.auto_backup {
+            self.export_json()?;
+        }
+        Ok(())
+    }
+
+    pub fn load_engine_snapshot<T: serde::de::DeserializeOwned>(&self) -> Result<Option<T>> {
+        use rusqlite::OptionalExtension;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("State database lock poisoned"))?;
+        let payload: Option<String> = conn
+            .query_row(
+                "SELECT payload FROM engine_snapshot WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        payload
+            .map(|payload| {
+                serde_json::from_str(&payload).context("Invalid persisted engine snapshot")
+            })
+            .transpose()
+    }
+
+    pub fn execution_namespace(&self) -> Result<String> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("State database lock poisoned"))?;
+        conn.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))
+            .context("Generating execution namespace")
+    }
+
+    pub fn has_legacy_state(&self) -> Result<bool> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("State database lock poisoned"))?;
+        Ok(conn.query_row(
+            "SELECT EXISTS (
+                SELECT 1 FROM positions UNION ALL SELECT 1 FROM checkpoints
+                UNION ALL SELECT 1 FROM pending_orders UNION ALL SELECT 1 FROM trades
+            )",
+            [],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn load_positions(&self, status_filter: Option<&str>) -> Result<Vec<Position>> {
@@ -559,6 +636,7 @@ impl SqliteStateManager {
         let pending_orders = self.load_pending_orders()?;
 
         let state = serde_json::json!({
+            "engine_snapshot": self.load_engine_snapshot::<serde_json::Value>()?,
             "exported_at": Utc::now().to_rfc3339(),
             "positions": positions,
             "checkpoint": checkpoint,

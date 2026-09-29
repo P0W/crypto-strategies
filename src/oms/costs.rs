@@ -9,6 +9,12 @@ pub struct TransactionCostCalculator {
     model: TransactionCostModel,
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct CostState {
+    brokerage: Vec<((OrderId, NaiveDate), f64)>,
+    fixed: Vec<(Symbol, NaiveDate)>,
+}
+
 enum TransactionCostModel {
     Percentage { maker_rate: f64, taker_rate: f64 },
     Components(ComponentCosts),
@@ -30,6 +36,41 @@ struct ComponentCosts {
 }
 
 impl TransactionCostCalculator {
+    pub fn snapshot(&self) -> CostState {
+        match &self.model {
+            TransactionCostModel::Percentage { .. } => CostState::default(),
+            TransactionCostModel::Components(costs) => CostState {
+                brokerage: costs
+                    .brokerage_charged
+                    .lock()
+                    .expect("brokerage state poisoned")
+                    .iter()
+                    .map(|(key, value)| (*key, *value))
+                    .collect(),
+                fixed: costs
+                    .charged_sell_fixed
+                    .lock()
+                    .expect("fixed charge state poisoned")
+                    .iter()
+                    .cloned()
+                    .collect(),
+            },
+        }
+    }
+
+    pub fn restore(&mut self, state: CostState) {
+        if let TransactionCostModel::Components(costs) = &mut self.model {
+            *costs
+                .brokerage_charged
+                .get_mut()
+                .expect("brokerage state poisoned") = state.brokerage.into_iter().collect();
+            *costs
+                .charged_sell_fixed
+                .get_mut()
+                .expect("fixed charge state poisoned") = state.fixed.into_iter().collect();
+        }
+    }
+
     pub fn from_exchange_config(config: &ExchangeConfig) -> Self {
         let model = match &config.cost_model {
             TransactionCostConfig::Percentage => TransactionCostModel::Percentage {

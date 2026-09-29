@@ -106,7 +106,10 @@ pub fn size_order(
 
     // Get current price from candles
     let price = match candles.last() {
-        Some(c) => c.close,
+        Some(c) => req
+            .limit_price
+            .or(req.stop_price)
+            .map_or(c.close, |price| price.to_f64()),
         None => return SizedOrder::Rejected(OrderRejection::NoCandles),
     };
 

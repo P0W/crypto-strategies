@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Trading Strategies System
 //!
 //! An automated trading system for cryptocurrency and equity markets,

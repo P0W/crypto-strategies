@@ -3,6 +3,7 @@
 //! Provides abstractions for parallel grid search optimization across any strategy.
 //! Fully decoupled from strategy implementation - works with both single-TF and MTF.
 
+use anyhow::Context;
 use indicatif::ProgressBar;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -16,6 +17,7 @@ use crate::{Candle, Config, MultiSymbolMultiTimeframeData, Symbol};
 #[derive(Debug, Clone)]
 pub struct OptimizationResult {
     pub params: HashMap<String, f64>,
+    pub final_equity: f64,
     pub sharpe_ratio: f64,
     pub total_return: f64,
     pub post_tax_return: f64,
@@ -25,6 +27,33 @@ pub struct OptimizationResult {
     pub calmar_ratio: f64,
     pub profit_factor: f64,
     pub expectancy: f64,
+}
+
+impl OptimizationResult {
+    pub fn is_solvent(&self) -> bool {
+        self.final_equity.is_finite() && self.final_equity > 0.0
+    }
+
+    /// Undefined metrics rank last; mathematically valid infinite ratios retain their ordering.
+    pub fn ranking_value(&self, sort_by: &str) -> f64 {
+        if !self.is_solvent() {
+            return f64::NEG_INFINITY;
+        }
+        let value = match sort_by {
+            "calmar" => self.calmar_ratio,
+            "return" => self.total_return,
+            "post_tax_return" => self.post_tax_return,
+            "win_rate" => self.win_rate,
+            "profit_factor" => self.profit_factor,
+            "expectancy" => self.expectancy,
+            _ => self.sharpe_ratio,
+        };
+        if value.is_nan() {
+            f64::NEG_INFINITY
+        } else {
+            value
+        }
+    }
 }
 
 /// Generic optimizer that works with any strategy
@@ -44,7 +73,7 @@ impl Optimizer {
         data: &MultiSymbolMultiTimeframeData,
         configs: Vec<Config>,
         strategy_factory: F,
-    ) -> Vec<OptimizationResult>
+    ) -> anyhow::Result<Vec<OptimizationResult>>
     where
         F: Fn(&Config) -> Box<dyn Strategy> + Send + Sync,
     {
@@ -55,10 +84,15 @@ impl Optimizer {
             .map(|config| {
                 let strategy = strategy_factory(config);
                 let mut backtester = Backtester::new(config.clone(), strategy);
-                let result = backtester.run(data);
+                let result = backtester.run(data)?;
 
-                OptimizationResult {
+                Ok(OptimizationResult {
                     params: crate::grid::extract_params(config),
+                    final_equity: result
+                        .equity_curve
+                        .last()
+                        .context("Missing final backtest equity")?
+                        .1,
                     sharpe_ratio: result.metrics.sharpe_ratio,
                     total_return: result.metrics.total_return,
                     post_tax_return: result.metrics.post_tax_return,
@@ -68,7 +102,7 @@ impl Optimizer {
                     calmar_ratio: result.metrics.calmar_ratio,
                     profit_factor: result.metrics.profit_factor,
                     expectancy: result.metrics.expectancy,
-                }
+                })
             })
             .collect()
     }
@@ -80,7 +114,7 @@ impl Optimizer {
         configs: Vec<Config>,
         strategy_factory: F,
         progress_bar: ProgressBar,
-    ) -> Vec<OptimizationResult>
+    ) -> anyhow::Result<Vec<OptimizationResult>>
     where
         F: Fn(&Config) -> Box<dyn Strategy> + Send + Sync,
     {
@@ -94,11 +128,16 @@ impl Optimizer {
             .map(|config| {
                 let strategy = strategy_factory(config);
                 let mut backtester = Backtester::new(config.clone(), strategy);
-                let result = backtester.run(data);
+                let result = backtester.run(data)?;
                 progress_bar.inc(1);
 
-                OptimizationResult {
+                Ok(OptimizationResult {
                     params: crate::grid::extract_params(config),
+                    final_equity: result
+                        .equity_curve
+                        .last()
+                        .context("Missing final backtest equity")?
+                        .1,
                     sharpe_ratio: result.metrics.sharpe_ratio,
                     total_return: result.metrics.total_return,
                     post_tax_return: result.metrics.post_tax_return,
@@ -108,7 +147,7 @@ impl Optimizer {
                     calmar_ratio: result.metrics.calmar_ratio,
                     profit_factor: result.metrics.profit_factor,
                     expectancy: result.metrics.expectancy,
-                }
+                })
             })
             .collect()
     }
@@ -119,7 +158,7 @@ impl Optimizer {
         data: &MultiSymbolMultiTimeframeData,
         configs: Vec<Config>,
         strategy_factory: &F,
-    ) -> Vec<OptimizationResult>
+    ) -> anyhow::Result<Vec<OptimizationResult>>
     where
         F: Fn(&Config) -> Box<dyn Strategy>,
     {
@@ -133,10 +172,15 @@ impl Optimizer {
             .map(|config| {
                 let strategy = strategy_factory(config);
                 let mut backtester = Backtester::new(config.clone(), strategy);
-                let result = backtester.run(data);
+                let result = backtester.run(data)?;
 
-                OptimizationResult {
+                Ok(OptimizationResult {
                     params: crate::grid::extract_params(config),
+                    final_equity: result
+                        .equity_curve
+                        .last()
+                        .context("Missing final backtest equity")?
+                        .1,
                     sharpe_ratio: result.metrics.sharpe_ratio,
                     total_return: result.metrics.total_return,
                     post_tax_return: result.metrics.post_tax_return,
@@ -146,7 +190,7 @@ impl Optimizer {
                     calmar_ratio: result.metrics.calmar_ratio,
                     profit_factor: result.metrics.profit_factor,
                     expectancy: result.metrics.expectancy,
-                }
+                })
             })
             .collect()
     }
@@ -154,16 +198,8 @@ impl Optimizer {
     /// Sort optimization results by specified metric
     pub fn sort_results(results: &mut [OptimizationResult], sort_by: &str) {
         results.sort_by(|a, b| {
-            let (va, vb) = match sort_by {
-                "calmar" => (a.calmar_ratio, b.calmar_ratio),
-                "return" => (a.total_return, b.total_return),
-                "post_tax_return" => (a.post_tax_return, b.post_tax_return),
-                "win_rate" => (a.win_rate, b.win_rate),
-                "profit_factor" => (a.profit_factor, b.profit_factor),
-                "expectancy" => (a.expectancy, b.expectancy),
-                _ => (a.sharpe_ratio, b.sharpe_ratio),
-            };
-            vb.partial_cmp(&va).unwrap_or(std::cmp::Ordering::Equal)
+            b.ranking_value(sort_by)
+                .total_cmp(&a.ranking_value(sort_by))
         });
     }
 }
@@ -239,6 +275,7 @@ mod tests {
 
         let result = OptimizationResult {
             params,
+            final_equity: 150_000.0,
             sharpe_ratio: 1.5,
             total_return: 50.0,
             post_tax_return: 35.0,
@@ -269,6 +306,7 @@ mod tests {
 
         let result = OptimizationResult {
             params,
+            final_equity: 150_000.0,
             sharpe_ratio: 1.5,
             total_return: 50.0,
             post_tax_return: 35.0,
@@ -303,6 +341,7 @@ mod tests {
         vec![
             OptimizationResult {
                 params: HashMap::new(),
+                final_equity: 130_000.0,
                 sharpe_ratio: 1.0,
                 total_return: 30.0,
                 post_tax_return: 20.0,
@@ -315,6 +354,7 @@ mod tests {
             },
             OptimizationResult {
                 params: HashMap::new(),
+                final_equity: 150_000.0,
                 sharpe_ratio: 2.0,
                 total_return: 50.0,
                 post_tax_return: 35.0,
@@ -327,6 +367,7 @@ mod tests {
             },
             OptimizationResult {
                 params: HashMap::new(),
+                final_equity: 140_000.0,
                 sharpe_ratio: 1.5,
                 total_return: 40.0,
                 post_tax_return: 28.0,
@@ -360,6 +401,51 @@ mod tests {
         assert_eq!(results[0].calmar_ratio, 5.0);
         assert_eq!(results[1].calmar_ratio, 3.3);
         assert_eq!(results[2].calmar_ratio, 2.0);
+    }
+
+    #[test]
+    fn undefined_scores_rank_last_without_penalizing_valid_infinite_ratios() {
+        let mut results = create_test_results();
+        results[0].calmar_ratio = f64::NAN;
+        results[1].calmar_ratio = f64::NEG_INFINITY;
+        results[2].calmar_ratio = -1.0;
+        Optimizer::sort_results(&mut results, "calmar");
+        assert_eq!(results[0].calmar_ratio, -1.0);
+        assert_eq!(results[1].ranking_value("calmar"), f64::NEG_INFINITY);
+        assert_eq!(results[2].ranking_value("calmar"), f64::NEG_INFINITY);
+        results[2].profit_factor = f64::INFINITY;
+        Optimizer::sort_results(&mut results, "profit_factor");
+        assert_eq!(results[0].profit_factor, f64::INFINITY);
+    }
+
+    #[test]
+    fn insolvency_cannot_win_a_positive_win_rate_objective() {
+        let mut results = create_test_results();
+        results.truncate(2);
+        results[0].total_return = -550.0;
+        results[0].final_equity = -4500.0;
+        results[0].calmar_ratio = f64::NEG_INFINITY;
+        results[0].win_rate = 90.0;
+        results[1].win_rate = 80.0;
+        Optimizer::sort_results(&mut results, "win_rate");
+        assert_eq!(results[0].win_rate, 80.0);
+        assert_eq!(results[1].ranking_value("win_rate"), f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn solvency_uses_exact_equity_not_rounded_returns_or_selected_metrics() {
+        let mut result = create_test_results().remove(0);
+        for equity in [-4500.0, 0.0, f64::NAN, f64::INFINITY] {
+            result.final_equity = equity;
+            assert!(!result.is_solvent());
+            for metric in ["win_rate", "profit_factor", "sharpe", "return", "calmar"] {
+                assert_eq!(result.ranking_value(metric), f64::NEG_INFINITY);
+            }
+        }
+        result.final_equity = 0.0001;
+        result.total_return = -100.0;
+        assert!(result.is_solvent());
+        assert!(result.ranking_value("win_rate").is_finite());
     }
 
     #[test]
@@ -428,6 +514,7 @@ mod tests {
     fn test_sort_results_single_element() {
         let mut results = vec![OptimizationResult {
             params: HashMap::new(),
+            final_equity: 140_000.0,
             sharpe_ratio: 1.5,
             total_return: 40.0,
             post_tax_return: 28.0,
@@ -564,6 +651,7 @@ mod tests {
         // Test that sorting is stable/deterministic with equal values
         let mut results = vec![
             OptimizationResult {
+                final_equity: 140_000.0,
                 params: {
                     let mut p = HashMap::new();
                     p.insert("id".to_string(), 1.0);
@@ -580,6 +668,7 @@ mod tests {
                 expectancy: 150.0,
             },
             OptimizationResult {
+                final_equity: 140_000.0,
                 params: {
                     let mut p = HashMap::new();
                     p.insert("id".to_string(), 2.0);

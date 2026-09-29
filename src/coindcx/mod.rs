@@ -76,6 +76,7 @@
 //! - [`client`]: Main API client implementation
 
 pub mod auth;
+mod broker;
 pub mod client;
 pub mod types;
 

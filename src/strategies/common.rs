@@ -7,7 +7,7 @@
 //! - Cooldown counter management for per-symbol state
 
 use crate::indicators::atr;
-use crate::oms::{OrderRequest, Position};
+use crate::oms::{OrderRequest, OrderType, Position, TimeInForce};
 use crate::{Candle, Side, Symbol};
 use std::collections::HashMap;
 
@@ -91,18 +91,28 @@ pub fn volume_ratio_confirmed(candles: &[Candle], period: usize, minimum_ratio: 
 }
 
 pub fn close_position_order(symbol: &Symbol, position: &Position) -> OrderRequest {
-    match position.side {
-        Side::Buy => OrderRequest::market_sell(symbol.clone(), position.quantity.to_f64()),
-        Side::Sell => OrderRequest::market_buy(symbol.clone(), position.quantity.to_f64()),
+    OrderRequest {
+        symbol: symbol.clone(),
+        side: match position.side {
+            Side::Buy => Side::Sell,
+            Side::Sell => Side::Buy,
+        },
+        order_type: OrderType::Market,
+        quantity: position.quantity,
+        limit_price: None,
+        stop_price: None,
+        time_in_force: TimeInForce::GTC,
+        client_id: None,
+        quantity_is_cap: false,
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PositionLifecycleManager {
     states: HashMap<Symbol, PositionLifecycleState>,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 struct PositionLifecycleState {
     bars_in_position: usize,
     cooldown: usize,
@@ -144,7 +154,7 @@ impl PositionLifecycleManager {
 /// Per-symbol cooldown counter manager
 ///
 /// Tracks cooldown periods after trades close to prevent overtrading.
-#[derive(Default, Clone)]
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CooldownManager {
     counters: HashMap<Symbol, usize>,
 }

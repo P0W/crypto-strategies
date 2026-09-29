@@ -1,1825 +1,509 @@
-//! Live Trading Command - Production-Grade OMS Implementation
-//!
-//! Features:
-//! - Ultra-low latency order processing with microsecond timing
-//! - Detailed HFT-style logging (timestamps, latencies, fill ratios)
-//! - Async event loop with graceful shutdown
-//! - Multi-timeframe (MTF) support
-//! - OMS-based order lifecycle management
-//! - Full long/short position support
-//! - Crash recovery from SQLite state
-//! - Risk management integration
-//! - Paper and live trading modes
+//! Async market-data and persistence adapter over the shared trading core.
 
-use anyhow::{Context, Result};
-use chrono::Utc;
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::time::interval;
-use tracing::{debug, error, info, warn};
-
-use crypto_strategies::coindcx::{
-    ClientConfig, CoinDCXClient, OrderRequest as CoinDCXOrderRequest, OrderSide as CoinDCXOrderSide,
+use anyhow::{ensure, Context, Result};
+use chrono::{DateTime, Duration, Utc};
+use crypto_strategies::coindcx::{ClientConfig, CoinDCXClient};
+use crypto_strategies::data::{candle_close_time, timeframe_duration};
+use crypto_strategies::oms::broker::MarketRules;
+use crypto_strategies::oms::live_execution::LiveExecution;
+use crypto_strategies::oms::{EngineSnapshot, TradingEngine};
+use crypto_strategies::state_manager::SqliteStateManager;
+use crypto_strategies::{
+    strategies, Candle, Config, MultiSymbolMultiTimeframeData, MultiTimeframeData, Symbol,
 };
-use crypto_strategies::multi_timeframe::{MultiTimeframeCandles, MultiTimeframeData};
-use crypto_strategies::oms::{
-    evaluate_exit, size_order, tighten_trailing_stop, ExecutionEngine, ExitReason, Fill, OrderBook,
-    PositionManager, SizedOrder, StrategyContext,
-};
-use crypto_strategies::risk::RiskManager;
-use crypto_strategies::state_manager::{
-    create_state_manager, Checkpoint, PendingOrder, Position as StatePosition, SqliteStateManager,
-};
-use crypto_strategies::strategies::{self, Strategy};
-use crypto_strategies::{Config, Money, Side, Symbol, PNL_EPSILON};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::Path;
+use tracing::{info, warn};
 
-// ============================================================================
-// Configuration Constants
-// ============================================================================
+const HISTORY_BARS: u32 = 500;
+const SNAPSHOT_VERSION: u32 = 2;
 
-/// Interval between balance syncs from exchange (seconds)
-const BALANCE_SYNC_INTERVAL_SECS: u64 = 300;
-
-/// Warn if order is pending longer than this (seconds)
-const ORDER_TIMEOUT_WARNING_SECS: u64 = 300;
-
-/// Tolerance for position quantity comparison (floating point)
-const POSITION_QTY_TOLERANCE: f64 = 1e-8;
-
-/// Warn if cycle latency exceeds this (microseconds) - 5 seconds
-const HIGH_CYCLE_LATENCY_THRESHOLD_US: u64 = 5_000_000;
-
-/// Save checkpoint every N cycles
-const CHECKPOINT_INTERVAL_CYCLES: u32 = 10;
-
-/// Log performance metrics every N seconds
-const METRICS_LOG_INTERVAL_SECS: u64 = 300;
-
-/// API timeout for exchange operations (seconds)
-const EXCHANGE_API_TIMEOUT_SECS: u64 = 10;
-
-/// Performance metrics for HFT monitoring
-#[derive(Debug, Default)]
-struct PerformanceMetrics {
-    total_cycles: u64,
-    total_orders_placed: u64,
-    total_fills: u64,
-    total_cancels: u64,
-    avg_cycle_latency_us: u64,
-    max_cycle_latency_us: u64,
-    avg_order_latency_us: u64,
-    max_order_latency_us: u64,
-    fill_ratio: f64,
+#[derive(Serialize, Deserialize)]
+struct PaperSnapshot {
+    version: u32,
+    config: serde_json::Value,
+    engine: EngineSnapshot,
 }
 
-impl PerformanceMetrics {
-    fn update_cycle_latency(&mut self, latency_us: u64) {
-        self.total_cycles += 1;
-        self.avg_cycle_latency_us =
-            (self.avg_cycle_latency_us * (self.total_cycles - 1) + latency_us) / self.total_cycles;
-        if latency_us > self.max_cycle_latency_us {
-            self.max_cycle_latency_us = latency_us;
-        }
-    }
-
-    fn record_order(&mut self, latency_us: u64) {
-        self.total_orders_placed += 1;
-        // Update running average using incremental formula
-        self.avg_order_latency_us = (self.avg_order_latency_us * (self.total_orders_placed - 1)
-            + latency_us)
-            / self.total_orders_placed;
-        if latency_us > self.max_order_latency_us {
-            self.max_order_latency_us = latency_us;
-        }
-        self.update_fill_ratio();
-    }
-
-    fn record_fill(&mut self) {
-        self.total_fills += 1;
-        self.update_fill_ratio();
-    }
-
-    fn update_fill_ratio(&mut self) {
-        if self.total_orders_placed > 0 {
-            self.fill_ratio = self.total_fills as f64 / self.total_orders_placed as f64;
-        }
-    }
-
-    fn log_summary(&self) {
-        info!("════════════════════════════════════════════════════════");
-        info!("📊 PERFORMANCE METRICS (HFT-Style)");
-        info!("════════════════════════════════════════════════════════");
-        info!("Cycles processed:      {}", self.total_cycles);
-        info!("Orders placed:         {}", self.total_orders_placed);
-        info!(
-            "Orders filled:         {} ({:.2}% fill ratio)",
-            self.total_fills,
-            self.fill_ratio * 100.0
-        );
-        info!("Orders cancelled:      {}", self.total_cancels);
-        info!("Avg cycle latency:     {} μs", self.avg_cycle_latency_us);
-        info!("Max cycle latency:     {} μs", self.max_cycle_latency_us);
-        info!("Avg order latency:     {} μs", self.avg_order_latency_us);
-        info!("Max order latency:     {} μs", self.max_order_latency_us);
-        if self.max_cycle_latency_us > 10_000 {
-            warn!("⚠️  Max latency > 10ms - consider optimization");
-        }
-        if self.max_order_latency_us > 1_000 {
-            warn!("⚠️  Max order latency > 1ms - check order processing");
-        }
-        info!("════════════════════════════════════════════════════════");
-    }
+fn config_identity(config: &Config) -> Result<serde_json::Value> {
+    let mut public_config = config.clone();
+    public_config.exchange.api_key = None;
+    public_config.exchange.api_secret = None;
+    Ok(serde_json::to_value(public_config)?)
 }
 
-/// Info about an order pending on the exchange
-#[derive(Debug, Clone)]
-struct PendingExchangeOrder {
-    internal_order_id: u64,
-    symbol: Symbol,
-    side: Side,
-    quantity: f64,
-    limit_price: Option<f64>,
-    submitted_at: Instant,
-    /// Cumulative filled quantity (for partial fill tracking)
-    filled_quantity: f64,
+fn closed_history(mut candles: Vec<Candle>, tf: &str, now: DateTime<Utc>) -> Result<Vec<Candle>> {
+    ensure!(
+        timeframe_duration(tf).is_some(),
+        "Unsupported timeframe {tf}"
+    );
+    candles.sort_by_key(|c| c.datetime);
+    candles.dedup_by_key(|c| c.datetime);
+    candles.retain(|c| candle_close_time(c.datetime, tf).is_some_and(|close| close <= now));
+    let latest = candles.last().context("No closed candles")?;
+    let close = candle_close_time(latest.datetime, tf).context("Invalid candle close")?;
+    let next_close = candle_close_time(close, tf).context("Invalid candle interval")?;
+    ensure!(
+        now <= next_close + Duration::seconds(30),
+        "Stale {tf} market data"
+    );
+    Ok(candles)
 }
 
-/// Live trader state with OMS integration
-struct LiveTrader {
-    config: Config,
-    strategy: Box<dyn Strategy>,
-    risk_manager: RiskManager,
-    exchange: CoinDCXClient,
-    state_manager: SqliteStateManager,
-
-    // OMS components
-    orderbooks: HashMap<Symbol, OrderBook>,
-    position_manager: PositionManager,
-    execution_engine: ExecutionEngine,
-
-    // MTF candle cache
-    candle_cache: HashMap<Symbol, MultiTimeframeData>,
-    required_timeframes: Vec<String>,
-    primary_timeframe: String,
-
-    // Trading state
-    paper_mode: bool,
-    cycle_count: u32,
-    paper_cash: f64,
-
-    // Live trading state (exchange integration)
-    /// Pending orders on exchange: exchange_order_id -> order info
-    pending_exchange_orders: HashMap<String, PendingExchangeOrder>,
-    /// Cached balances from exchange: currency -> available balance
-    exchange_balances: HashMap<String, f64>,
-    /// Last time balances were synced
-    last_balance_sync: Option<Instant>,
-
-    // Stop/Target tracking (matches backtest.rs pattern)
-    // Format: (stop_price, target_price) - cached at entry time
-    entry_levels: HashMap<Symbol, (f64, f64)>,
-    trailing_stops: HashMap<Symbol, f64>,
-
-    // Performance monitoring
-    metrics: PerformanceMetrics,
-    last_metrics_log: Instant,
-}
-
-impl LiveTrader {
-    async fn new(config: Config, state_db_path: &str, paper_mode: bool) -> Result<Self> {
-        let start = Instant::now();
-        info!("⚙️  Initializing trading engine...");
-
-        if !paper_mode
-            && matches!(
-                config.exchange.cost_model,
-                crypto_strategies::config::TransactionCostConfig::Components { .. }
-            )
-        {
-            anyhow::bail!(
-                "Component-based transaction costs are not enabled for live trading until cost state persistence is implemented"
-            );
-        }
-
-        let mut strategy = strategies::create_strategy(&config)?;
-        strategy.init();
-        info!(
-            "✓ Strategy loaded: {} ({} μs)",
-            strategy.name(),
-            start.elapsed().as_micros()
-        );
-
-        let primary_timeframe = config.timeframe();
-        let strategy_tfs = strategy.required_timeframes();
-        let mut required_timeframes: Vec<String> =
-            strategy_tfs.iter().map(|s| s.to_string()).collect();
-        if !required_timeframes.contains(&primary_timeframe) {
-            required_timeframes.push(primary_timeframe.clone());
-        }
-
-        info!(
-            "✓ Timeframes: {:?} (primary: {})",
-            required_timeframes, primary_timeframe
-        );
-
-        let risk_manager = RiskManager::new(
-            config.trading.initial_capital,
-            config.trading.risk_per_trade,
-            config.trading.max_positions,
-            config.trading.max_portfolio_heat,
-            config.trading.max_position_pct,
-            config.trading.max_drawdown,
-            config.trading.drawdown_warning,
-            config.trading.drawdown_critical,
-            config.trading.drawdown_warning_multiplier,
-            config.trading.drawdown_critical_multiplier,
-            config.trading.consecutive_loss_limit,
-            config.trading.consecutive_loss_multiplier,
-        );
-        info!(
-            "✓ Risk manager initialized (capital: {:.2})",
-            config.trading.initial_capital
-        );
-
-        let api_key = config.exchange.api_key.clone().unwrap_or_default();
-        let api_secret = config.exchange.api_secret.clone().unwrap_or_default();
-
-        let client_config = ClientConfig::default()
-            .with_max_retries(3)
-            .with_rate_limit(config.exchange.rate_limit as usize)
-            .with_timeout(Duration::from_secs(EXCHANGE_API_TIMEOUT_SECS));
-
-        let exchange = CoinDCXClient::with_config(api_key, api_secret, client_config);
-        info!(
-            "✓ Exchange client connected (rate limit: {} req/s)",
-            config.exchange.rate_limit
-        );
-
-        let state_dir = std::path::Path::new(state_db_path)
-            .parent()
-            .unwrap_or(std::path::Path::new("."));
-        let state_manager = create_state_manager(state_dir, "sqlite")?;
-        info!("✓ State manager ready (path: {})", state_db_path);
-
-        let execution_engine = ExecutionEngine::from_exchange_config(&config.exchange);
-        info!(
-            "✓ Execution engine configured (cost_model: {:?}, slippage: {:.4}%)",
-            config.exchange.cost_model,
-            config.exchange.assumed_slippage * 100.0
-        );
-
-        info!(
-            "⚡ Initialization complete ({} μs)",
-            start.elapsed().as_micros()
-        );
-
-        Ok(LiveTrader {
-            config,
-            strategy,
-            risk_manager,
-            exchange,
-            state_manager,
-            orderbooks: HashMap::new(),
-            position_manager: PositionManager::new(),
-            execution_engine,
-            candle_cache: HashMap::new(),
-            required_timeframes,
-            primary_timeframe,
-            paper_mode,
-            cycle_count: 0,
-            paper_cash: 0.0,
-            pending_exchange_orders: HashMap::new(),
-            exchange_balances: HashMap::new(),
-            last_balance_sync: None,
-            entry_levels: HashMap::new(),
-            trailing_stops: HashMap::new(),
-            metrics: PerformanceMetrics::default(),
-            last_metrics_log: Instant::now(),
-        })
-    }
-
-    async fn recover_state(&mut self) -> Result<()> {
-        let start = Instant::now();
-        info!("🔄 Recovering state from previous session...");
-
-        if let Some(checkpoint) = self.state_manager.load_checkpoint()? {
-            info!("✓ Checkpoint found:");
-            info!("  └─ Cycle: {}", checkpoint.cycle_count);
-            info!("  └─ Portfolio Value: {:.2}", checkpoint.portfolio_value);
-            info!("  └─ Open Positions: {}", checkpoint.open_positions);
-            info!("  └─ Consecutive Losses: {}", checkpoint.consecutive_losses);
-            info!("  └─ Cash: {:.2}", checkpoint.cash);
-
-            self.cycle_count = checkpoint.cycle_count as u32;
-            self.paper_cash = checkpoint.cash;
-            self.risk_manager.consecutive_losses = checkpoint.consecutive_losses as usize;
-            self.risk_manager.update_capital(checkpoint.portfolio_value);
-
-            let current_hash = self.config_hash();
-            if !checkpoint.config_hash.is_empty() && checkpoint.config_hash != current_hash {
-                warn!("⚠️  Config hash mismatch - parameters may have changed!");
-                warn!("  └─ Old hash: {}", checkpoint.config_hash);
-                warn!("  └─ New hash: {}", current_hash);
-            }
-        } else {
-            info!("ℹ️  No checkpoint found - starting fresh");
-            self.paper_cash = self.config.trading.initial_capital;
-        }
-
-        let state_positions = self.state_manager.load_positions(Some("open"))?;
-        info!("📦 Loading {} open position(s)...", state_positions.len());
-
-        for sp in state_positions {
-            let symbol = Symbol::new(&sp.symbol);
-            let side = if sp.side == "sell" {
-                Side::Sell
-            } else {
-                Side::Buy
+async fn fetch_frame(
+    client: &CoinDCXClient,
+    config: &Config,
+    timeframes: &[String],
+    rules: Option<&BTreeMap<String, MarketRules>>,
+) -> Result<MultiSymbolMultiTimeframeData> {
+    let now = Utc::now();
+    let mut data = MultiSymbolMultiTimeframeData::new();
+    for name in &config.trading.symbols {
+        let mut mtf = MultiTimeframeData::new(config.timeframe());
+        for tf in timeframes {
+            let pair = match rules {
+                Some(rules) => rules
+                    .get(name)
+                    .context("Missing verified candle pair")?
+                    .data_pair
+                    .as_str(),
+                None => name,
             };
-
-            let fill = Fill::from_f64(
-                0,
-                sp.entry_price,
-                sp.quantity,
-                sp.entry_time
-                    .and_then(|t| t.parse().ok())
-                    .unwrap_or_else(Utc::now),
-                0.0,
-                true,
-            );
-
-            let _ = self.position_manager.add_fill(fill, symbol.clone(), side);
-
-            // Restore stop/target levels if saved
-            if sp.stop_loss > 0.0 || sp.take_profit > 0.0 {
-                self.entry_levels
-                    .insert(symbol.clone(), (sp.stop_loss, sp.take_profit));
-                info!(
-                    "  └─ Restored levels: stop={:.2}, target={:.2}",
-                    sp.stop_loss, sp.take_profit
-                );
-            }
-
-            // Restore trailing stop from metadata if present
-            if let Some(trailing) = sp.metadata.get("trailing_stop") {
-                if let Some(trailing_val) = trailing.as_f64() {
-                    self.trailing_stops.insert(symbol.clone(), trailing_val);
-                    info!("  └─ Restored trailing stop: {:.2}", trailing_val);
-                }
-            }
-
-            info!(
-                "  ✓ {} {} {:.6} @ {:.2} (P&L: {:.2})",
-                symbol,
-                if side == Side::Buy { "LONG " } else { "SHORT" },
-                sp.quantity,
-                sp.entry_price,
-                sp.pnl
-            );
-        }
-
-        // Load pending orders and restore to orderbooks
-        let pending_orders = self.state_manager.load_pending_orders()?;
-        if !pending_orders.is_empty() {
-            info!("📋 Restoring {} pending order(s)...", pending_orders.len());
-            for po in pending_orders {
-                let symbol = Symbol::new(&po.symbol);
-                let side = if po.side == "sell" {
-                    Side::Sell
-                } else {
-                    Side::Buy
-                };
-                let order_type = match po.order_type.as_str() {
-                    "limit" => crypto_strategies::oms::OrderType::Limit,
-                    "stop" => crypto_strategies::oms::OrderType::Stop,
-                    "stop_limit" => crypto_strategies::oms::OrderType::StopLimit,
-                    _ => crypto_strategies::oms::OrderType::Market,
-                };
-
-                let restored_order_id = po
-                    .order_id
-                    .parse()
-                    .with_context(|| format!("Invalid restored order ID: {}", po.order_id))?;
-                crypto_strategies::oms::reserve_order_id(restored_order_id);
-                let order = crypto_strategies::oms::Order {
-                    id: restored_order_id,
-                    symbol: symbol.clone(),
-                    side,
-                    order_type,
-                    quantity: Money::from_f64(po.quantity),
-                    limit_price: po.limit_price.map(Money::from_f64),
-                    stop_price: po.stop_price.map(Money::from_f64),
-                    filled_quantity: Money::ZERO,
-                    remaining_quantity: Money::from_f64(po.quantity),
-                    average_fill_price: Money::ZERO,
-                    state: crypto_strategies::oms::OrderState::Open,
-                    time_in_force: crypto_strategies::oms::TimeInForce::GTC,
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                    strategy_tag: None,
-                    client_id: po.client_id,
-                    created_bar_idx: None,
-                };
-
-                let orderbook = self.orderbooks.entry(symbol.clone()).or_default();
-                orderbook.add_order(order);
-
-                info!(
-                    "  ✓ Restored {} {} @ {:?}",
-                    po.side.to_uppercase(),
-                    symbol,
-                    po.limit_price.or(po.stop_price)
-                );
-            }
-            // Clear from DB since they're now in memory
-            self.state_manager.clear_pending_orders()?;
-        }
-
-        info!(
-            "⚡ State recovery complete ({} μs)",
-            start.elapsed().as_micros()
-        );
-        Ok(())
-    }
-
-    async fn bootstrap_candles(&mut self, symbol: &Symbol) -> Result<()> {
-        use crypto_strategies::Candle;
-
-        let start = Instant::now();
-        info!("📥 Bootstrapping historical data for {}...", symbol);
-
-        let mut mtf_data = MultiTimeframeData::new(self.primary_timeframe.clone());
-
-        for tf in &self.required_timeframes {
-            let tf_start = Instant::now();
-            let raw_candles = self
-                .exchange
-                .get_candles(symbol.as_str(), tf, Some(500))
-                .await?;
-
-            if raw_candles.is_empty() {
-                warn!("  ⚠️  No {} candles received for {}", tf, symbol);
-                continue;
-            }
-
-            // Convert coindcx::Candle to crypto_strategies::Candle
-            let candles: Vec<Candle> = raw_candles
+            let raw = client
+                .get_candles(pair, tf, Some(HISTORY_BARS))
+                .await
+                .with_context(|| format!("Fetching {name} {tf} candles"))?;
+            let candles = raw
                 .into_iter()
-                .filter_map(|c| c.try_into().ok())
-                .collect();
-
-            if candles.is_empty() {
-                warn!("  ⚠️  Failed to convert {} candles for {}", tf, symbol);
-                continue;
-            }
-
-            // Safe access - we checked is_empty above
-            // Note: CoinDCX returns candles newest-first, so last() is oldest
-            let newest_ts = candles.first().map(|c| c.datetime);
-            let oldest_ts = candles.last().map(|c| c.datetime);
-
-            if let (Some(oldest), Some(newest)) = (oldest_ts, newest_ts) {
-                info!(
-                    "  ✓ {} candles: {} bars ({} to {}) [{} μs]",
-                    tf,
-                    candles.len(),
-                    oldest.format("%Y-%m-%d %H:%M"),
-                    newest.format("%Y-%m-%d %H:%M"),
-                    tf_start.elapsed().as_micros()
-                );
-            }
-
-            mtf_data.add_timeframe(tf.clone(), candles);
+                .map(Candle::try_from)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .with_context(|| format!("Invalid {name} {tf} candle"))?;
+            mtf.add_timeframe(tf, closed_history(candles, tf, now)?);
         }
-
-        self.candle_cache.insert(symbol.clone(), mtf_data);
-        info!(
-            "⚡ Bootstrap complete for {} ({} μs)",
-            symbol,
-            start.elapsed().as_micros()
-        );
-        Ok(())
+        data.insert(Symbol::new(name), mtf);
     }
+    Ok(data)
+}
 
-    async fn run(&mut self, shutdown: Arc<AtomicBool>) -> Result<()> {
-        info!("════════════════════════════════════════════════════════");
-        info!("🚀 LIVE TRADING ENGINE STARTED");
-        info!("════════════════════════════════════════════════════════");
-        info!(
-            "Mode:     {}",
-            if self.paper_mode {
-                "PAPER TRADING"
-            } else {
-                "LIVE TRADING ⚠️"
-            }
+fn replay_dates(
+    data: &MultiSymbolMultiTimeframeData,
+    last: Option<DateTime<Utc>>,
+    latest: DateTime<Utc>,
+) -> Result<Vec<DateTime<Utc>>> {
+    let Some(last) = last else {
+        return Ok(vec![latest]);
+    };
+    if latest <= last {
+        return Ok(vec![]);
+    }
+    let timeframe = data
+        .values()
+        .next()
+        .context("No market data")?
+        .primary_timeframe();
+    let mut expected = Vec::new();
+    let mut next = candle_close_time(last, timeframe).context("Invalid replay interval")?;
+    while next <= latest {
+        expected.push(next);
+        next = candle_close_time(next, timeframe).context("Invalid replay interval")?;
+    }
+    ensure!(
+        expected.last() == Some(&latest),
+        "Latest candle is not aligned with the recovery interval"
+    );
+    for (symbol, history) in data {
+        ensure!(
+            history.primary_timeframe() == timeframe,
+            "Primary timeframes differ"
         );
-        info!("Strategy: {}", self.strategy.name());
-        info!("Symbols:  {:?}", self.config.trading.symbols);
-        info!("Capital:  {:.2}", self.paper_cash);
-        info!("════════════════════════════════════════════════════════");
-
-        // Bootstrap all symbols
-        let bootstrap_start = Instant::now();
-        let symbols: Vec<Symbol> = self
-            .config
-            .trading
-            .symbols
-            .iter()
-            .map(Symbol::new)
-            .collect();
-        for symbol in &symbols {
-            self.bootstrap_candles(symbol).await?;
-            self.orderbooks.insert(symbol.clone(), OrderBook::new());
-        }
-        info!(
-            "⚡ All symbols bootstrapped ({} ms)",
-            bootstrap_start.elapsed().as_millis()
+        ensure!(
+            history.primary().iter().any(|c| c.datetime == last),
+            "Data gap exceeds recovery history for {symbol}; refusing to skip unprocessed candles"
         );
+        ensure!(
+            history.primary().iter().filter(|c| c.datetime > last).map(|c| c.datetime)
+                .eq(expected.iter().copied()),
+            "Missing or mismatched replay candles for {symbol}; refusing to skip unprocessed candles"
+        );
+    }
+    Ok(expected)
+}
 
-        // Live mode: sync balances and reconcile positions on startup
-        if !self.paper_mode {
-            info!("════════════════════════════════════════════════════════");
-            info!("🔗 Connecting to exchange for live trading...");
-            self.sync_balances()
-                .await
-                .context("Failed to sync balances on startup")?;
-            info!("│  ✓ INR Balance: ₹{:.2}", self.paper_cash);
+fn restore(
+    engine: &mut TradingEngine,
+    db: &SqliteStateManager,
+    identity: &serde_json::Value,
+) -> Result<()> {
+    if let Some(snapshot) = db.load_engine_snapshot::<PaperSnapshot>()? {
+        ensure!(
+            snapshot.version == SNAPSHOT_VERSION,
+            "Unsupported snapshot version"
+        );
+        ensure!(
+            &snapshot.config == identity,
+            "State/config mismatch; use a separate state database for a different configuration"
+        );
+        engine.restore(snapshot.engine)?;
+    } else {
+        ensure!(
+            !db.has_legacy_state()?,
+            "Legacy state cannot be recovered safely. Reconcile any real exchange orders \
+             manually and use a new paper-state database; no legacy positions or orders were migrated."
+        );
+    }
+    Ok(())
+}
 
-            self.reconcile_positions()
-                .await
-                .context("Failed to reconcile positions on startup")?;
-            info!("════════════════════════════════════════════════════════");
+async fn persist(
+    engine: &TradingEngine,
+    db: &SqliteStateManager,
+    identity: &serde_json::Value,
+) -> Result<()> {
+    let snapshot = PaperSnapshot {
+        version: SNAPSHOT_VERSION,
+        config: identity.clone(),
+        engine: engine.snapshot()?,
+    };
+    let db = db.clone();
+    tokio::task::spawn_blocking(move || db.save_engine_snapshot(&snapshot))
+        .await
+        .context("Persistence worker failed")??;
+    Ok(())
+}
+
+pub async fn run(
+    config: Config,
+    state_db_path: String,
+    paper_mode: bool,
+    preflight: bool,
+    resume: bool,
+) -> Result<()> {
+    ensure!(
+        !paper_mode || (!preflight && !resume),
+        "Preflight/resume apply only to real execution"
+    );
+    if !paper_mode {
+        ensure!(
+            config
+                .exchange
+                .api_key
+                .as_deref()
+                .is_some_and(|s| !s.is_empty()),
+            "Missing COINDCX_API_KEY"
+        );
+        ensure!(
+            config
+                .exchange
+                .api_secret
+                .as_deref()
+                .is_some_and(|s| !s.is_empty()),
+            "Missing COINDCX_API_SECRET"
+        );
+    }
+    ensure!(
+        !config.trading.symbols.is_empty(),
+        "No trading symbols configured"
+    );
+    ensure!(
+        config.exchange.rate_limit > 0,
+        "Rate limit must be positive"
+    );
+    let strategy = strategies::create_strategy(&config)?;
+    let mut timeframes: Vec<String> = strategy
+        .required_timeframes()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    timeframes.push(config.timeframe());
+    timeframes.sort();
+    timeframes.dedup();
+    for tf in &timeframes {
+        ensure!(
+            timeframe_duration(tf).is_some(),
+            "Unsupported timeframe {tf}"
+        );
+    }
+    let identity = config_identity(&config)?;
+    let db_path = Path::new(&state_db_path);
+    if let Some(parent) = db_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    let lease = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(db_path.with_extension("lock"))?;
+    lease
+        .try_lock()
+        .context("This state database is already in use")?;
+    let db = SqliteStateManager::new(db_path.to_path_buf(), db_path.with_extension("json"), true)?;
+    if !paper_mode {
+        let client = CoinDCXClient::with_config(
+            config
+                .exchange
+                .api_key
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .context("Missing COINDCX_API_KEY")?,
+            config
+                .exchange
+                .api_secret
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .context("Missing COINDCX_API_SECRET")?,
+            ClientConfig::default()
+                .with_rate_limit(config.exchange.rate_limit as usize)
+                .with_timeout(std::time::Duration::from_secs(10)),
+        );
+        let mut live = LiveExecution::open(config.clone(), strategy, client.clone(), db).await?;
+        if preflight {
+            live.preflight().await?;
+            info!("Read-only preflight passed: market capabilities, account ownership and balances reconcile; no orders submitted");
+            return Ok(());
         }
-
-        // Main event loop
-        let poll_secs = self.parse_tf_seconds(&self.primary_timeframe);
-        info!("⏱️  Polling interval: {} seconds", poll_secs);
-        let mut ticker = interval(Duration::from_secs(poll_secs));
-
-        // Create a short interval for shutdown checks during long waits
-        let mut shutdown_check = interval(Duration::from_secs(1));
-
-        while !shutdown.load(Ordering::Relaxed) {
-            // Use select! to allow shutdown to interrupt long tick waits
+        if let Err(error) = live.preflight().await {
+            live.halt(format!("Startup reconciliation failed: {error:#}"))
+                .await?;
+        }
+        if resume {
+            live.resume().await?;
+        }
+        let halt_path = db_path.with_extension("halt");
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(2));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        info!("CoinDCX spot execution enabled; native stop-limit orders do not guarantee fills through price gaps");
+        loop {
             tokio::select! {
-                biased;  // Prefer shutdown check over ticker
-                _ = shutdown_check.tick() => {
-                    if shutdown.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    continue;  // Not time for a cycle yet, keep waiting
+                signal = tokio::signal::ctrl_c() => {
+                    signal.context("Failed to receive shutdown signal")?;
+                    break;
                 }
                 _ = ticker.tick() => {}
             }
-
-            // Check shutdown again after waking
-            if shutdown.load(Ordering::Relaxed) {
-                break;
+            if halt_path.try_exists()? && live.halted().is_none() {
+                live.halt("Operator halt file").await?;
             }
-
-            let cycle_start = Instant::now();
-
-            self.cycle_count += 1;
-            debug!(
-                "┌─ Cycle {} started at {}",
-                self.cycle_count,
-                Utc::now().format("%H:%M:%S%.3f")
-            );
-
-            if let Err(e) = self.process_cycle().await {
-                error!("│  ❌ Cycle error: {}", e);
-            }
-
-            let cycle_latency_us = cycle_start.elapsed().as_micros() as u64;
-            self.metrics.update_cycle_latency(cycle_latency_us);
-
-            debug!(
-                "└─ Cycle {} complete ({} μs)",
-                self.cycle_count, cycle_latency_us
-            );
-
-            // Warn if cycle latency is high
-            if cycle_latency_us > HIGH_CYCLE_LATENCY_THRESHOLD_US {
-                warn!("⚠️  High cycle latency: {} ms", cycle_latency_us / 1000);
-            }
-
-            // Periodic checkpoint
-            if self.cycle_count.is_multiple_of(CHECKPOINT_INTERVAL_CYCLES) {
-                let checkpoint_start = Instant::now();
-                if let Err(e) = self.save_checkpoint() {
-                    error!("Failed to save checkpoint: {}", e);
-                } else {
-                    debug!(
-                        "💾 Checkpoint saved ({} μs)",
-                        checkpoint_start.elapsed().as_micros()
-                    );
-                }
-            }
-
-            // Log performance metrics every 5 minutes
-            if self.last_metrics_log.elapsed() > Duration::from_secs(METRICS_LOG_INTERVAL_SECS) {
-                self.metrics.log_summary();
-                self.log_portfolio_status();
-                self.last_metrics_log = Instant::now();
-            }
-        }
-
-        info!("════════════════════════════════════════════════════════");
-        info!("🛑 SHUTDOWN SIGNAL RECEIVED");
-        info!("════════════════════════════════════════════════════════");
-
-        // Cancel pending orders on exchange to avoid orphan fills
-        if !self.paper_mode && !self.pending_exchange_orders.is_empty() {
-            info!(
-                "│  Cancelling {} pending order(s) on exchange...",
-                self.pending_exchange_orders.len()
-            );
-            let order_ids: Vec<String> = self.pending_exchange_orders.keys().cloned().collect();
-            for exchange_id in order_ids {
-                match self.exchange.cancel_order(&exchange_id).await {
-                    Ok(()) => info!("│  ✓ Cancelled order {}", exchange_id),
-                    Err(e) => warn!("│  ⚠️  Failed to cancel {}: {}", exchange_id, e),
-                }
-            }
-            self.pending_exchange_orders.clear();
-        }
-
-        self.save_checkpoint()?;
-        self.metrics.log_summary();
-        info!("✓ Live trading stopped gracefully");
-        Ok(())
-    }
-
-    async fn process_cycle(&mut self) -> Result<()> {
-        // Live mode: poll for fills from exchange
-        if !self.paper_mode {
-            if let Err(e) = self.poll_pending_orders().await {
-                warn!("│  ⚠️  Order polling failed: {}", e);
-            }
-
-            // Periodic balance sync (every 5 minutes)
-            let should_sync = self
-                .last_balance_sync
-                .is_none_or(|t| t.elapsed() > Duration::from_secs(BALANCE_SYNC_INTERVAL_SECS));
-            if should_sync {
-                if let Err(e) = self.sync_balances().await {
-                    warn!("│  ⚠️  Balance sync failed: {}", e);
-                }
-            }
-        }
-
-        let symbols: Vec<Symbol> = self
-            .config
-            .trading
-            .symbols
-            .iter()
-            .map(Symbol::new)
-            .collect();
-        for symbol in &symbols {
-            let update_start = Instant::now();
-            if let Err(e) = self.update_candles(symbol).await {
-                warn!("│  ⚠️  Candle update failed for {}: {}", symbol, e);
+            if let Err(error) = live.cycle().await {
+                live.halt(format!("Live cycle failed: {error:#}")).await?;
                 continue;
             }
-            debug!(
-                "│  ✓ Candles updated for {} ({} μs)",
-                symbol,
-                update_start.elapsed().as_micros()
-            );
-
-            let process_start = Instant::now();
-            if let Err(e) = self.process_symbol(symbol).await {
-                error!("│  ❌ Symbol processing failed for {}: {}", symbol, e);
-            } else {
-                debug!(
-                    "│  ✓ Processed {} ({} μs)",
-                    symbol,
-                    process_start.elapsed().as_micros()
-                );
+            if live.halted().is_some() {
+                continue;
             }
-        }
-        Ok(())
-    }
-
-    async fn update_candles(&mut self, symbol: &Symbol) -> Result<()> {
-        use crypto_strategies::Candle;
-
-        for tf in &self.required_timeframes {
-            let raw_candles = match self
-                .exchange
-                .get_candles(symbol.as_str(), tf, Some(2))
-                .await
-            {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            let latest_raw = match raw_candles.last() {
-                Some(r) => r,
-                None => continue,
-            };
-
-            let latest = match Candle::try_from(latest_raw.clone()) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            let mtf_data = match self.candle_cache.get_mut(symbol) {
-                Some(d) => d,
-                None => continue,
-            };
-
-            let candles = match mtf_data.get_mut(tf) {
-                Some(c) => c,
-                None => continue,
-            };
-
-            // Update last candle or append if new
-            match candles.last() {
-                Some(last) if last.datetime == latest.datetime => {
-                    // Update existing candle
-                    if let Some(last_mut) = candles.last_mut() {
-                        *last_mut = latest;
-                    }
+            let data = match fetch_frame(&client, &config, &timeframes, Some(live.rules())).await {
+                Ok(data) => data,
+                Err(error) => {
+                    live.halt(format!("Market data failed: {error:#}")).await?;
+                    continue;
                 }
-                _ => {
-                    // New candle or empty
-                    candles.push(latest);
+            };
+            let dates: Vec<_> = data
+                .values()
+                .filter_map(|d| d.primary().last())
+                .map(|c| c.datetime)
+                .collect();
+            let date = *dates.first().context("No live candles")?;
+            if dates.iter().any(|d| *d != date) {
+                live.halt("Unsynchronized market data").await?;
+                continue;
+            }
+            if live.engine().last_bar().is_none_or(|last| date > last) {
+                // Real execution never replays missed historical signals as new orders.
+                if let Err(error) = live.on_bar(&data, date).await {
+                    live.halt(format!("Live decision failed: {error:#}"))
+                        .await?;
+                    continue;
                 }
             }
         }
-        Ok(())
-    }
-
-    async fn process_symbol(&mut self, symbol: &Symbol) -> Result<()> {
-        let mtf_data = self.candle_cache.get(symbol).context("MTF missing")?;
-        let candles = mtf_data
-            .get(&self.primary_timeframe)
-            .context("Primary TF missing")?;
-
-        if candles.is_empty() {
-            return Ok(());
-        }
-
-        let current_candle = match candles.last() {
-            Some(c) => c,
-            None => return Ok(()), // Safety: already checked is_empty, but be defensive
-        };
-
-        // Calculate portfolio value before getting mutable orderbook reference
-        // to avoid borrow checker conflicts
-        let equity = self.calculate_portfolio_value();
-        let cash_available = self.paper_cash;
-
-        let orderbook = match self.orderbooks.get_mut(symbol) {
-            Some(ob) => ob,
-            None => {
-                warn!("│  ⚠️  No orderbook for {} - skipping", symbol);
+        live.prepare_shutdown().await?;
+        for _ in 0..15 {
+            if let Err(error) = live.cycle().await {
+                warn!("Shutdown reconciliation failed: {error:#}");
+            }
+            if live.shutdown_ready() {
+                info!("Entries cancelled; open inventory retains acknowledged native stops. State is halted until --resume.");
                 return Ok(());
             }
-        };
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+        anyhow::bail!("Shutdown could not confirm all cancellations/protection. Live state is halted; inspect venue orders/inventory immediately.");
+    }
+    let mut engine = TradingEngine::new(config.clone(), strategy)?;
+    restore(&mut engine, &db, &identity)?;
+    let client = CoinDCXClient::with_config(
+        "",
+        "",
+        ClientConfig::default()
+            .with_rate_limit(config.exchange.rate_limit as usize)
+            .with_timeout(std::time::Duration::from_secs(10)),
+    );
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    info!("Paper execution uses the same trading engine and execution policy as backtest");
 
-        // Collect orders for live exchange submission (used by both exit and entry orders)
-        let mut live_orders: Vec<crypto_strategies::oms::Order> = Vec::new();
-        let mut live_cancellations: Vec<(String, crypto_strategies::oms::Order)> = Vec::new();
-
-        // Step 1: Check fills (microsecond precision)
-        let fill_check_start = Instant::now();
-        let fills_before = self.metrics.total_fills;
-        let mut orders: Vec<_> = orderbook.get_all_orders().into_iter().cloned().collect();
-        let initial_order_count = orders.len();
-        let mut completed_order_ids = Vec::new();
-
-        for order in &mut orders {
-            if !self.paper_mode {
+    loop {
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => {
+                result.context("Failed to receive shutdown signal")?;
+                break;
+            }
+            _ = ticker.tick() => {}
+        }
+        let data = match fetch_frame(&client, &config, &timeframes, None).await {
+            Ok(data) => data,
+            Err(error) => {
+                warn!("Skipping entire frame; market data unavailable: {error:#}");
                 continue;
             }
-
-            if !order.is_active() {
-                continue;
-            }
-
-            // Live trading passes None for bar_idx - no look-ahead bias concern in real-time
-            if let Some(fill_price) = self
-                .execution_engine
-                .check_fill(order, current_candle, None)
-            {
-                let fill_latency = fill_check_start.elapsed().as_micros();
-                let is_maker = fill_price.is_maker;
-                let price = fill_price.price;
-                let fill = self.execution_engine.execute_fill(
-                    order,
-                    price,
-                    is_maker,
-                    current_candle.datetime,
-                );
-
-                match order.side {
-                    Side::Buy => {
-                        self.paper_cash -= (fill.price * fill.quantity + fill.commission).to_f64()
-                    }
-                    Side::Sell => {
-                        self.paper_cash += (fill.price * fill.quantity - fill.commission).to_f64()
-                    }
-                }
-
-                let previous_side = self
-                    .position_manager
-                    .get_position(&order.symbol)
-                    .map(|position| position.side);
-                let realized_trade =
-                    self.position_manager
-                        .add_fill(fill.clone(), order.symbol.clone(), order.side);
-                self.metrics.record_fill();
-
-                let current_position = self.position_manager.get_position(&order.symbol);
-                let position_cycle_closed = previous_side.is_some()
-                    && current_position
-                        .map(|position| Some(position.side) != previous_side)
-                        .unwrap_or(true);
-
-                if let Some(trade) = realized_trade {
-                    if position_cycle_closed {
-                        self.strategy.on_trade_closed(&trade);
-                    }
-                    if trade.net_pnl.to_f64() > PNL_EPSILON {
-                        self.risk_manager.record_win();
-                    } else if trade.net_pnl.to_f64() < -PNL_EPSILON {
-                        self.risk_manager.record_loss();
-                    }
-                    if current_position.is_none() {
-                        self.position_manager.close_position(&order.symbol);
-                        self.entry_levels.remove(&order.symbol);
-                        self.trailing_stops.remove(&order.symbol);
-                    }
-                }
-
-                if let Some(pos) = self.position_manager.get_position(&order.symbol) {
-                    self.strategy.on_order_filled(&fill, pos);
-                }
-
-                orderbook.mark_filled(order.id);
-                completed_order_ids.push(order.id);
-
-                info!(
-                    "│  💰 FILL #{} [{}μs latency]",
-                    self.metrics.total_fills, fill_latency
-                );
-                info!("│    └─ Symbol:    {}", order.symbol);
-                info!(
-                    "│    └─ Side:      {}",
-                    if order.side == Side::Buy {
-                        "BUY "
-                    } else {
-                        "SELL"
-                    }
-                );
-                info!("│    └─ Quantity:  {:.6}", fill.quantity);
-                info!("│    └─ Price:     {:.2}", fill.price);
-                info!(
-                    "│    └─ Type:      {}",
-                    if is_maker { "MAKER" } else { "TAKER" }
-                );
-                info!("│    └─ Commission: {:.4}", fill.commission);
-                info!(
-                    "│    └─ Timestamp:  {}",
-                    fill.timestamp.format("%H:%M:%S%.3f")
-                );
-            }
-        }
-
-        for order_id in completed_order_ids {
-            orderbook.cancel_order(order_id);
-        }
-
-        let fills_detected = self.metrics.total_fills - fills_before;
-        if fills_detected > 0 {
-            debug!(
-                "│  ✓ Fill detection: {} orders checked, {} filled ({} μs)",
-                initial_order_count,
-                fills_detected,
-                fill_check_start.elapsed().as_micros()
-            );
-        }
-
-        // Step 2: Check stop loss / take profit / trailing stops
-        // This mirrors the backtest.rs logic for production parity
-        if let Some(pos) = self.position_manager.get_position(symbol).cloned() {
-            let price = current_candle.close;
-
-            // Get or calculate stop/target levels (cached at entry time)
-            let (stop_price, target_price) =
-                self.entry_levels.entry(symbol.clone()).or_insert_with(|| {
-                    let entry = pos.average_entry_price.to_f64();
-                    let stop = self.strategy.calculate_stop_loss(candles, entry, pos.side);
-                    let target = self
-                        .strategy
-                        .calculate_take_profit(candles, entry, pos.side);
-                    info!(
-                        "│  📍 Entry levels cached for {}: stop={:.2}, target={:.2}",
-                        symbol, stop, target
-                    );
-                    (stop, target)
-                });
-            let stop_price = *stop_price;
-            let target_price = *target_price;
-
-            // Update trailing stop if strategy provides one
-            if let Some(new_trailing) = self.strategy.update_trailing_stop(&pos, price, candles) {
-                let current_stored = self.trailing_stops.get(symbol).copied();
-                let best_stop = tighten_trailing_stop(pos.side, current_stored, new_trailing);
-                self.trailing_stops.insert(symbol.clone(), best_stop);
-            }
-
-            // Use trailing stop if set, otherwise initial stop
-            let active_stop = self
-                .trailing_stops
-                .get(symbol)
-                .copied()
-                .unwrap_or(stop_price);
-
-            if let Some(exit_trigger) =
-                evaluate_exit(pos.side, current_candle, active_stop, target_price)
-            {
-                let exit_side = match pos.side {
-                    Side::Buy => Side::Sell,
-                    Side::Sell => Side::Buy,
-                };
-                let has_pending_exit = orderbook.get_all_orders().iter().any(|order| {
-                    order.is_active()
-                        && order.side == exit_side
-                        && matches!(order.order_type, crypto_strategies::oms::OrderType::Market)
-                });
-                if has_pending_exit {
-                    debug!("│  Exit already pending for {}, not resubmitting", symbol);
-                } else {
-                    let reason = match exit_trigger.reason {
-                        ExitReason::Stop => "STOP",
-                        ExitReason::Target => "TARGET",
-                    };
-                    let trigger_price = exit_trigger.trigger_price;
-
-                    info!(
-                        "│  🎯 {} HIT for {} {:?} @ {:.2} (entry: {:.2})",
-                        reason, symbol, pos.side, trigger_price, pos.average_entry_price
-                    );
-
-                    // Create exit order - opposite side to close position
-                    let exit_order = match pos.side {
-                        Side::Buy => crypto_strategies::oms::OrderRequest::market_sell(
-                            symbol.clone(),
-                            pos.quantity.to_f64(),
-                        ),
-                        Side::Sell => crypto_strategies::oms::OrderRequest::market_buy(
-                            symbol.clone(),
-                            pos.quantity.to_f64(),
-                        ),
-                    }
-                    .with_client_id(format!("risk_exit_{}", symbol));
-
-                    let order = exit_order.to_order();
-
-                    orderbook.add_order(order.clone());
-
-                    info!(
-                        "│  📋 EXIT ORDER placed: {} {} @ market",
-                        if exit_side == Side::Buy {
-                            "BUY"
-                        } else {
-                            "SELL"
-                        },
-                        symbol
-                    );
-
-                    // Collect for live exchange submission (processed after orderbook borrow ends)
-                    if !self.paper_mode {
-                        live_orders.push(order);
-                    }
-                }
-            }
-        }
-
-        // Step 3: Generate orders (strategy logic)
-        let strategy_start = Instant::now();
-        let mtf_ref = MultiTimeframeCandles::from_data(mtf_data);
-        // Collect orders into a Vec<Order> for the slice reference
-        let open_orders_vec: Vec<_> = orderbook.get_all_orders().into_iter().cloned().collect();
-        let ctx = StrategyContext {
-            symbol,
-            candles,
-            mtf_candles: Some(&mtf_ref),
-            current_position: self.position_manager.get_position(symbol),
-            open_orders: &open_orders_vec,
-            cash_available,
-            equity,
-            peak_equity: self.risk_manager.peak_capital(),
         };
-
-        for order_id in self.strategy.orders_to_cancel(&ctx) {
-            if let Some(order) = orderbook.cancel_order(order_id) {
-                if self.paper_mode {
-                    self.strategy.on_order_cancelled(&order);
-                } else if let Some(exchange_id) =
-                    self.pending_exchange_orders
-                        .iter()
-                        .find_map(|(exchange_id, pending)| {
-                            (pending.internal_order_id == order_id).then(|| exchange_id.clone())
-                        })
-                {
-                    live_cancellations.push((exchange_id, order));
-                } else {
-                    warn!(
-                        "│  ⚠️  No exchange order mapping for local cancellation {}",
-                        order_id
-                    );
-                    orderbook.add_order(order);
-                }
-            }
-        }
-
-        self.strategy.on_bar(&ctx);
-        let requests = self.strategy.generate_orders(&ctx);
-        let strategy_latency = strategy_start.elapsed().as_micros();
-
-        if !requests.is_empty() {
-            debug!(
-                "│  ⚡ Strategy generated {} order(s) ({} μs)",
-                requests.len(),
-                strategy_latency
-            );
-        }
-
-        // Step 4: Validate and place orders using shared size_order function
-        // This ensures live trading uses IDENTICAL position sizing logic as backtest
-        // Strategies return OrderRequest with quantity=1.0 as a "unit signal"
-        // The shared size_order function calculates actual position size based on:
-        //   - Available capital
-        //   - Risk per trade (stop distance)
-        //   - Portfolio heat (existing positions)
-        //   - Regime score (market conditions)
-        //   - Current drawdown
-        let mut placed_count = 0;
-
-        for req in requests {
-            if let Some(position) = self.position_manager.get_position(&req.symbol) {
-                let duplicate_exit = position.side != req.side
-                    && matches!(req.order_type, crypto_strategies::oms::OrderType::Market)
-                    && orderbook.get_all_orders().iter().any(|order| {
-                        order.is_active()
-                            && order.side == req.side
-                            && matches!(order.order_type, crypto_strategies::oms::OrderType::Market)
-                    });
-                if duplicate_exit {
-                    debug!(
-                        "│  Exit already pending for {}, skipping duplicate strategy exit",
-                        req.symbol
-                    );
-                    continue;
-                }
-            }
-
-            // Collect position data fresh for each order to avoid borrow conflicts
-            let position_count = self.position_manager.open_position_count();
-            let all_positions: Vec<&crypto_strategies::oms::types::Position> = self
-                .position_manager
-                .get_all_positions()
-                .map(|(_, p)| p)
-                .collect();
-
-            // Use shared size_order function (same as backtest)
-            let order = match size_order(
-                &req,
-                candles,
-                self.position_manager.get_position(&req.symbol),
-                position_count,
-                &all_positions,
-                &self.risk_manager,
-                self.strategy.as_ref(),
-            ) {
-                SizedOrder::Entry {
-                    order,
-                    stop_price,
-                    target_price,
-                } => {
-                    // Cache entry levels at SIGNAL time for portfolio heat calculation
-                    self.entry_levels
-                        .insert(req.symbol.clone(), (stop_price, target_price));
-                    debug!(
-                        "│  📍 Entry levels cached for {}: stop={:.2}, target={:.2}",
-                        req.symbol, stop_price, target_price
-                    );
-                    info!(
-                        "│  📊 Position size: {:.6} @ {:.2}",
-                        order.quantity.to_f64(),
-                        candles.last().map(|c| c.close).unwrap_or(0.0)
-                    );
-                    order
-                }
-                SizedOrder::Exit(order) => order,
-                SizedOrder::Rejected(reason) => {
-                    debug!("│  ⚠️  Order for {} rejected: {:?}", req.symbol, reason);
-                    continue;
-                }
-            };
-
-            if self.paper_mode {
-                let order_start = Instant::now();
-                orderbook.add_order(order.clone());
-                let order_latency_us = order_start.elapsed().as_micros() as u64;
-                self.metrics.record_order(order_latency_us);
-                placed_count += 1;
-
-                info!(
-                    "│  📋 ORDER PLACED #{} [{}μs latency]",
-                    self.metrics.total_orders_placed, order_latency_us
-                );
-                info!("│    └─ Symbol:   {}", order.symbol);
-                info!(
-                    "│    └─ Side:     {}",
-                    if order.side == Side::Buy {
-                        "BUY "
-                    } else {
-                        "SELL"
-                    }
-                );
-                info!("│    └─ Type:     {:?}", order.order_type);
-                info!("│    └─ Quantity: {:.6}", order.quantity);
-                if let Some(price) = order.limit_price {
-                    info!("│    └─ Price:    {:.2}", price);
-                }
-                info!("│    └─ Order ID: {}", order.id);
-            } else {
-                orderbook.add_order(order.clone());
-                // Collect for deferred exchange submission
-                live_orders.push(order);
-            }
-        }
-
-        if placed_count > 0 {
-            debug!("│  ✓ Placed {} paper order(s)", placed_count);
-        }
-
-        // Cancel live orders on the exchange after the local orderbook borrow ends.
-        for (exchange_id, order) in live_cancellations {
-            match self.exchange.cancel_order(&exchange_id).await {
-                Ok(()) => {
-                    self.pending_exchange_orders.remove(&exchange_id);
-                    self.strategy.on_order_cancelled(&order);
-                }
-                Err(error) => {
-                    error!(
-                        "│  ❌ Failed to cancel exchange order {}: {}",
-                        exchange_id, error
-                    );
-                    if let Some(orderbook) = self.orderbooks.get_mut(&order.symbol) {
-                        orderbook.add_order(order);
-                    }
-                }
-            }
-        }
-
-        // Send live orders to exchange (after orderbook borrow ends)
-        let mut live_placed = 0;
-        for order in live_orders {
-            let order_start = Instant::now();
-            match self.send_order_to_exchange(&order).await {
-                Ok(exchange_id) => {
-                    let order_latency_us = order_start.elapsed().as_micros() as u64;
-                    self.metrics.record_order(order_latency_us);
-                    live_placed += 1;
-                    info!(
-                        "│  📋 LIVE ORDER #{} [{}μs latency] exchange_id={}",
-                        self.metrics.total_orders_placed, order_latency_us, exchange_id
-                    );
-                }
-                Err(e) => {
-                    error!("│  ❌ Failed to place order on exchange: {}", e);
-                    if let Some(orderbook) = self.orderbooks.get_mut(&order.symbol) {
-                        orderbook.cancel_order(order.id);
-                    }
-                }
-            }
-        }
-
-        if live_placed > 0 {
-            debug!("│  ✓ Placed {} live order(s) on exchange", live_placed);
-        }
-
-        Ok(())
-    }
-
-    fn calculate_portfolio_value(&self) -> f64 {
-        let mut total = self.paper_cash;
-        for (_sym, pos) in self.position_manager.get_all_positions() {
-            total += match pos.side {
-                Side::Buy => (pos.average_entry_price * pos.quantity + pos.unrealized_pnl).to_f64(),
-                Side::Sell => {
-                    (-pos.average_entry_price * pos.quantity + pos.unrealized_pnl).to_f64()
-                }
-            };
-        }
-        total
-    }
-
-    /// Send order to CoinDCX exchange
-    /// Converts internal Order to CoinDCX format and places it
-    /// Tracks order in pending_exchange_orders for fill detection
-    async fn send_order_to_exchange(
-        &mut self,
-        order: &crypto_strategies::oms::Order,
-    ) -> Result<String> {
-        let market = order.symbol.as_str();
-        let quantity = order.quantity.to_f64();
-        let side = match order.side {
-            Side::Buy => CoinDCXOrderSide::Buy,
-            Side::Sell => CoinDCXOrderSide::Sell,
-        };
-
-        // Create CoinDCX order request
-        let order_req = match order.limit_price {
-            Some(price) => CoinDCXOrderRequest::limit(side, market, quantity, price.to_f64()),
-            None => CoinDCXOrderRequest::market(side, market, quantity),
-        }
-        .with_client_order_id(format!(
-            "strat_{}_{}",
-            Utc::now().timestamp_millis(),
-            order.id
-        ));
-
-        info!(
-            "│  📤 Sending to exchange: {} {} {:.8} {}",
-            if order.side == Side::Buy {
-                "BUY"
-            } else {
-                "SELL"
-            },
-            market,
-            quantity,
-            order
-                .limit_price
-                .map_or("@ MARKET".to_string(), |p| format!("@ {:.2}", p))
-        );
-
-        // Place order on exchange
-        let response = self
-            .exchange
-            .place_order(&order_req)
-            .await
-            .context("Failed to place order on CoinDCX")?;
-
-        // Extract exchange order ID
-        let exchange_order_id = response
-            .orders
-            .first()
-            .map(|o| o.id.clone())
-            .ok_or_else(|| anyhow::anyhow!("No order ID in exchange response"))?;
-
-        info!("│  ✅ Exchange accepted: order_id={}", exchange_order_id);
-
-        // Track pending order for fill detection
-        self.pending_exchange_orders.insert(
-            exchange_order_id.clone(),
-            PendingExchangeOrder {
-                internal_order_id: order.id,
-                symbol: order.symbol.clone(),
-                side: order.side,
-                quantity,
-                limit_price: order.limit_price.map(|p| p.to_f64()),
-                submitted_at: Instant::now(),
-                filled_quantity: 0.0,
-            },
-        );
-
-        Ok(exchange_order_id)
-    }
-
-    /// Sync balances from exchange
-    /// Updates paper_cash with actual INR balance in live mode
-    async fn sync_balances(&mut self) -> Result<()> {
-        let start = Instant::now();
-        debug!("💰 Syncing balances from exchange...");
-
-        let balances = self
-            .exchange
-            .get_balances()
-            .await
-            .context("Failed to fetch balances from exchange")?;
-
-        self.exchange_balances.clear();
-        let mut inr_balance = 0.0;
-
-        for balance in &balances {
-            if balance.balance > 0.0 || balance.locked_balance > 0.0 {
-                self.exchange_balances
-                    .insert(balance.currency.clone(), balance.balance);
-
-                if balance.currency == "INR" {
-                    inr_balance = balance.balance;
-                }
-
-                debug!(
-                    "│  {}: available={:.8}, locked={:.8}",
-                    balance.currency, balance.balance, balance.locked_balance
-                );
-            }
-        }
-
-        // In live mode, use actual INR balance with sanity check
-        if !self.paper_mode {
-            // Sanity check: warn on large discrepancy, reject zero if we had balance
-            if self.paper_cash > 0.0 {
-                let diff_pct = ((inr_balance - self.paper_cash) / self.paper_cash).abs();
-                if diff_pct > 0.5 {
-                    warn!(
-                        "│  ⚠️  Large balance change: {:.2} -> {:.2} ({:+.1}%)",
-                        self.paper_cash,
-                        inr_balance,
-                        (inr_balance - self.paper_cash) / self.paper_cash * 100.0
-                    );
-                }
-                // Reject zero balance if we had money (likely API error)
-                if inr_balance == 0.0 {
-                    warn!(
-                        "│  ⚠️  Exchange returned 0 balance, keeping local: {:.2}",
-                        self.paper_cash
-                    );
-                } else {
-                    self.paper_cash = inr_balance;
-                }
-            } else {
-                // No previous balance, accept whatever exchange says
-                self.paper_cash = inr_balance;
-            }
-        }
-
-        self.last_balance_sync = Some(Instant::now());
-        debug!(
-            "│  ✓ Balance sync complete ({} μs), INR={:.2}",
-            start.elapsed().as_micros(),
-            inr_balance
-        );
-
-        Ok(())
-    }
-
-    /// Poll pending orders on exchange and detect fills
-    /// Returns number of fills detected
-    async fn poll_pending_orders(&mut self) -> Result<usize> {
-        if self.pending_exchange_orders.is_empty() {
-            return Ok(0);
-        }
-
-        let start = Instant::now();
-        let mut fills_detected = 0;
-        let mut completed_orders: Vec<(String, Symbol, u64)> = Vec::new();
-        let mut partial_fill_updates: Vec<(String, f64)> = Vec::new(); // (order_id, new_filled_qty)
-
-        // Check each pending order
-        for (exchange_id, pending) in &self.pending_exchange_orders {
-            match self.exchange.get_order_status(exchange_id).await {
-                Ok(status) => {
-                    let status_str = status.status.to_lowercase();
-                    let total_filled = status.total_quantity.unwrap_or(0.0)
-                        - status.remaining_quantity.unwrap_or(0.0);
-                    let fill_price = status.avg_price.unwrap_or(0.0);
-
-                    // Calculate newly filled quantity since last check
-                    let newly_filled = total_filled - pending.filled_quantity;
-
-                    if newly_filled > POSITION_QTY_TOLERANCE {
-                        // We have new fills to process
-                        info!(
-                            "│  💰 FILL detected: {} {} {:.8} @ {:.2}{}",
-                            if pending.side == Side::Buy {
-                                "BUY"
-                            } else {
-                                "SELL"
-                            },
-                            pending.symbol,
-                            newly_filled,
-                            fill_price,
-                            if status_str == "partially_filled" {
-                                " (partial)"
-                            } else {
-                                ""
-                            }
-                        );
-
-                        // Create fill for the NEW quantity only
-                        let fill_timestamp = Utc::now();
-                        let commission = self.execution_engine.calculate_commission(
-                            pending.internal_order_id,
-                            &pending.symbol,
-                            pending.side,
-                            fill_price * newly_filled,
-                            false,
-                            fill_timestamp,
-                        );
-                        let fill = Fill::from_f64(
-                            pending.internal_order_id,
-                            fill_price,
-                            newly_filled,
-                            fill_timestamp,
-                            commission.to_f64(),
-                            false, // taker
-                        );
-
-                        match pending.side {
-                            Side::Buy => {
-                                self.paper_cash -=
-                                    (fill.price * fill.quantity + fill.commission).to_f64()
-                            }
-                            Side::Sell => {
-                                self.paper_cash +=
-                                    (fill.price * fill.quantity - fill.commission).to_f64()
-                            }
-                        }
-
-                        let previous_side = self
-                            .position_manager
-                            .get_position(&pending.symbol)
-                            .map(|position| position.side);
-                        let realized_trade = self.position_manager.add_fill(
-                            fill.clone(),
-                            pending.symbol.clone(),
-                            pending.side,
-                        );
-                        self.metrics.record_fill();
-                        fills_detected += 1;
-
-                        let current_position = self.position_manager.get_position(&pending.symbol);
-                        let position_cycle_closed = previous_side.is_some()
-                            && current_position
-                                .map(|position| Some(position.side) != previous_side)
-                                .unwrap_or(true);
-
-                        if let Some(trade) = realized_trade {
-                            if position_cycle_closed {
-                                self.strategy.on_trade_closed(&trade);
-                            }
-                            if trade.net_pnl.to_f64() > PNL_EPSILON {
-                                self.risk_manager.record_win();
-                            } else if trade.net_pnl.to_f64() < -PNL_EPSILON {
-                                self.risk_manager.record_loss();
-                            }
-                            if current_position.is_none() {
-                                self.position_manager.close_position(&pending.symbol);
-                                self.entry_levels.remove(&pending.symbol);
-                                self.trailing_stops.remove(&pending.symbol);
-                            }
-                        }
-
-                        if let Some(pos) = self.position_manager.get_position(&pending.symbol) {
-                            self.strategy.on_order_filled(&fill, pos);
-                        }
-
-                        // Track the update for later
-                        partial_fill_updates.push((exchange_id.clone(), total_filled));
-                    }
-
-                    if status_str == "filled" {
-                        // Order complete - remove from tracking
-                        completed_orders.push((
-                            exchange_id.clone(),
-                            pending.symbol.clone(),
-                            pending.internal_order_id,
-                        ));
-                    } else if status_str == "open" || status_str == "init" {
-                        // Still pending - check for timeout
-                        let age_secs = pending.submitted_at.elapsed().as_secs();
-                        if age_secs > ORDER_TIMEOUT_WARNING_SECS {
-                            warn!(
-                                "│  ⚠️  Order {} pending for {}s: {} {} {:.8} @ {}",
-                                exchange_id,
-                                age_secs,
-                                if pending.side == Side::Buy {
-                                    "BUY"
-                                } else {
-                                    "SELL"
-                                },
-                                pending.symbol,
-                                pending.quantity,
-                                pending
-                                    .limit_price
-                                    .map_or("MARKET".to_string(), |p| format!("{:.2}", p))
-                            );
-                        }
-                    } else if status_str == "cancelled" || status_str == "rejected" {
-                        // Order cancelled/rejected
-                        warn!("│  ⚠️  Order {} was {}", exchange_id, status_str);
-                        completed_orders.push((
-                            exchange_id.clone(),
-                            pending.symbol.clone(),
-                            pending.internal_order_id,
-                        ));
-                    }
-                    // "open" or "init" - still pending, do nothing
-                }
-                Err(e) => {
-                    warn!("│  ⚠️  Failed to get status for {}: {}", exchange_id, e);
-                }
-            }
-        }
-
-        // Remove completed orders
-        for (exchange_id, symbol, internal_order_id) in completed_orders {
-            self.pending_exchange_orders.remove(&exchange_id);
-            if let Some(orderbook) = self.orderbooks.get_mut(&symbol) {
-                orderbook.cancel_order(internal_order_id);
-            }
-        }
-
-        // Update filled quantities for partial fills
-        for (order_id, new_filled_qty) in partial_fill_updates {
-            if let Some(pending) = self.pending_exchange_orders.get_mut(&order_id) {
-                pending.filled_quantity = new_filled_qty;
-            }
-        }
-
-        if fills_detected > 0 {
-            debug!(
-                "│  ✓ Order polling: {} fills detected ({} μs)",
-                fills_detected,
-                start.elapsed().as_micros()
-            );
-            // Refresh balances after fills
-            let _ = self.sync_balances().await;
-        }
-
-        Ok(fills_detected)
-    }
-
-    /// Reconcile local positions with exchange on startup
-    /// Warns about discrepancies but doesn't auto-fix (safety first)
-    async fn reconcile_positions(&mut self) -> Result<()> {
-        if self.paper_mode {
-            return Ok(()); // Skip in paper mode
-        }
-
-        info!("🔍 Reconciling positions with exchange...");
-
-        // Sync balances first
-        self.sync_balances().await?;
-
-        // Check each symbol we trade
-        let symbols_with_base: Vec<(Symbol, String)> = self
-            .config
-            .trading
-            .symbols
-            .iter()
-            .map(|sym| {
-                let symbol = Symbol::new(sym);
-                let base_currency = if sym.ends_with("INR") {
-                    sym[..sym.len() - 3].to_string()
-                } else if sym.ends_with("USDT") {
-                    sym[..sym.len() - 4].to_string()
-                } else {
-                    sym.clone()
-                };
-                (symbol, base_currency)
-            })
+        let latest: Vec<_> = data
+            .values()
+            .filter_map(|mtf| mtf.primary().last())
+            .map(|c| c.datetime)
             .collect();
-
-        for (symbol, base_currency) in &symbols_with_base {
-            // Check exchange balance
-            let exchange_qty = self
-                .exchange_balances
-                .get(base_currency)
-                .copied()
-                .unwrap_or(0.0);
-
-            // Check local position
-            let local_qty = self
-                .position_manager
-                .get_position(symbol)
-                .map(|p| p.quantity.to_f64())
-                .unwrap_or(0.0);
-
-            // Compare with tolerance for float comparison
-            let diff = (exchange_qty - local_qty).abs();
-            if diff > POSITION_QTY_TOLERANCE {
-                warn!(
-                    "│  ⚠️  Position mismatch for {}: exchange={:.8}, local={:.8}",
-                    symbol, exchange_qty, local_qty
-                );
-
-                if exchange_qty > 0.0 && local_qty == 0.0 {
-                    warn!("│     → Exchange has position, local doesn't - may need manual sync");
-                } else if local_qty > 0.0 && exchange_qty == 0.0 {
-                    warn!("│     → Local has position, exchange doesn't - clearing local state");
-                    self.position_manager.close_position(symbol);
-                    self.entry_levels.remove(symbol);
-                    self.trailing_stops.remove(symbol);
-                }
-            } else if exchange_qty > 0.0 {
-                info!("│  ✓ {} position matches: {:.8}", symbol, exchange_qty);
-            }
+        let timestamp = *latest.first().context("No primary candles")?;
+        if latest.iter().any(|date| *date != timestamp) {
+            warn!("Skipping frame: symbols do not have the same latest closed candle");
+            continue;
         }
-
-        // Check for active orders on exchange
-        for sym in &self.config.trading.symbols {
-            match self.exchange.get_active_orders(sym).await {
-                Ok(orders) if !orders.is_empty() => {
-                    info!(
-                        "│  📋 {} active orders on exchange for {}",
-                        orders.len(),
-                        sym
-                    );
-                    for order in orders {
-                        info!(
-                            "│     └─ {} {} qty={:?} @ {:?}",
-                            order.side.as_deref().unwrap_or("?"),
-                            order.id,
-                            order.total_quantity,
-                            order.price_per_unit
-                        );
-                    }
-                }
-                Ok(_) => {} // No active orders
-                Err(e) => {
-                    warn!("│  ⚠️  Failed to check active orders for {}: {}", sym, e);
-                }
-            }
-        }
-
-        info!("│  ✓ Position reconciliation complete");
-        Ok(())
-    }
-
-    fn log_portfolio_status(&self) {
-        let portfolio_value = self.calculate_portfolio_value();
-        let drawdown = self.risk_manager.current_drawdown();
-        let consecutive_losses = self.risk_manager.consecutive_losses;
-
-        info!("════════════════════════════════════════════════════════");
-        info!("📊 PORTFOLIO STATUS");
-        info!("════════════════════════════════════════════════════════");
-        info!("Cash:                  {:.2}", self.paper_cash);
-        info!("Portfolio Value:       {:.2}", portfolio_value);
-        info!("Drawdown:              {:.2}%", drawdown * 100.0);
-        info!("Consecutive Losses:    {}", consecutive_losses);
-        info!(
-            "Open Positions:        {}",
-            self.position_manager.open_position_count()
-        );
-        info!(
-            "Trading Status:        {}",
-            if self.risk_manager.should_halt_trading() {
-                "HALTED ⛔"
-            } else {
-                "ACTIVE ✓"
-            }
-        );
-
-        for (symbol, pos) in self.position_manager.get_all_positions() {
-            info!(
-                "  ├─ {} {} {:.6} @ {:.2} (U-PnL: {:.2})",
-                symbol,
-                if pos.side == Side::Buy {
-                    "LONG "
-                } else {
-                    "SHORT"
-                },
-                pos.quantity,
-                pos.average_entry_price,
-                pos.unrealized_pnl
-            );
-        }
-        info!("════════════════════════════════════════════════════════");
-    }
-
-    fn save_checkpoint(&mut self) -> Result<()> {
-        use std::collections::HashMap as MetadataMap;
-
-        let value = self.calculate_portfolio_value();
-        let positions_value = value - self.paper_cash;
-
-        let checkpoint = Checkpoint {
-            timestamp: Utc::now().to_rfc3339(),
-            cycle_count: self.cycle_count as i32,
-            portfolio_value: value,
-            cash: self.paper_cash,
-            positions_value,
-            open_positions: self.position_manager.open_position_count() as i32,
-            last_processed_symbols: self.config.trading.symbols.clone(),
-            drawdown_pct: self.risk_manager.current_drawdown(),
-            consecutive_losses: self.risk_manager.consecutive_losses as i32,
-            paper_mode: self.paper_mode,
-            config_hash: self.config_hash(),
-            metadata: MetadataMap::new(),
-        };
-
-        self.state_manager.save_checkpoint(&checkpoint)?;
-
-        for (symbol, pos) in self.position_manager.get_all_positions() {
-            // Get cached stop/target levels if available
-            let (stop_loss, take_profit) =
-                self.entry_levels.get(symbol).copied().unwrap_or((0.0, 0.0));
-
-            // Use trailing stop if set, otherwise initial stop
-            let active_stop = self
-                .trailing_stops
-                .get(symbol)
-                .copied()
-                .unwrap_or(stop_loss);
-
-            let mut metadata = MetadataMap::new();
-            // Persist trailing stop in metadata for recovery
-            if let Some(&trailing) = self.trailing_stops.get(symbol) {
-                metadata.insert("trailing_stop".to_string(), serde_json::json!(trailing));
-            }
-
-            let sp = StatePosition {
-                symbol: symbol.to_string(),
-                side: if pos.side == Side::Buy { "buy" } else { "sell" }.to_string(),
-                entry_price: pos.average_entry_price.to_f64(),
-                quantity: pos.quantity.to_f64(),
-                stop_loss: active_stop,
-                take_profit,
-                status: "open".to_string(),
-                order_id: None,
-                pnl: pos.unrealized_pnl.to_f64(),
-                exit_price: 0.0,
-                entry_time: Some(pos.entry_time().to_rfc3339()),
-                exit_time: None,
-                metadata,
-            };
-            self.state_manager.save_position(&sp)?;
-        }
-
-        // Save pending orders from all orderbooks
-        self.state_manager.clear_pending_orders()?;
-        for (symbol, orderbook) in &self.orderbooks {
-            for order in orderbook.get_all_orders() {
-                if order.state == crypto_strategies::oms::OrderState::Open
-                    || order.state == crypto_strategies::oms::OrderState::PartiallyFilled
-                {
-                    let po = PendingOrder {
-                        order_id: order.id.to_string(),
-                        symbol: symbol.to_string(),
-                        side: if order.side == Side::Buy {
-                            "buy"
-                        } else {
-                            "sell"
-                        }
-                        .to_string(),
-                        order_type: match order.order_type {
-                            crypto_strategies::oms::OrderType::Limit => "limit",
-                            crypto_strategies::oms::OrderType::Stop => "stop",
-                            crypto_strategies::oms::OrderType::StopLimit => "stop_limit",
-                            crypto_strategies::oms::OrderType::Market => "market",
-                        }
-                        .to_string(),
-                        quantity: order.remaining_quantity.to_f64(),
-                        limit_price: order.limit_price.map(|p| p.to_f64()),
-                        stop_price: order.stop_price.map(|p| p.to_f64()),
-                        client_id: order.client_id.clone(),
-                    };
-                    self.state_manager.save_pending_order(&po)?;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn config_hash(&self) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        serde_json::to_string(&self.config)
-            .unwrap_or_default()
-            .hash(&mut hasher);
-        format!("{:x}", hasher.finish())
-    }
-
-    fn parse_tf_seconds(&self, tf: &str) -> u64 {
-        match tf {
-            "1m" => 60,
-            "5m" => 300,
-            "15m" => 900,
-            "1h" => 3600,
-            "4h" => 14400,
-            "1d" => 86400,
-            _ => 3600,
+        let dates = replay_dates(&data, engine.last_bar(), timestamp)?;
+        for date in dates {
+            engine
+                .on_bar(&data, date)
+                .context("Trading engine failed; stopping paper trading")?;
+            persist(&engine, &db, &identity)
+                .await
+                .context("State persistence failed; trading stopped")?;
+            info!(%date, equity = engine.equity(), cash = engine.cash(),
+                positions = engine.positions().open_position_count(),
+                drawdown = engine.risk().current_drawdown(), "Paper frame committed");
         }
     }
+    persist(&engine, &db, &identity).await?;
+    info!("Paper engine stopped; pending orders and positions remain in the atomic snapshot");
+    Ok(())
 }
 
-pub async fn run(config: Config, state_db_path: String, paper_mode: bool) -> Result<()> {
-    let mut trader = LiveTrader::new(config, &state_db_path, paper_mode).await?;
-    trader.recover_state().await?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
 
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let shutdown_clone = shutdown.clone();
+    #[test]
+    fn replay_requires_every_expected_bar_for_every_symbol() {
+        let start = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        for (a, b, valid) in [
+            (vec![0, 1, 2, 3], vec![0, 1, 2, 3], true),
+            (vec![0, 1, 3], vec![0, 1, 3], false),
+            (vec![0, 1, 2, 3], vec![0, 1, 3], false),
+            (vec![0, 1, 3], vec![0, 1, 2, 3], false),
+            (vec![2, 3], vec![0, 1, 2, 3], false),
+        ] {
+            let mut frame = MultiSymbolMultiTimeframeData::new();
+            for (symbol, hours) in [("A", a), ("B", b)] {
+                let mut history = MultiTimeframeData::new("1h");
+                history.add_timeframe(
+                    "1h",
+                    hours
+                        .into_iter()
+                        .map(|h| {
+                            Candle::new(start + Duration::hours(h), 100.0, 100.0, 100.0, 100.0, 1.0)
+                                .unwrap()
+                        })
+                        .collect(),
+                );
+                frame.insert(Symbol::new(symbol), history);
+            }
+            let dates = replay_dates(
+                &frame,
+                Some(start + Duration::hours(1)),
+                start + Duration::hours(3),
+            );
+            if valid {
+                assert_eq!(
+                    dates.unwrap(),
+                    vec![start + Duration::hours(2), start + Duration::hours(3)]
+                );
+            } else {
+                assert!(dates.is_err());
+            }
+        }
+    }
 
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        info!("🛑 Ctrl+C detected - initiating graceful shutdown...");
-        shutdown_clone.store(true, Ordering::Relaxed);
-    });
+    #[test]
+    fn monthly_replay_uses_calendar_boundaries() {
+        let dates: Vec<_> = (1..=3)
+            .map(|month| Utc.with_ymd_and_hms(2026, month, 1, 0, 0, 0).unwrap())
+            .collect();
+        let mut history = MultiTimeframeData::new("1M");
+        history.add_timeframe(
+            "1M",
+            dates
+                .iter()
+                .map(|date| Candle::new(*date, 100.0, 100.0, 100.0, 100.0, 1.0).unwrap())
+                .collect(),
+        );
+        let frame = MultiSymbolMultiTimeframeData::from([(Symbol::new("TEST"), history)]);
+        assert_eq!(
+            replay_dates(&frame, Some(dates[0]), dates[2]).unwrap(),
+            dates[1..]
+        );
+    }
 
-    trader.run(shutdown).await
+    #[tokio::test]
+    async fn missing_live_credentials_are_rejected_before_any_side_effect() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("configs")
+            .join("sample_config.json");
+        let config = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let state = directory.path().join("must-not-exist.db");
+        let error = run(
+            config,
+            state.to_str().unwrap().to_owned(),
+            false,
+            false,
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("Missing COINDCX_API_KEY"));
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn newest_first_history_is_sorted_and_unfinished_bar_is_excluded() {
+        let now = Utc.with_ymd_and_hms(2026, 1, 2, 12, 30, 0).unwrap();
+        let candles = [12, 11, 10]
+            .into_iter()
+            .map(|hour| {
+                Candle::new(
+                    now.date_naive().and_hms_opt(hour, 0, 0).unwrap().and_utc(),
+                    100.0,
+                    100.0,
+                    100.0,
+                    100.0,
+                    1.0,
+                )
+                .unwrap()
+            })
+            .collect();
+        let history = closed_history(candles, "1h", now).unwrap();
+        assert_eq!(history.len(), 2);
+        assert!(history[0].datetime < history[1].datetime);
+        assert_eq!(
+            candle_close_time(history[1].datetime, "1h").unwrap(),
+            now - Duration::minutes(30)
+        );
+    }
+
+    #[test]
+    fn stale_or_empty_history_is_rejected() {
+        let now = Utc::now();
+        let old = Candle::new(now - Duration::days(2), 100.0, 100.0, 100.0, 100.0, 1.0).unwrap();
+        assert!(closed_history(vec![old], "1h", now).is_err());
+        assert!(closed_history(vec![], "1h", now).is_err());
+    }
 }

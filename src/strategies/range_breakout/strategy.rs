@@ -147,6 +147,15 @@ impl RangeBreakoutStrategy {
 }
 
 impl Strategy for RangeBreakoutStrategy {
+    fn snapshot_state(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::to_value(&self.cooldown)?)
+    }
+
+    fn restore_state(&mut self, state: serde_json::Value) -> anyhow::Result<()> {
+        self.cooldown = serde_json::from_value(state)?;
+        Ok(())
+    }
+
     fn name(&self) -> &'static str {
         "range_breakout"
     }

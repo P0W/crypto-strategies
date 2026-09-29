@@ -21,6 +21,17 @@ pub struct BacktestOptions {
     pub use_t1_execution: bool,
 }
 
+fn configure_execution(config: &mut Config, force_t1: bool) {
+    if force_t1 {
+        config.backtest.use_t1_execution = true;
+    }
+    if config.backtest.use_t1_execution {
+        info!("Using T+1 execution model (signal on bar N, execute at bar N+1 open)");
+    } else {
+        info!("Using close-price execution for market signals");
+    }
+}
+
 pub fn run(opts: BacktestOptions) -> Result<()> {
     let BacktestOptions {
         config_path,
@@ -68,13 +79,7 @@ pub fn run(opts: BacktestOptions) -> Result<()> {
         config.trading.max_portfolio_heat = 1.0;
     }
 
-    if use_t1_execution {
-        info!("Using T+1 execution model (signal on day N, execute at day N+1 open)");
-        config.backtest.use_t1_execution = true;
-    } else {
-        info!("Using intra-candle execution model (realistic algo trading)");
-        config.backtest.use_t1_execution = false;
-    }
+    configure_execution(&mut config, use_t1_execution);
 
     // Parse date filters
     let start_date: Option<DateTime<Utc>> = start_override
@@ -178,7 +183,7 @@ pub fn run(opts: BacktestOptions) -> Result<()> {
     // Run backtest
     let mut backtester =
         Backtester::new(config.clone(), strategy).with_evaluation_start(start_date);
-    let result = backtester.run(&mtf_data);
+    let result = backtester.run(&mtf_data)?;
 
     // Print results
     println!("\n{}", "=".repeat(60));
@@ -194,7 +199,11 @@ pub fn run(opts: BacktestOptions) -> Result<()> {
     println!("Total Return:       {:.2}%", result.metrics.total_return);
     println!("Post-Tax Return:    {:.2}%", result.metrics.post_tax_return);
     println!("Sharpe Ratio:       {:.2}", result.metrics.sharpe_ratio);
-    println!("Calmar Ratio:       {:.2}", result.metrics.calmar_ratio);
+    if result.metrics.calmar_ratio == f64::NEG_INFINITY {
+        println!("Calmar Ratio:       N/A (nonpositive terminal equity)");
+    } else {
+        println!("Calmar Ratio:       {:.2}", result.metrics.calmar_ratio);
+    }
     println!("{}", "-".repeat(60));
     println!("DRAWDOWN METRICS");
     println!("{}", "-".repeat(60));
@@ -246,4 +255,25 @@ pub fn run(opts: BacktestOptions) -> Result<()> {
 
     info!("Backtest completed");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_execution_flag_preserves_configuration() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("configs")
+            .join("sample_config.json");
+        let mut config: Config =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        for configured in [false, true] {
+            for force_t1 in [false, true] {
+                config.backtest.use_t1_execution = configured;
+                configure_execution(&mut config, force_t1);
+                assert_eq!(config.backtest.use_t1_execution, configured || force_t1);
+            }
+        }
+    }
 }

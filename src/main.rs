@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Crypto trading strategies - main entry point
 //!
 //! This binary provides four subcommands:
@@ -129,20 +131,28 @@ enum Commands {
     /// Run live trading
     Live {
         /// Path to configuration file
-        #[arg(short, long, default_value = "../configs/regime_grid_config.json")]
+        #[arg(short, long, default_value = "configs/regime_grid_config.json")]
         config: String,
 
         /// Paper trading mode (safe, no real money)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "live")]
         paper: bool,
 
-        /// Live trading mode (CAUTION - REAL MONEY!)
-        #[arg(long)]
+        /// CoinDCX spot execution (requires native stop-limit support on every market)
+        #[arg(long, conflicts_with = "paper")]
         live: bool,
 
-        /// State database path
-        #[arg(long, default_value = "state.db")]
-        state_db: String,
+        /// State database path (defaults to paper-state.db or live-state.db)
+        #[arg(long)]
+        state_db: Option<String>,
+
+        /// Validate the live account and market capabilities without placing/cancelling orders
+        #[arg(long, requires = "live", conflicts_with = "resume")]
+        preflight: bool,
+
+        /// Resume a halted live state after successful reconciliation
+        #[arg(long, requires = "live")]
+        resume: bool,
     },
 
     /// Download historical data from Binance (default) or CoinDCX
@@ -308,11 +318,22 @@ async fn main() -> Result<()> {
             paper,
             live,
             state_db,
+            preflight,
+            resume,
         } => {
             commands::live::run(
                 crypto_strategies::Config::from_file(&config)?,
-                state_db,
+                state_db.unwrap_or_else(|| {
+                    if live {
+                        "live-state.db"
+                    } else {
+                        "paper-state.db"
+                    }
+                    .to_owned()
+                }),
                 paper || !live,
+                preflight,
+                resume,
             )
             .await
         }
@@ -330,5 +351,37 @@ async fn main() -> Result<()> {
             });
             commands::download::run(symbols, timeframes, days, output, data_source).await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_flags_keep_paper_default_and_require_explicit_real_mode() {
+        let cli = Cli::try_parse_from(["crypto-strategies", "live"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Live {
+                live: false,
+                preflight: false,
+                state_db: None,
+                ..
+            }
+        ));
+        for flag in ["--preflight", "--resume"] {
+            assert!(Cli::try_parse_from(["crypto-strategies", "live", flag]).is_err());
+            assert!(Cli::try_parse_from(["crypto-strategies", "live", "--live", flag]).is_ok());
+        }
+        assert!(Cli::try_parse_from(["crypto-strategies", "live", "--live", "--paper"]).is_err());
+        assert!(Cli::try_parse_from([
+            "crypto-strategies",
+            "live",
+            "--live",
+            "--preflight",
+            "--resume"
+        ])
+        .is_err());
     }
 }

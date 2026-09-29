@@ -1,126 +1,204 @@
 # CoinDCX Live Trading Readiness
 
-**Last updated:** 2026-07-19
-**Scope:** `src/commands/live.rs`, OMS, risk management, persistence, and CoinDCX integration
+**Updated:** 2026-09-28
 
-## Current Decision
+## Current decision
 
-**Not approved for unattended real-money deployment.**
+**A broker-neutral real spot execution path and CoinDCX adapter are implemented.**
+Paper remains the default. `live --live` performs capability, ownership and balance
+checks before submitting orders. Unsupported markets fail closed without a bypass.
+Development validation uses an offline broker and loopback HTTP fixtures; no
+private account calls or real orders were made during implementation.
 
-The local execution, accounting, lifecycle, and exchange-order reconciliation paths
-have been independently reviewed. However, operational protections
-listed below remain mandatory before live capital is enabled. Paper mode is the
-supported deployment stage.
+The simulated streaming mode is `live --paper`. It consumes public CoinDCX
+candles, using the same deterministic `TradingEngine` as backtesting. It is a
+closed-candle simulator, not a high-frequency execution system.
 
-The current paper candidate is
-`configs/sol_bnb_regime_grid_candidate.json`. Its holdout result is positive under
-the configured 0.1% fee/0.1% slippage assumptions, but it fails the conservative
-0.5% retail-fee stress. Fee-tier verification is therefore a hard deployment gate.
+## Shared execution design
 
-## Verified Behavior
+- One synchronous core handles strategy callbacks, order sizing, pending cash,
+  position-slot and portfolio-heat reservations, stops, fills, FIFO lots, fees,
+  trade records, equity, and risk state.
+- Historical CSV input and async streaming input are adapters. They do not
+  duplicate trading decisions or accounting.
+- The same `backtest.use_t1_execution` configuration selects next-open market
+  execution or close-based market execution in both adapters. Resting orders are
+  eligible only on a later bar. Omitting the backtest CLI override preserves the
+  configured policy; `--use-t1-execution` explicitly enables next-open execution.
+- Entries are resized or cancelled if their executable price would breach risk or
+  exposure constraints. Limit affordability uses the limit price without market
+  slippage. Synthetic short covers may realize a cash deficit instead of leaving
+  an insolvent position open; this does not authorize borrowing or spot shorting.
+- Protective stops precede ambiguous intrabar resting reductions, but not orders
+  already executable at the open. Opposing pending entries are rejected without
+  an explicit OCO/reversal policy.
+- Opening reductions and protection run across all symbols before opening
+  additions are sized; new positions are then checked for opening protection.
+  Intrabar entries use execution-price marks and cannot exit at pre-entry opening
+  prices or rely on favorable extremes that may precede entry. Adverse extremes
+  remain conservative; the later close is the guaranteed favorable observation.
+  Protection runs before final close marks so closed positions do not manufacture
+  a later equity peak.
+- Candle timestamps identify openings. Higher-timeframe OHLCV is available only
+  after that candle closes. Symbols must use the same primary timestamps.
+- Trailing stops derived from a close apply prospectively, not to an earlier
+  portion of that candle.
+- Cumulative execution reports are converted into incremental fills using the
+  difference in total notional, not the cumulative average as the new fill price.
+  Exit reports accumulate per order, with one trade and win/loss update on completion
+  or cancellation; separate grid reduction orders remain separate trades. The last
+  4,096 terminal order cursors are persisted in completion order, including cancelled
+  partial orders; active reports also retain exact duplicate/conflict metadata.
+  Conflicting reports and IDs outside that retained window require reconciliation,
+  not blind retry.
+- Both crates forbid unsafe code. The former duplicated real-order loop and its
+  misleading HFT latency logging have been removed rather than left unreachable.
 
-- Paper fills settle cash, commissions, positions, and trade-close callbacks.
-- Live orders remain visible in the local orderbook but are filled only from
-  CoinDCX status responses; local candle simulation is disabled in live mode.
-- Internal order IDs are mapped to CoinDCX exchange IDs for completion and
-  cancellation reconciliation.
-- Failed CoinDCX placement removes the local order; failed cancellation restores it.
-- Pending market exits are latched to prevent repeated stop/target submissions.
-- Multiple grid limit orders remain supported and are not mistaken for duplicate exits.
-- `Strategy::init`, `on_bar`, `on_order_filled`, and `on_trade_closed` are driven
-  consistently.
-- Long and short trailing stops tighten in the correct direction.
-- Portfolio value includes long assets and short liabilities correctly.
-- Strategy quantities can be upper bounds, but the risk manager remains authoritative.
-- Percentage transaction costs are shared across paper and real exchange fills.
-- Stateful component costs are intentionally rejected in real-live mode until
-  per-order and per-day charge state is durable across restarts.
+## Paper operation and recovery
 
-## Remaining Deployment Blockers
+```text
+cargo run -- live --config configs/sample_config.json --paper --state-db paper-state.db
+```
 
-### 1. Durable Send Idempotency
+Each committed bar writes one complete SQLite snapshot using WAL and FULL
+synchronization. Snapshot state includes cash, the peak capital and losing streak,
+FIFO entry lots and commissions, stops, pending order IDs and remaining quantities,
+last processed bar, strategy cooldown/pause state, and component-cost state.
+Version 2 also stores pending exit aggregates, signal regime scores, and terminal
+execution cursors and their retention order. Older version-1 snapshots are not migrated automatically; use a
+new paper database rather than guessing missing reconciliation state.
+The JSON export is a backup; SQLite is authoritative. A persistence failure stops
+the adapter rather than continuing without durable state.
 
-The client order ID reduces accidental duplication, but the send intent and exchange
-acknowledgement are not persisted atomically before the HTTP request. A timeout after
-CoinDCX accepts an order can leave the local process uncertain whether submission
-succeeded.
+The supplied database filename is honored. A process-lifetime file lock prevents
+two runners from using the same state path concurrently. Configuration identity
+excludes API credentials and must match on restart.
 
-Required:
+Old position/checkpoint/order tables are **not** automatically promoted into a
+new snapshot: their historical updates were not atomic and may contain stale open
+positions. Keep legacy databases, manually reconcile any real exchange orders,
+and start paper mode with a new database.
 
-1. Persist `pending_send` with client ID and complete order payload.
-2. Submit to CoinDCX.
-3. Persist the exchange ID and `accepted` state.
-4. On restart, reconcile all `strat_*` client IDs before allowing new orders.
+Input is normalized to oldest-first and unfinished candles are excluded. Failed,
+empty, stale, or unsynchronized data prevents processing the entire frame.
+Duplicate bars do not execute again. A restart can replay missed **paper** bars
+within the 500-bar fetched history. Every expected primary candle must be present
+for every symbol before any replay bar is committed, using calendar month boundaries
+where applicable. A missing intermediate bar or larger recovery gap stops with an error.
+Ctrl+C persists simulated positions and pending orders; it does not flatten them.
 
-### 2. Exchange-Held Protective Orders
+## Real spot operation
 
-Stops, targets, and trailing stops are synthetic and evaluated by the local process.
-If the process, network, or host fails, CoinDCX does not hold the protective exit.
+Prepare a separate JSON configuration with supported spot symbols, a common quote
+currency, capital in that currency, and explicitly approved risk limits. Native
+metadata, not filename conventions, determines the candle pair and currencies.
+The public CoinDCX metadata inspected during implementation advertised only limit
+and market orders for BTCINR, ETHINR, SOLINR and BNBINR. BTCUSDT and ETHUSDT advertised
+stop-limit support. The adapter checks the current response rather than hardcoding
+that list. Renaming a symbol is not a currency conversion or strategy validation.
 
-Required: use CoinDCX-supported native stop/trigger orders where available, or run a
-separately supervised protection service. Do not run unattended while protection
-exists only in process memory.
+```text
+cargo run -- live --live --preflight --config <spot-config.json> --state-db live-state.db
+```
 
-### 3. Stale-Market-Data Guard
+Preflight makes authenticated **read** requests and may update local reconciliation
+state; it never submits or cancels an exchange order. It requires matching account/
+config identity, supported markets, sufficient unencumbered quote funds, and no
+unmanaged holdings/orders in configured assets. A fresh state must start without
+holdings in those assets. Existing unrelated assets are neither sold nor imported.
+Remove `--preflight` only when authorizing actual trading.
 
-A symbol must be blocked when the latest candle is older than the expected timeframe
-plus a small tolerance. Data-fetch failure must not reuse old candles as a valid
-trading signal.
+One synchronous core still owns decisions, risk, stops and accounting. Real mode
+does not use simulated T+1 or candle fills: it emits intents at the latest closed
+candle and waits for actual reports. Quotes drive protection between candle closes.
+Missed historical bars are not replayed into new real orders. Spot short entries
+are explicitly rejected.
 
-Required: reject new entries, alert, and optionally flatten risk when data age exceeds
-the configured threshold.
+The broker boundary is small: account identity, market rules, balances, quotes,
+active-order enumeration, client-ID lookup, submit and cancel. No second broker
+adapter, margin trading, or futures implementation is implied.
 
-### 4. Order Polling Latency
+## Durable execution and protection
 
-Pending CoinDCX orders are polled sequentially. With multiple orders, fill recognition
-latency grows linearly and can exceed the strategy cycle.
+- SQLite atomically stores the entire engine and execution journal. Client IDs
+  combine a persisted random namespace and engine order ID. The immutable payload
+  and send intent commit before HTTP. Mutations have no transport retry.
+- A lost create response is resolved through the same client ID. Even a subsequent
+  not-found response does not authorize resubmission: the original request might
+  still be in flight. Such an unresolved intent requires operator/venue investigation.
+  `--resume` cannot bypass it, and deleting state is not a recovery procedure.
+- Cancel requests retain engine orders and reservations until a terminal report.
+  A cancel acknowledgement means initiation, not completion. A later retry is
+  allowed only after lookup confirms that the order remains active.
+- Cumulative quantity, average price and fee are validated against the immutable
+  request. Duplicate economic reports have no effect. Fees are quote-currency fees;
+  fee-only increments adjust cash and original FIFO allocations without fake fills.
+  Regressions, price corrections, unknown states or unexplained wallet differences
+  halt entries. The order report is not assumed to include every tax/wallet debit.
+  Recent terminal reports are polled normally; a wallet discrepancy also triggers
+  an audit of retained older reports before halting. Terminal journal records and
+  FIFO fee attribution are retained deliberately: deleting them after a short
+  timeout would make later real fees unrecoverable. Exact duplicate reports do
+  not rewrite the snapshot. Snapshot/history size still grows with completed
+  orders and must be monitored; this is not a bounded-memory HFT journal.
+- Precision uses decimal arithmetic, quantity is rounded down, and price ticks,
+  market quantity limits, minimum notional, balances and capabilities are checked.
+  Protection is checked before buying, but an exchange partial fill can still be
+  below the minimum protective size. This is an explicit protection failure, not
+  a fictitious successful stop or a dust writeoff.
+- Confirmed inventory receives a native stop-limit. Additional entries wait for
+  acknowledged protection. Partial non-protective orders are cancelled/reconciled;
+  only actually filled quantities enter the ledger.
+- There is **no assumed atomic spot OCO**. A strategy reduction waits locally until
+  executable; outstanding buys are cancelled first, and the native stop is
+  cancelled and reconciled before sending the sell. Trailing-stop replacements use
+  the same cancel/reconcile sequence. These handoffs have exposure windows.
+  A stop-limit can remain unfilled through a gap, and an unavailable process,
+  network or venue can prevent its market-exit fallback. This is not guaranteed
+  loss containment.
 
-Required: bounded concurrent polling or a supported batch/websocket order update path,
-while respecting exchange rate limits.
+## Halt, restart and account boundaries
 
-### 5. Emergency Kill Switch
+Create `live-state.halt` next to `live-state.db` (or the corresponding basename for
+a custom state path) to durably halt entries. Reconciliation and protection continue.
+Failures also set a durable halt. Remove the file, investigate the cause, and use
+`--resume` to clear a halt only after reconciliation and protection checks pass.
+There is no force-resume flag.
 
-Graceful shutdown cancels tracked pending orders, but a production operator needs one
-explicit action that:
+Ctrl+C requests cancellation of non-protective orders, reconciles them, and attempts
+to leave acknowledged native protection on remaining holdings. It does not promise
+to flatten the account. If shutdown cannot confirm cancellation/protection, the
+command reports failure and the operator must inspect the venue immediately.
+Restart reconciles the journal before new decisions. Do not delete the database or
+silently migrate a legacy/paper database.
 
-1. Blocks new entries.
-2. Cancels every tracked exchange order.
-3. Reconciles current balances and positions.
-4. Flattens configured positions.
-5. Persists the halted state.
+Use one writer for the account. Process-lifetime database and broker-account locks
+exclude other local instances, including instances using another API key for the
+same account. They do not prevent another machine, manual trading, deposits or
+withdrawals. Such activity can halt reconciliation and must not be mixed with the
+managed inventory. Credentials are excluded from persisted identity.
 
-### 6. CoinDCX Market Rules
+Offline validation is necessary, not sufficient for deployment. Supervised
+account-specific verification of API permissions, fee currency, fees/tax debits,
+partial fills and native stops remains an operational gate before unattended use.
 
-Before submission, validate current per-market order support, minimum quantity,
-quantity precision, price tick, notional minimum, fee tier, and available INR balance.
-Do not rely on static assumptions in config.
+API references: [CoinDCX documentation](https://docs.coindcx.com/),
+[public market metadata](https://api.coindcx.com/exchange/v1/markets_details), and
+[spot order help](https://coindcx.com/api/help/Placing%20Orders%20using%20CoinDCX%20API/Spot%20Order).
 
-## Deployment Gates
+## Economic deployment gates
 
-A strategy may move from paper to minimum-size live trading only when all are true:
-
-- Positive post-tax performance on an untouched holdout period.
-- Positive return under the account's actual CoinDCX fee tier and doubled-slippage stress.
-- Maximum drawdown below the approved risk limit.
-- Profit factor above 1.2 with enough independent trades to be meaningful.
-- Similar behavior across multiple chronological windows, not one optimized interval.
-- At least 6-8 weeks of paper execution with no duplicate, missed, or orphan orders.
-- Durable idempotency, stale-data protection, native/supervised stops, and kill switch complete.
-- Paper fills and CoinDCX-reported fills reconcile within configured tolerances.
-
-## Verification Evidence
-
-- Deterministic Rust integration test: one-unit 100 to 120 trade produces exactly
-  `20` P&L, `1020` final equity, and `2%` return.
-- The same ledger was reproduced with the public `backtesting.py` framework.
-- A zero-cost BTC diagnostic produced `3.81799%`; 258 logged closed-trade P&Ls summed
-  to exactly `3.81799%` of initial capital.
-- Realistic fees and slippage removed that small edge, showing strategy economics—not
-  unexplained ledger drift—caused the negative result.
-- Full Rust tests and strict Clippy checks pass.
-
-## Operational Rule
-
-Passing tests does not make a strategy profitable or the live system operationally
-safe. Real-money mode remains disabled in practice until every deployment blocker
-above is closed and the selected strategy passes all deployment gates.
+Regenerate historical results after the temporal and execution corrections.
+Previously published performance numbers and candidate holdouts are not current
+evidence. Require untouched chronological validation, actual account fees,
+slippage stress, approved drawdown limits, and adequate independent trades.
+Code correctness and paper parity do not establish profitability.
+Insolvency preserves negative equity and uncapped losses. Calmar is explicitly
+undefined for nonpositive terminal equity (`N/A` in the CLI, negative infinity
+internally); undefined optimization scores rank last instead of comparing equal
+to viable candidates.
+Nonpositive or invalid terminal equity also makes a candidate ineligible under
+every other optimization objective, including win rate. Such candidates remain
+visible in results but cannot overwrite a configuration. Saved optimization
+metadata without verified positive terminal equity is re-evaluated rather than
+trusted as a selection baseline.

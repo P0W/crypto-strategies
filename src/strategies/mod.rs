@@ -49,6 +49,15 @@ use std::sync::{OnceLock, RwLock};
 /// - **Natural Parallelization**: Strategies can run on separate threads
 /// - **Live Trading Ready**: Same architecture for backtest and production
 pub trait Strategy: Send + Sync {
+    fn snapshot_state(&self) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::Value::Null)
+    }
+
+    fn restore_state(&mut self, state: serde_json::Value) -> anyhow::Result<()> {
+        anyhow::ensure!(state.is_null(), "Unexpected state for stateless strategy");
+        Ok(())
+    }
+
     /// Strategy identifier (must match config's strategy_name)
     fn name(&self) -> &'static str;
 

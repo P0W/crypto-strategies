@@ -2,7 +2,11 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use crypto_strategies::{data, grid, optimizer::OptimizationResult, strategies, Config, Symbol};
+use crypto_strategies::{
+    data, grid,
+    optimizer::{OptimizationResult, Optimizer},
+    strategies, Config, Symbol,
+};
 use indicatif::{ProgressBar, ProgressStyle};
 use itertools::Itertools;
 use rayon::prelude::*;
@@ -487,7 +491,7 @@ pub fn run(
 
     // Sort results
     let mut all_results = all_results;
-    sort_results(&mut all_results, &sort_by);
+    Optimizer::sort_results(&mut all_results, &sort_by);
     info!(
         "Total results: {}, sorted by: {}",
         all_results.len(),
@@ -602,7 +606,7 @@ pub fn run(
     // Update config file with best parameters (unless --no-update)
     if !no_update && !all_results.is_empty() {
         let best = &all_results[0];
-        let best_metric = get_metric_value(best, &sort_by);
+        let best_metric = best.ranking_value(&sort_by);
 
         // Get best result's timeframe
         let tf_val = *best.params.get("_timeframe").unwrap_or(&0.0);
@@ -616,7 +620,13 @@ pub fn run(
         };
 
         // Check if we should update
-        if best_metric < 0.0 {
+        if !best.is_solvent() {
+            println!(
+                "  Skipping config update: no solvent candidate (terminal equity {:.2})",
+                best.final_equity
+            );
+            println!();
+        } else if best_metric < 0.0 {
             // Don't update with a losing strategy
             println!(
                 "  Skipping config update: best result has negative {} ({:.2})",
@@ -691,20 +701,6 @@ pub fn run(
     Ok(())
 }
 
-/// Get metric value from result based on sort key
-fn get_metric_value(result: &OptimizationResult, sort_by: &str) -> f64 {
-    match sort_by {
-        "sharpe" => result.sharpe_ratio,
-        "return" => result.total_return,
-        "post_tax_return" => result.post_tax_return,
-        "calmar" => result.calmar_ratio,
-        "win_rate" => result.win_rate,
-        "profit_factor" => result.profit_factor,
-        "expectancy" => result.expectancy,
-        _ => result.sharpe_ratio,
-    }
-}
-
 /// Get saved optimization metric from config's grid._optimization field
 fn get_saved_optimization_metric(config: &Config, sort_by: &str) -> Option<f64> {
     // Read from grid._optimization (where optimization metadata is stored)
@@ -712,6 +708,16 @@ fn get_saved_optimization_metric(config: &Config, sort_by: &str) -> Option<f64> 
     let opt_value = grid.get("_optimization")?;
     // The value is stored as Vec<serde_json::Value>, take first element
     let opt = opt_value.first()?.as_object()?;
+    if !opt
+        .get("final_equity")
+        .and_then(serde_json::Value::as_f64)
+        .is_some_and(|equity| equity.is_finite() && equity > 0.0)
+    {
+        tracing::warn!(
+            "Ignoring saved optimization metrics without valid positive terminal equity"
+        );
+        return None;
+    }
 
     let metric_name = match sort_by {
         "sharpe" => "sharpe_ratio",
@@ -787,8 +793,22 @@ fn run_baseline_backtest(
     let strategy = strategies::create_strategy(config).ok()?;
     let mut backtester =
         Backtester::new(config.clone(), strategy).with_evaluation_start(start_date);
-    let result = backtester.run(&mtf_data);
+    let result = match backtester.run(&mtf_data) {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::warn!("Baseline backtest failed: {error:#}");
+            return None;
+        }
+    };
 
+    if !result
+        .equity_curve
+        .last()
+        .is_some_and(|(_, equity)| equity.is_finite() && *equity > 0.0)
+    {
+        tracing::warn!("Ignoring insolvent or invalid optimization baseline");
+        return None;
+    }
     Some(match sort_by {
         "sharpe" => result.metrics.sharpe_ratio,
         "return" => result.metrics.total_return,
@@ -812,6 +832,10 @@ fn update_config_with_best(
     end_date: Option<DateTime<Utc>>,
 ) -> Result<()> {
     use std::fs;
+    anyhow::ensure!(
+        best.is_solvent(),
+        "Cannot save an insolvent optimization candidate"
+    );
 
     let mut config_json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(config_path)?)?;
@@ -878,6 +902,7 @@ fn update_config_with_best(
                 "total_trades": best.total_trades,
                 "calmar_ratio": (best.calmar_ratio * 100.0).round() / 100.0,
                 "expectancy": (best.expectancy * 100.0).round() / 100.0,
+                "final_equity": best.final_equity,
                 "symbols": symbols,
                 "optimized_at": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             }]),
@@ -983,7 +1008,13 @@ fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<Optimiza
 
     let mut backtester =
         Backtester::new(param_config.clone(), strategy).with_evaluation_start(task.start_date);
-    let result = backtester.run(&mtf_data);
+    let result = match backtester.run(&mtf_data) {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::warn!("Optimization candidate failed: {error:#}");
+            return None;
+        }
+    };
 
     // Build params with metadata
     let mut params: HashMap<String, f64> = HashMap::new();
@@ -1005,8 +1036,13 @@ fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<Optimiza
         params.insert(k, v);
     }
 
+    let Some((_, final_equity)) = result.equity_curve.last() else {
+        tracing::error!("Optimization candidate has no final equity");
+        return None;
+    };
     Some(OptimizationResult {
         params,
+        final_equity: *final_equity,
         sharpe_ratio: result.metrics.sharpe_ratio,
         total_return: result.metrics.total_return,
         post_tax_return: result.metrics.post_tax_return,
@@ -1019,30 +1055,69 @@ fn run_single_backtest(task: &OptTask, param_config: &Config) -> Option<Optimiza
     })
 }
 
-fn sort_results(results: &mut [OptimizationResult], sort_by: &str) {
-    results.sort_by(|a, b| {
-        let val_a = match sort_by {
-            "sharpe" => a.sharpe_ratio,
-            "return" => a.total_return,
-            "post_tax_return" => a.post_tax_return,
-            "calmar" => a.calmar_ratio,
-            "win_rate" => a.win_rate,
-            "profit_factor" => a.profit_factor,
-            "expectancy" => a.expectancy,
-            _ => a.sharpe_ratio,
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insolvent_candidate_cannot_modify_a_config_file() {
+        let candidate = OptimizationResult {
+            params: HashMap::new(),
+            final_equity: -4500.0,
+            total_return: -550.0,
+            post_tax_return: -550.0,
+            sharpe_ratio: 1.0,
+            max_drawdown: 550.0,
+            win_rate: 90.0,
+            total_trades: 10,
+            calmar_ratio: f64::NEG_INFINITY,
+            profit_factor: 0.1,
+            expectancy: -550.0,
         };
-        let val_b = match sort_by {
-            "sharpe" => b.sharpe_ratio,
-            "return" => b.total_return,
-            "post_tax_return" => b.post_tax_return,
-            "calmar" => b.calmar_ratio,
-            "win_rate" => b.win_rate,
-            "profit_factor" => b.profit_factor,
-            "expectancy" => b.expectancy,
-            _ => b.sharpe_ratio,
-        };
-        val_b
-            .partial_cmp(&val_a)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.json");
+        let original = r#"{"strategy":{},"grid":{}}"#;
+        std::fs::write(&path, original).unwrap();
+        let error = update_config_with_best(
+            path.to_str().unwrap(),
+            &candidate,
+            &[],
+            &[],
+            "1h",
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("insolvent"));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+    }
+
+    #[test]
+    fn cached_metrics_require_verified_positive_terminal_equity() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("configs")
+            .join("sample_config.json");
+        let mut config: Config =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        for (metadata, expected) in [
+            (serde_json::json!({"win_rate": 90.0}), None),
+            (
+                serde_json::json!({"win_rate": 90.0, "final_equity": -4500.0}),
+                None,
+            ),
+            (
+                serde_json::json!({"win_rate": 90.0, "final_equity": 0.0}),
+                None,
+            ),
+            (
+                serde_json::json!({"win_rate": 80.0, "final_equity": 0.0001}),
+                Some(80.0),
+            ),
+        ] {
+            config.grid = Some(
+                serde_json::from_value(serde_json::json!({"_optimization": [metadata]})).unwrap(),
+            );
+            assert_eq!(get_saved_optimization_metric(&config, "win_rate"), expected);
+        }
+    }
 }

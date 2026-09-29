@@ -9,6 +9,13 @@ Strategies in this system are implemented as Rust modules that:
 2. Implement the **Strategy trait** for trading logic
 3. Provide a **factory function** for dynamic creation
 
+Backtest and streaming paper trading both invoke strategies through
+`oms::TradingEngine`. Do not add adapter-specific sizing, cash accounting, or
+stop logic. Implement `snapshot_state` and `restore_state` for mutable strategy
+state (cooldowns, pause timers, holding counters). Their default implementation
+is only appropriate for stateless strategies. Indicators can be reconstructed
+from the chronological, closed-candle context.
+
 ## Directory Structure
 
 Each strategy lives in its own module under `src/strategies/`:

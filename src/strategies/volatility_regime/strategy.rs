@@ -8,7 +8,8 @@
 use crate::indicators::{adx, atr, ema};
 use crate::oms::{OrderRequest, StrategyContext};
 use crate::strategies::{
-    atr_stop_loss, atr_take_profit, current_atr_or_default, OhlcVectors, Strategy,
+    atr_stop_loss, atr_take_profit, close_position_order, current_atr_or_default, OhlcVectors,
+    Strategy,
 };
 use crate::{Candle, Position, Side};
 
@@ -162,10 +163,7 @@ impl Strategy for VolatilityRegimeStrategy {
         // Position exit logic
         if let Some(pos) = ctx.current_position {
             if let Some(VolatilityRegime::Extreme) = self.classify_regime(candles, &ind) {
-                orders.push(OrderRequest::market_sell(
-                    ctx.symbol.clone(),
-                    pos.quantity.to_f64(),
-                ));
+                orders.push(close_position_order(ctx.symbol, pos));
                 return orders;
             }
 
@@ -173,10 +171,7 @@ impl Strategy for VolatilityRegimeStrategy {
             if pos.unrealized_pnl(current_price) >= 0.0 {
                 if let Some(slow_ema) = ind.current_ema_slow {
                     if current_price < slow_ema {
-                        orders.push(OrderRequest::market_sell(
-                            ctx.symbol.clone(),
-                            pos.quantity.to_f64(),
-                        ));
+                        orders.push(close_position_order(ctx.symbol, pos));
                         return orders;
                     }
                 }

@@ -139,7 +139,7 @@ impl Candle {
 ///
 /// Symbols are frequently cloned when passed to strategies, orders, and positions.
 /// Using Arc<str> instead of String reduces heap allocations from O(n) to O(1) per clone.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Symbol(#[serde(with = "arc_str_serde")] std::sync::Arc<str>);
 
@@ -448,6 +448,12 @@ impl Money {
 impl Default for Money {
     fn default() -> Self {
         Self::ZERO
+    }
+}
+
+impl From<Decimal> for Money {
+    fn from(value: Decimal) -> Self {
+        Self(value)
     }
 }
 

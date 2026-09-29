@@ -92,6 +92,14 @@ pub struct ExecutionEngine {
 }
 
 impl ExecutionEngine {
+    pub fn cost_state(&self) -> crate::oms::costs::CostState {
+        self.cost_calculator.snapshot()
+    }
+
+    pub fn restore_cost_state(&mut self, state: crate::oms::costs::CostState) {
+        self.cost_calculator.restore(state);
+    }
+
     /// Create new execution engine
     pub fn new(maker_commission_rate: f64, taker_commission_rate: f64, slippage: f64) -> Self {
         Self {
@@ -206,7 +214,11 @@ impl ExecutionEngine {
         is_maker: bool,
         timestamp: DateTime<Utc>,
     ) -> Fill {
-        let fill_qty = Money::from_f64(f64::min(order.remaining_quantity.to_f64(), max_fill_qty));
+        let fill_qty = if max_fill_qty >= order.remaining_quantity.to_f64() {
+            order.remaining_quantity
+        } else {
+            Money::from_f64(max_fill_qty)
+        };
         let fill_price_m = Money::from_f64(fill_price);
 
         let turnover = fill_price * fill_qty.to_f64();

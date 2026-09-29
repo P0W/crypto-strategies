@@ -2,18 +2,19 @@
 
 use crate::oms::types::{Fill, Position};
 use crate::{Money, Side, Symbol, Trade};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// Position manager for tracking multiple positions per symbol
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct PositionManager {
-    positions: HashMap<Symbol, Position>,
+    positions: BTreeMap<Symbol, Position>,
 }
 
 impl PositionManager {
     /// Create new position manager
     pub fn new() -> Self {
         Self {
-            positions: HashMap::new(),
+            positions: BTreeMap::new(),
         }
     }
 
@@ -44,70 +45,80 @@ impl PositionManager {
             } else {
                 // Opposite side - reduce or reverse position
                 let original_side = position.side;
-                let close_quantity = position.quantity.to_f64().min(fill.quantity.to_f64());
-                if close_quantity <= 0.0 {
+                let close_quantity = position.quantity.min(fill.quantity);
+                if !close_quantity.is_positive() {
                     return None;
                 }
+                let closes_position = close_quantity == position.quantity;
 
-                let exit_commission =
-                    fill.commission.to_f64() * (close_quantity / fill.quantity.to_f64());
+                let exit_commission = if close_quantity == fill.quantity {
+                    fill.commission
+                } else {
+                    fill.commission * close_quantity / fill.quantity
+                };
                 let mut remaining_close = close_quantity;
-                let mut entry_value = 0.0;
-                let mut entry_commission = 0.0;
-                let mut gross_pnl = 0.0;
+                let mut entry_value = Money::ZERO;
+                let mut entry_commission = Money::ZERO;
+                let mut gross_pnl = Money::ZERO;
                 let entry_time = position
                     .fills
                     .first()
                     .map(|entry| entry.timestamp)
                     .unwrap_or(position.first_entry_time);
 
-                while remaining_close > 1e-12 && !position.fills.is_empty() {
+                while !position.fills.is_empty()
+                    && (closes_position || remaining_close.is_positive())
+                {
                     let first_fill = &mut position.fills[0];
-                    let lot_quantity = first_fill.quantity.to_f64();
-                    let matched_quantity = remaining_close.min(lot_quantity);
-                    let matched_entry_commission =
-                        first_fill.commission.to_f64() * (matched_quantity / lot_quantity);
-
-                    entry_value += first_fill.price.to_f64() * matched_quantity;
-                    entry_commission += matched_entry_commission;
-                    gross_pnl += match original_side {
-                        Side::Buy => {
-                            (fill.price.to_f64() - first_fill.price.to_f64()) * matched_quantity
-                        }
-                        Side::Sell => {
-                            (first_fill.price.to_f64() - fill.price.to_f64()) * matched_quantity
-                        }
+                    let lot_quantity = first_fill.quantity;
+                    let matched_quantity = if closes_position {
+                        lot_quantity
+                    } else {
+                        remaining_close.min(lot_quantity)
+                    };
+                    let matched_entry_commission = if matched_quantity == lot_quantity {
+                        first_fill.commission
+                    } else {
+                        first_fill.commission * matched_quantity / lot_quantity
                     };
 
-                    first_fill.quantity -= Money::from_f64(matched_quantity);
-                    first_fill.commission -= Money::from_f64(matched_entry_commission);
-                    position.quantity -= Money::from_f64(matched_quantity);
+                    entry_value += first_fill.price * matched_quantity;
+                    entry_commission += matched_entry_commission;
+                    gross_pnl += match original_side {
+                        Side::Buy => (fill.price - first_fill.price) * matched_quantity,
+                        Side::Sell => (first_fill.price - fill.price) * matched_quantity,
+                    };
+
+                    first_fill.quantity -= matched_quantity;
+                    first_fill.commission -= matched_entry_commission;
                     remaining_close -= matched_quantity;
 
-                    if first_fill.quantity.to_f64() <= 1e-12 {
+                    if first_fill.quantity.is_zero() {
                         position.fills.remove(0);
                     }
                 }
 
+                // FIFO lots are authoritative, including at Decimal's precision boundary.
+                position.quantity = position.fills.iter().map(|entry| entry.quantity).sum();
                 let total_commission = entry_commission + exit_commission;
                 let net_pnl = gross_pnl - total_commission;
-                position.realized_pnl += Money::from_f64(net_pnl);
+                position.realized_pnl += net_pnl;
 
                 // If remaining, reverse position
-                let reversal_quantity = fill.quantity.to_f64() - close_quantity;
-                if reversal_quantity > 1e-12 {
+                let reversal_quantity = fill.quantity - close_quantity;
+                if reversal_quantity.is_positive() {
                     position.side = match position.side {
                         Side::Buy => Side::Sell,
                         Side::Sell => Side::Buy,
                     };
-                    position.quantity = Money::from_f64(reversal_quantity);
+                    position.quantity = reversal_quantity;
                     position.average_entry_price = fill.price;
                     position.fills = vec![Fill {
                         order_id: fill.order_id,
                         price: fill.price,
-                        quantity: Money::from_f64(reversal_quantity),
+                        quantity: reversal_quantity,
                         timestamp: fill.timestamp,
-                        commission: fill.commission - Money::from_f64(exit_commission),
+                        commission: fill.commission - exit_commission,
                         is_maker: fill.is_maker,
                     }];
                     position.first_entry_time = fill.timestamp;
@@ -124,18 +135,18 @@ impl PositionManager {
                 }
 
                 position.last_update_time = fill.timestamp;
-                Some(Trade::from_f64(
+                Some(Trade {
                     symbol,
-                    original_side,
-                    entry_value / close_quantity,
-                    fill.price.to_f64(),
-                    close_quantity,
+                    side: original_side,
+                    entry_price: entry_value / close_quantity,
+                    exit_price: fill.price,
+                    quantity: close_quantity,
                     entry_time,
-                    fill.timestamp,
-                    gross_pnl,
-                    total_commission,
+                    exit_time: fill.timestamp,
+                    pnl: gross_pnl,
+                    commission: total_commission,
                     net_pnl,
-                ))
+                })
             }
         } else {
             None
@@ -344,5 +355,48 @@ mod tests {
         assert_eq!(position.average_entry_price.to_f64(), 100.0);
         assert_eq!(position.fills[0].commission.to_f64(), 1.0);
         assert_eq!(position.realized_pnl.to_f64(), 8.0);
+    }
+
+    #[test]
+    fn test_full_exit_closes_fractional_lots_without_dust() {
+        let mut manager = PositionManager::new();
+        let symbol = Symbol::new("ETHINR");
+        for (id, quantity) in [(1, 0.1), (2, 0.2), (3, 5e-13)] {
+            manager.add_fill(create_fill(id, 100.0, quantity), symbol.clone(), Side::Buy);
+        }
+        let quantity = manager.get_position(&symbol).unwrap().quantity;
+        let mut exit = create_fill(4, 120.0, 1.0);
+        exit.quantity = quantity;
+        manager.add_fill(exit, symbol.clone(), Side::Sell).unwrap();
+        let position = manager.get_position_raw(&symbol).unwrap();
+        assert_eq!(position.quantity, Money::ZERO);
+        assert!(position.fills.is_empty());
+        assert!(manager.get_position(&symbol).is_none());
+    }
+
+    #[test]
+    fn test_fifo_quantity_matches_lots_at_decimal_precision_limit() {
+        for partial_exit in [true, false] {
+            let mut manager = PositionManager::new();
+            let symbol = Symbol::new("SOLINR");
+            manager.add_fill(create_fill(1, 100.0, 10.0), symbol.clone(), Side::Buy);
+            let mut fractional = create_fill(2, 100.0, 1.0);
+            fractional.quantity =
+                serde_json::from_value(serde_json::json!("0.1234567890123456789012345671"))
+                    .unwrap();
+            let remaining = fractional.quantity;
+            manager.add_fill(fractional, symbol.clone(), Side::Buy);
+            if partial_exit {
+                manager.add_fill(create_fill(3, 120.0, 10.0), symbol.clone(), Side::Sell);
+                let position = manager.get_position(&symbol).unwrap();
+                assert_eq!(position.quantity, remaining);
+                assert_eq!(position.fills[0].quantity, remaining);
+            }
+            let mut exit = create_fill(4, 120.0, 1.0);
+            exit.quantity = manager.get_position(&symbol).unwrap().quantity;
+            manager.add_fill(exit, symbol.clone(), Side::Sell);
+            assert!(manager.get_position(&symbol).is_none());
+            assert!(manager.get_position_raw(&symbol).unwrap().fills.is_empty());
+        }
     }
 }

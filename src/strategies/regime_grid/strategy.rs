@@ -9,7 +9,7 @@
 
 use crate::indicators::{adx, ema, rsi};
 use crate::oms::{OrderRequest, StrategyContext};
-use crate::strategies::{atr_stop_loss, current_atr, OhlcVectors, Strategy};
+use crate::strategies::{atr_stop_loss, close_position_order, current_atr, OhlcVectors, Strategy};
 use crate::{Candle, Position, Side};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -46,7 +46,7 @@ impl Indicators {
 use std::sync::RwLock;
 
 /// Grid state tracking
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct GridState {
     /// When volatility kill switch was activated (None if not active)
     paused_until: Option<DateTime<Utc>>,
@@ -337,6 +337,22 @@ impl RegimeGridStrategy {
 }
 
 impl Strategy for RegimeGridStrategy {
+    fn snapshot_state(&self) -> anyhow::Result<serde_json::Value> {
+        let states = self
+            .states
+            .read()
+            .map_err(|_| anyhow::anyhow!("Grid state poisoned"))?;
+        Ok(serde_json::to_value(&*states)?)
+    }
+
+    fn restore_state(&mut self, state: serde_json::Value) -> anyhow::Result<()> {
+        *self
+            .states
+            .get_mut()
+            .map_err(|_| anyhow::anyhow!("Grid state poisoned"))? = serde_json::from_value(state)?;
+        Ok(())
+    }
+
     fn name(&self) -> &'static str {
         "regime_grid"
     }
@@ -390,16 +406,7 @@ impl Strategy for RegimeGridStrategy {
                 }
                 // Close any open position
                 if let Some(pos) = ctx.current_position {
-                    match pos.side {
-                        Side::Buy => orders.push(OrderRequest::market_sell(
-                            ctx.symbol.clone(),
-                            pos.quantity.to_f64(),
-                        )),
-                        Side::Sell => orders.push(OrderRequest::market_buy(
-                            ctx.symbol.clone(),
-                            pos.quantity.to_f64(),
-                        )),
-                    }
+                    orders.push(close_position_order(ctx.symbol, pos));
                 }
                 return orders;
             }
@@ -429,16 +436,7 @@ impl Strategy for RegimeGridStrategy {
                 if ctx.equity < recovery_threshold {
                     // Still in cooldown - only close positions, don't open new ones
                     if let Some(pos) = ctx.current_position {
-                        match pos.side {
-                            Side::Buy => orders.push(OrderRequest::market_sell(
-                                ctx.symbol.clone(),
-                                pos.quantity.to_f64(),
-                            )),
-                            Side::Sell => orders.push(OrderRequest::market_buy(
-                                ctx.symbol.clone(),
-                                pos.quantity.to_f64(),
-                            )),
-                        }
+                        orders.push(close_position_order(ctx.symbol, pos));
                     }
                     return orders;
                 } else {
@@ -481,16 +479,7 @@ impl Strategy for RegimeGridStrategy {
 
             // Close any open position when drawdown exceeded
             if let Some(pos) = ctx.current_position {
-                match pos.side {
-                    Side::Buy => orders.push(OrderRequest::market_sell(
-                        ctx.symbol.clone(),
-                        pos.quantity.to_f64(),
-                    )),
-                    Side::Sell => orders.push(OrderRequest::market_buy(
-                        ctx.symbol.clone(),
-                        pos.quantity.to_f64(),
-                    )),
-                }
+                orders.push(close_position_order(ctx.symbol, pos));
             }
             return orders;
         }
@@ -521,17 +510,7 @@ impl Strategy for RegimeGridStrategy {
             MarketRegime::Bearish | MarketRegime::HighVolatility => {
                 // Close positions in unfavorable regimes
                 if let Some(pos) = ctx.current_position {
-                    // Use opposite side to close the position
-                    match pos.side {
-                        Side::Buy => orders.push(OrderRequest::market_sell(
-                            ctx.symbol.clone(),
-                            pos.quantity.to_f64(),
-                        )),
-                        Side::Sell => orders.push(OrderRequest::market_buy(
-                            ctx.symbol.clone(),
-                            pos.quantity.to_f64(),
-                        )),
-                    }
+                    orders.push(close_position_order(ctx.symbol, pos));
                 }
                 orders
             }
