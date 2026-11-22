@@ -45,6 +45,9 @@ rust_decimal_macros = "1.36"
 # Technical analysis indicators (well-maintained, minimal deps)
 ta = "0.5"
 
+# Wilder RSI matched to TA-Lib
+fin-primitives = { version = "4.0.1", default-features = false, features = ["indicators"] }
+
 # Parallelization and progress
 rayon = "1.10"
 indicatif = { version = "0.17", features = ["rayon"] }
