@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use ta::indicators::{
     BollingerBands as TaBB, CommodityChannelIndex, ExponentialMovingAverage, FastStochastic,
     KeltnerChannel, MoneyFlowIndex as TaMFI, MovingAverageConvergenceDivergence, OnBalanceVolume,
-    RelativeStrengthIndex, SimpleMovingAverage,
+    SimpleMovingAverage,
 };
 use ta::{DataItem, Next};
 
@@ -325,29 +325,17 @@ pub fn keltner_channels(
 // Momentum Indicators
 // =============================================================================
 
-/// Calculate RSI (Relative Strength Index) using ta crate
+/// Calculate RSI (Relative Strength Index) with Wilder smoothing, the same convention as `atr`.
+/// The first value is at index `period`, once there are `period` price changes.
 pub fn rsi(values: &[f64], period: usize) -> Vec<Option<f64>> {
     if values.is_empty() || period == 0 {
         return vec![];
     }
 
-    let mut indicator = match RelativeStrengthIndex::new(period) {
-        Ok(i) => i,
-        Err(_) => return vec![None; values.len()],
-    };
-
-    let mut result = Vec::with_capacity(values.len());
-
-    for (i, &value) in values.iter().enumerate() {
-        let rsi_val = indicator.next(value);
-        if i + 1 >= period {
-            result.push(Some(rsi_val));
-        } else {
-            result.push(None);
-        }
-    }
-
-    result
+    fin_primitives::signals::batch_f64::rsi(values, period)
+        .into_iter()
+        .map(|v| if v.is_nan() { None } else { Some(v) })
+        .collect()
 }
 
 /// Calculate Stochastic Oscillator using ta crate
@@ -1023,6 +1011,22 @@ mod tests {
         let rsi_val = result.last().unwrap().unwrap();
         // RSI should be between 0 and 100
         assert!((0.0..=100.0).contains(&rsi_val));
+    }
+
+    #[test]
+    fn test_rsi_wilder_reference() {
+        // Closes from the StockCharts RSI worked example: Wilder RSI(14) on the 15th close is 70.46,
+        // the next is 66.25 (StockCharts rounds the averages and prints 70.53, 66.32).
+        let values = vec![
+            44.34, 44.09, 44.15, 43.61, 44.33, 44.83, 45.10, 45.42, 45.84, 46.08, 45.89, 46.03,
+            45.61, 46.28, 46.28, 46.00,
+        ];
+        let result = rsi(&values, 14);
+
+        // 14 bars give only 13 changes: no RSI yet
+        assert_eq!(result[13], None);
+        assert!((result[14].unwrap() - 70.46).abs() < 0.01);
+        assert!((result[15].unwrap() - 66.25).abs() < 0.01);
     }
 
     #[test]
